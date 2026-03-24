@@ -1,0 +1,98 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "System user profile including roles and territory mapping.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Firebase Auth UID" },
+        "name": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "role": { "type": "string", "enum": ["admin", "ase", "asm", "sm", "dm", "auditor"] },
+        "mobile": { "type": "string" },
+        "region": { "type": "string" },
+        "active": { "type": "boolean" }
+      },
+      "required": ["uid", "name", "email", "role", "active"]
+    },
+    "Distributor": {
+      "title": "Distributor",
+      "description": "Distributor master record.",
+      "type": "object",
+      "properties": {
+        "code": { "type": "string" },
+        "name": { "type": "string" },
+        "contactPerson": { "type": "string" },
+        "contactNumber": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "address": { "type": "string" },
+        "city": { "type": "string" },
+        "state": { "type": "string" },
+        "approvedValue": { "type": "number" },
+        "aseId": { "type": "string" },
+        "asmId": { "type": "string" },
+        "smId": { "type": "string" },
+        "dmId": { "type": "string" },
+        "active": { "type": "boolean" }
+      },
+      "required": ["code", "name", "approvedValue", "aseId", "active"]
+    },
+    "SalesDump": {
+      "title": "Sales Dump",
+      "description": "Master list of articles for credit note calculations.",
+      "type": "object",
+      "properties": {
+        "articleNumber": { "type": "string" },
+        "description": { "type": "string" },
+        "category": { "type": "string" },
+        "rate": { "type": "number" }
+      },
+      "required": ["articleNumber", "category", "rate"]
+    },
+    "AuditTicket": {
+      "title": "Audit Ticket",
+      "description": "Core audit record tracking the lifecycle of a distributor audit.",
+      "type": "object",
+      "properties": {
+        "distributorId": { "type": "string" },
+        "scheduledDate": { "type": "string", "format": "date" },
+        "proposedDate": { "type": "string", "format": "date" },
+        "auditorId": { "type": "string" },
+        "approvedValue": { "type": "number" },
+        "maxAllowedValue": { "type": "number" },
+        "status": { "type": "string", "enum": ["draft", "tentative", "scheduled", "in_progress", "submitted", "approved", "signed", "evidence_uploaded", "closed", "cancelled"] },
+        "verifiedTotal": { "type": "number" },
+        "presenceLogs": { "type": "array", "items": { "type": "object" } },
+        "signOffs": { "type": "object" },
+        "media": { "type": "array", "items": { "type": "object" } },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["distributorId", "status", "approvedValue", "maxAllowedValue"]
+    },
+    "AuditLineItem": {
+      "title": "Audit Line Item",
+      "description": "Individual item verification record within an audit.",
+      "type": "object",
+      "properties": {
+        "ticketId": { "type": "string" },
+        "articleNumber": { "type": "string" },
+        "description": { "type": "string" },
+        "category": { "type": "string" },
+        "quantity": { "type": "number" },
+        "unitValue": { "type": "number" },
+        "totalValue": { "type": "number" },
+        "reasonCode": { "type": "string", "enum": ["Expiry Non-salable", "Primary Damage"] },
+        "remarks": { "type": "string" }
+      },
+      "required": ["ticketId", "articleNumber", "quantity", "unitValue", "reasonCode"]
+    }
+  },
+  "firestore": {
+    "/users": { "schema": "User", "description": "User profiles" },
+    "/distributors": { "schema": "Distributor", "description": "Distributor master" },
+    "/salesDump": { "schema": "SalesDump", "description": "Sales dump for credit notes" },
+    "/auditTickets": { "schema": "AuditTicket", "description": "Audit tickets" },
+    "/auditTickets/{ticketId}/items": { "schema": "AuditLineItem", "description": "Items verified in an audit" }
+  }
+}

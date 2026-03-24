@@ -1,0 +1,128 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Fields: uid, name, email, role, mobile, region, active
+    //
+    // Collection: distributors
+    // Fields: code, name, contactPerson, contactNumber, email, address, city, state, approvedValue, aseId, asmId, smId, dmId, active
+    //
+    // Collection: salesDump
+    // Fields: articleNumber, description, category, rate
+    //
+    // Collection: auditTickets
+    // Fields: distributorId, scheduledDate, proposedDate, auditorId, approvedValue, maxAllowedValue, status, verifiedTotal, presenceLogs, signOffs, media, createdAt, updatedAt
+    //
+    // Subcollection: auditTickets/{ticketId}/items
+    // Fields: ticketId, articleNumber, description, category, quantity, unitValue, totalValue, reasonCode, remarks
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isDocOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && 
+        (
+          (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin') ||
+          (request.auth.token.email in ["ca.singlavishal@gmail.com", "vishalsingla.singla@gmail.com"])
+        );
+    }
+
+    function isAuditor() {
+      return isAuthenticated() && 
+             exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'auditor';
+    }
+
+    function isSalesTeam() {
+      return isAuthenticated() && 
+             exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['ase', 'asm', 'sm', 'dm'];
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+    function isValidUser(data) {
+      return hasOnlyAllowedFields(['uid', 'name', 'email', 'role', 'mobile', 'region', 'active']) &&
+             data.uid is string && data.name is string && data.name.size() > 0 &&
+             isValidEmail(data.email) &&
+             data.role in ['admin', 'ase', 'asm', 'sm', 'dm', 'auditor'] &&
+             data.active is bool;
+    }
+
+    function isValidDistributor(data) {
+      return hasOnlyAllowedFields(['id', 'code', 'name', 'contactPerson', 'contactNumber', 'email', 'address', 'city', 'state', 'approvedValue', 'aseId', 'asmId', 'smId', 'dmId', 'active']) &&
+             data.code is string && data.name is string && data.approvedValue is number && data.approvedValue >= 0 &&
+             data.aseId is string && data.active is bool;
+    }
+
+    function isValidAuditTicket(data) {
+      return hasOnlyAllowedFields(['id', 'distributorId', 'scheduledDate', 'proposedDate', 'auditorId', 'approvedValue', 'maxAllowedValue', 'status', 'verifiedTotal', 'presenceLogs', 'signOffs', 'media', 'createdAt', 'updatedAt']) &&
+             data.distributorId is string && data.status in ['draft', 'tentative', 'scheduled', 'in_progress', 'submitted', 'approved', 'signed', 'evidence_uploaded', 'closed', 'cancelled'] &&
+             data.approvedValue is number && data.maxAllowedValue is number;
+    }
+
+    function isValidAuditItem(data) {
+      return hasOnlyAllowedFields(['id', 'ticketId', 'articleNumber', 'description', 'category', 'quantity', 'unitValue', 'totalValue', 'reasonCode', 'remarks']) &&
+             data.ticketId is string && data.articleNumber is string && data.quantity is number && data.unitValue is number &&
+             data.reasonCode in ['Expiry Non-salable', 'Primary Damage'];
+    }
+
+    // ===============================================================
+    // Match Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && request.auth.uid == userId && isValidUser(request.resource.data);
+      allow update: if isAuthenticated() && (isAdmin() || request.auth.uid == userId) && isValidUser(request.resource.data);
+    }
+
+    match /distributors/{distId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAdmin() && isValidDistributor(request.resource.data);
+    }
+
+    match /salesDump/{dumpId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAdmin();
+    }
+
+    match /auditTickets/{ticketId} {
+      allow read: if isAuthenticated();
+      allow create: if isAdmin() || isSalesTeam();
+      allow update: if (isAdmin() || isAuditor() || isSalesTeam()) && isValidAuditTicket(request.resource.data);
+
+      match /items/{itemId} {
+        allow read: if isAuthenticated();
+        allow create, update, delete: if (isAdmin() || isAuditor()) && isValidAuditItem(request.resource.data);
+      }
+    }
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "name": "Expiry & Damage Audit System",
+  "description": "End-to-end management for corporate audits, including scheduling, verification, sign-offs, and credit note generation.",
+  "requestFramePermissions": ["geolocation"]
+}
