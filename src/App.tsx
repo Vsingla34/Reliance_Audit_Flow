@@ -1,7 +1,4 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
+
 
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { supabase } from './supabase';
@@ -32,6 +29,9 @@ import { DistributorsModule } from './modules/Distributors';
 import { SchedulerModule } from './modules/Scheduler';
 import { ExecutionModule } from './modules/Execution';
 import { ReportsModule } from './modules/Reports';
+
+// --- Components ---
+import { ForcePasswordSetup } from './components/ForcePasswordSetup';
 
 // --- Utility ---
 export function cn(...inputs: ClassValue[]) {
@@ -237,6 +237,9 @@ export default function App() {
   if (!user) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-zinc-50 p-6">
+        {/* We mount it here too just in case they click the link and aren't logged in yet */}
+        <ForcePasswordSetup />
+        
         <motion.div 
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -306,6 +309,7 @@ export default function App() {
 
   return (
     <AuthContext.Provider value={{ user, profile, loading, logout }}>
+      <ForcePasswordSetup />
       <ErrorBoundary>
         <div className="flex h-screen bg-zinc-50 font-sans text-zinc-900 overflow-hidden">
           {/* Sidebar */}
