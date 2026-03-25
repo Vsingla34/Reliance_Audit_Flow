@@ -29,57 +29,27 @@ export interface Distributor {
   city?: string;
   state?: string;
   approvedValue: number;
-  aseId: string;
-  asmId?: string;
-  smId?: string;
-  dmId?: string;
+  aseId: string | null;
+  asmId?: string | null;
+  smId?: string | null;
+  dmId?: string | null;
   active: boolean;
 }
 
-export interface SalesDumpItem {
+export interface DateProposal {
   id: string;
-  articleNumber: string;
-  description: string;
-  category: string;
-  rate: number;
-}
-
-export type AuditStatus = 
-  | 'draft' 
-  | 'tentative' 
-  | 'scheduled' 
-  | 'in_progress' 
-  | 'submitted' 
-  | 'approved' 
-  | 'signed' 
-  | 'evidence_uploaded' 
-  | 'closed' 
-  | 'cancelled';
-
-export interface AuditTicket {
-  id: string;
-  distributorId: string;
-  scheduledDate?: string;
-  proposedDate?: string;
-  auditorId?: string;
-  approvedValue: number;
-  maxAllowedValue: number;
-  status: AuditStatus;
-  verifiedTotal: number;
-  presenceLogs: PresenceLog[];
-  signOffs: {
-    auditor?: SignOff;
-    ase?: SignOff;
-    distributor?: SignOff;
-  };
-  media: MediaUpload[];
-  createdAt: string;
-  updatedAt: string;
+  date: string;
+  proposedByUserId: string;
+  proposedByName: string;
+  role: string;
+  email: string;
+  remarks: string;
+  timestamp: string;
 }
 
 export interface PresenceLog {
   userId: string;
-  role: UserRole;
+  role: string;
   timestamp: string;
   location?: {
     lat: number;
@@ -91,7 +61,6 @@ export interface SignOff {
   userId: string;
   name: string;
   timestamp: string;
-  signature?: string; // Base64 or token
 }
 
 export interface MediaUpload {
@@ -100,7 +69,38 @@ export interface MediaUpload {
   url: string;
   uploadedBy: string;
   timestamp: string;
-  caption?: string;
+}
+
+export interface AuditComment {
+  id: string;
+  userId: string;
+  userName: string;
+  userRole: string;
+  message: string;
+  timestamp: string;
+}
+
+export interface AuditTicket {
+  id: string;
+  distributorId: string;
+  scheduledDate: string | null;
+  proposedDate: string | null;
+  auditorId: string | null;
+  approvedValue: number;
+  maxAllowedValue: number;
+  status: 'tentative' | 'scheduled' | 'in_progress' | 'submitted' | 'signed' | 'evidence_uploaded' | 'closed';
+  verifiedTotal: number;
+  presenceLogs: PresenceLog[];
+  signOffs: {
+    auditor?: SignOff;
+    ase?: SignOff;
+    distributor?: SignOff;
+  };
+  media: MediaUpload[];
+  dateProposals?: DateProposal[]; 
+  comments?: AuditComment[]; // <-- ADDED THIS LINE so the chat works!
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface AuditLineItem {
@@ -112,6 +112,14 @@ export interface AuditLineItem {
   quantity: number;
   unitValue: number;
   totalValue: number;
-  reasonCode: 'Expiry Non-salable' | 'Primary Damage';
+  reasonCode: string;
   remarks?: string;
+}
+
+export interface SalesDumpItem {
+  id: string;
+  articleNumber: string;
+  description: string;
+  category: string;
+  rate: number;
 }

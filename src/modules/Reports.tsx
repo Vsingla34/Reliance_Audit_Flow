@@ -9,12 +9,15 @@ import {
   CheckCircle2, 
   AlertCircle,
   IndianRupee,
-  RefreshCw
+  RefreshCw,
+  Upload,
+  X
 } from 'lucide-react';
-import { cn } from '../App';
-import { motion } from 'motion/react';
+import { cn, useAuth } from '../App';
+import { motion, AnimatePresence } from 'motion/react';
 
 export function ReportsModule() {
+  const { profile } = useAuth();
   const [tickets, setTickets] = useState<AuditTicket[]>([]);
   const [distributors, setDistributors] = useState<Distributor[]>([]);
   const [salesDump, setSalesDump] = useState<SalesDumpItem[]>([]);
@@ -22,6 +25,12 @@ export function ReportsModule() {
   const [reportData, setReportData] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [activeReport, setActiveReport] = useState<'consolidated' | 'credit_note'>('consolidated');
+
+  // Upload Modal State
+  const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+
+  const isAdminOrHO = ['admin', 'ho'].includes(profile?.role || '');
 
   const fetchReportData = async () => {
     setLoading(true);
@@ -57,7 +66,6 @@ export function ReportsModule() {
       const ticketIds = tickets.map(t => t.id);
       
       if (ticketIds.length > 0) {
-        // Fetch all line items for the relevant tickets in one efficient query
         const { data: itemsData, error } = await supabase
           .from('auditLineItems')
           .select('*')
@@ -70,11 +78,9 @@ export function ReportsModule() {
             const ticket = tickets.find(t => t.id === item.ticketId);
             const dist = distributors.find(d => d.id === ticket?.distributorId);
             
-            // Look for exact match in sales dump
             let matchedArticle = salesDump.find(s => s.articleNumber === item.articleNumber);
             let matchType = 'Exact';
             
-            // Fallback to category average if exact article not found
             if (!matchedArticle) {
               matchedArticle = salesDump.find(s => s.category === item.category);
               matchType = matchedArticle ? 'Fallback (Category)' : 'Unmatched';
@@ -106,7 +112,6 @@ export function ReportsModule() {
     }
   };
 
-  // Re-generate the report anytime the base data changes
   useEffect(() => {
     if (tickets.length > 0 && distributors.length > 0) {
       generateReport();
@@ -115,10 +120,61 @@ export function ReportsModule() {
     }
   }, [tickets, distributors, salesDump]);
 
+  // --- Sales Dump Upload Logic ---
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsUploading(true);
+    const reader = new FileReader();
+    
+    reader.onload = async (event) => {
+      try {
+        const text = event.target?.result as string;
+        const lines = text.split('\n').filter(line => line.trim() !== ''); // Skip empty lines
+        const headers = lines[0].split(','); // Skip header row
+        
+        const newDumpItems = lines.slice(1).map(line => {
+          // Expected CSV format: ArticleNumber, Description, Category, Rate
+          const [articleNumber, description, category, rate] = line.split(',');
+          if (!articleNumber || !rate) return null;
+          
+          return {
+            id: Math.random().toString(36).substring(7),
+            articleNumber: articleNumber.trim(),
+            description: description?.trim() || 'No Description',
+            category: category?.trim() || 'Uncategorized',
+            rate: parseFloat(rate) || 0
+          };
+        }).filter(Boolean);
+
+        if (newDumpItems.length > 0) {
+          // 1. Wipe the old sales dump to keep it fresh
+          await supabase.from('salesDump').delete().not('id', 'is', null);
+          
+          // 2. Insert the new master rates
+          const { error } = await supabase.from('salesDump').insert(newDumpItems);
+          if (error) throw error;
+          
+          alert(`Successfully uploaded ${newDumpItems.length} articles to the master dump!`);
+          
+          // Refresh the data to recalculate the reports
+          fetchReportData(); 
+        }
+      } catch (error) {
+        console.error("Error uploading sales dump:", error);
+        alert("Failed to upload sales dump. Please ensure it is a valid CSV.");
+      } finally {
+        setIsUploading(false);
+        setIsUploadModalOpen(false);
+      }
+    };
+    reader.readAsText(file);
+  };
+
   const downloadCSV = () => {
     if (reportData.length === 0) return;
 
-    // Define columns based on active report type
     const headers = activeReport === 'consolidated' 
       ? ['Distributor Code', 'Distributor Name', 'Article Number', 'Description', 'Reason', 'Qty', 'Auditor Rate', 'Requested Value', 'Status']
       : ['Distributor Code', 'Distributor Name', 'Article Number', 'Match Type', 'Qty', 'Sales Dump Rate', 'Final CN Value', 'Variance (CN - Req)'];
@@ -151,11 +207,11 @@ export function ReportsModule() {
   return (
     <div className="space-y-8 pb-12">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
-        <div className="flex bg-zinc-100 p-1.5 rounded-2xl">
+        <div className="flex bg-zinc-100 p-1.5 rounded-2xl overflow-x-auto">
           <button 
             onClick={() => setActiveReport('consolidated')}
             className={cn(
-              "px-6 py-3 rounded-xl text-sm font-bold transition-all",
+              "px-6 py-3 rounded-xl text-sm font-bold transition-all whitespace-nowrap",
               activeReport === 'consolidated' ? "bg-white text-black shadow-sm" : "text-zinc-500 hover:text-black"
             )}
           >
@@ -164,7 +220,7 @@ export function ReportsModule() {
           <button 
             onClick={() => setActiveReport('credit_note')}
             className={cn(
-              "px-6 py-3 rounded-xl text-sm font-bold transition-all",
+              "px-6 py-3 rounded-xl text-sm font-bold transition-all whitespace-nowrap",
               activeReport === 'credit_note' ? "bg-white text-black shadow-sm" : "text-zinc-500 hover:text-black"
             )}
           >
@@ -174,12 +230,23 @@ export function ReportsModule() {
 
         <div className="flex gap-4">
           <button 
-            onClick={generateReport}
+            onClick={fetchReportData}
             disabled={loading}
             className="flex items-center gap-2 px-4 py-3 bg-zinc-100 text-zinc-900 rounded-xl font-bold hover:bg-zinc-200 transition-all disabled:opacity-50"
+            title="Refresh Report Data"
           >
             <RefreshCw size={18} className={cn(loading && "animate-spin")} />
           </button>
+
+          {isAdminOrHO && (
+            <button 
+              onClick={() => setIsUploadModalOpen(true)}
+              className="flex items-center gap-2 px-4 py-3 bg-zinc-100 text-zinc-900 rounded-xl font-bold hover:bg-zinc-200 transition-all active:scale-95"
+            >
+              <Upload size={18} /> Master Dump
+            </button>
+          )}
+
           <button 
             onClick={downloadCSV}
             disabled={reportData.length === 0}
@@ -328,10 +395,75 @@ export function ReportsModule() {
           <div className="p-16 text-center text-zinc-500">
             <BarChart3 size={48} className="mx-auto mb-4 text-zinc-300" />
             <p className="font-medium text-lg text-zinc-900">No report data available</p>
-            <p className="text-sm mt-1">There are no completed or submitted audits to generate a report from.</p>
+            <p className="text-sm mt-1">There are no signed or closed audits to generate a report from yet.</p>
           </div>
         )}
       </div>
+
+      {/* Upload Master Dump Modal */}
+      <AnimatePresence>
+        {isUploadModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-6">
+            <motion.div 
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} 
+              onClick={() => !isUploading && setIsUploadModalOpen(false)} 
+              className="absolute inset-0 bg-black/40 backdrop-blur-sm" 
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9, y: 20 }} 
+              className="relative w-full max-w-md bg-white rounded-[2.5rem] shadow-2xl overflow-hidden p-8 text-center"
+            >
+              <div className="w-16 h-16 bg-blue-50 rounded-2xl flex items-center justify-center mx-auto mb-6">
+                <Upload className="text-blue-600" size={24} />
+              </div>
+              <h4 className="text-2xl font-bold tracking-tight mb-2">Update Master Sales Dump</h4>
+              <p className="text-sm text-zinc-500 mb-6">
+                Uploading a new CSV will <strong className="text-red-500">overwrite</strong> the existing master rates.
+              </p>
+
+              <div className="text-left bg-zinc-50 p-4 rounded-2xl mb-6">
+                <p className="text-xs font-bold text-zinc-900 uppercase tracking-wider mb-2">Required CSV Format:</p>
+                <code className="text-[11px] text-zinc-600 block bg-white p-2 border border-zinc-200 rounded-lg">
+                  ArticleNumber, Description, Category, Rate<br/>
+                  1001, Sample Item A, Electronics, 250.50<br/>
+                  1002, Sample Item B, FMCG, 45.00
+                </code>
+              </div>
+              
+              <div className="relative">
+                <input 
+                  type="file" 
+                  accept=".csv" 
+                  onChange={handleFileUpload}
+                  disabled={isUploading}
+                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-wait"
+                />
+                <div className={cn(
+                  "w-full py-4 border-2 border-dashed rounded-2xl flex flex-col items-center justify-center gap-2 transition-colors",
+                  isUploading ? "border-blue-200 bg-blue-50" : "border-zinc-200 hover:border-black hover:bg-zinc-50"
+                )}>
+                  {isUploading ? (
+                    <RefreshCw className="text-blue-500 animate-spin" size={24} />
+                  ) : (
+                    <>
+                      <span className="font-bold text-zinc-900">Click to browse or drag CSV file</span>
+                      <span className="text-xs text-zinc-400">CSV format only</span>
+                    </>
+                  )}
+                </div>
+              </div>
+              
+              <button 
+                onClick={() => setIsUploadModalOpen(false)} 
+                disabled={isUploading}
+                className="mt-6 text-sm font-bold text-zinc-400 hover:text-black transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

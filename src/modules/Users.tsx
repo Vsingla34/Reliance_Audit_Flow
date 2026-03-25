@@ -1,60 +1,55 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../supabase';
-import { UserProfile, UserRole } from '../types';
+import { UserProfile } from '../types';
 import { 
   Plus, 
   Search, 
-  UserPlus, 
+  User as UserIcon, 
   Mail, 
-  Phone, 
+  Shield, 
   MapPin, 
+  Edit2, 
+  Trash2, 
+  X,
   CheckCircle2,
-  XCircle,
-  Edit2,
-  Trash2,
-  X
+  Loader2
 } from 'lucide-react';
-import { cn } from '../App';
+import { cn, useAuth } from '../App';
 import { motion, AnimatePresence } from 'motion/react';
 
 export function UsersModule() {
+  const { profile } = useAuth();
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
+  
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
   const [editingUser, setEditingUser] = useState<UserProfile | null>(null);
+  
   const [formData, setFormData] = useState<Partial<UserProfile>>({
     name: '',
     email: '',
-    role: 'ase',
-    mobile: '',
+    role: 'auditor',
     region: '',
     active: true
   });
 
-  const fetchUsers = async () => {
-    const { data, error } = await supabase.from('users').select('*');
-    if (data) setUsers(data as UserProfile[]);
-    if (error) console.error("Error fetching users:", error);
+  const fetchData = async () => {
+    try {
+      const { data, error } = await supabase.from('users').select('*').order('name', { ascending: true });
+      if (error) throw error;
+      if (data) setUsers(data as UserProfile[]);
+    } catch (error) {
+      console.error("Error fetching users:", error);
+    }
   };
 
   useEffect(() => {
-    // 1. Initial Fetch
-    fetchUsers();
-
-    // 2. Realtime Subscription
-    const channel = supabase.channel('users-channel')
-      .on(
-        'postgres_changes', 
-        { event: '*', schema: 'public', table: 'users' }, 
-        () => {
-          fetchUsers(); // Re-fetch on any change to keep data perfectly synced
-        }
-      )
+    fetchData();
+    const channel = supabase.channel('users-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'users' }, fetchData)
       .subscribe();
-
-    return () => { 
-      supabase.removeChannel(channel); 
-    };
+    return () => { supabase.removeChannel(channel); };
   }, []);
 
   const filteredUsers = users.filter(u => 
@@ -65,42 +60,65 @@ export function UsersModule() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setIsLoading(true);
+
     try {
       if (editingUser) {
-        // Update existing user
+        // UPDATE EXISTING USER IN PUBLIC TABLE
         const { error } = await supabase
           .from('users')
           .update(formData)
           .eq('uid', editingUser.uid);
-          
         if (error) throw error;
+        
+        alert(`Successfully updated user profile for ${formData.name}.`);
       } else {
-        // Create new user profile
-        const newUid = Math.random().toString(36).substring(7);
-        const { error } = await supabase
-          .from('users')
-          .insert([{ ...formData, uid: newUid }]);
-          
-        if (error) throw error;
+        // CALL EDGE FUNCTION TO INVITE NEW USER
+        const { data, error } = await supabase.functions.invoke('invite-user', {
+          body: { 
+            email: formData.email, 
+            name: formData.name, 
+            role: formData.role, 
+            region: formData.region 
+          }
+        });
+
+        if (error || data.error) throw new Error(error?.message || data.error);
+
+        alert(`User created successfully! An invite link has been dispatched to ${formData.email} via Google SMTP.`);
       }
+      
       setIsModalOpen(false);
       setEditingUser(null);
-      setFormData({ name: '', email: '', role: 'ase', mobile: '', region: '', active: true });
-    } catch (error) {
+      setFormData({ name: '', email: '', role: 'auditor', region: '', active: true });
+    } catch (error: any) {
       console.error("Error saving user:", error);
+      alert(`Failed to save user: ${error.message}`);
+    } finally {
+      setIsLoading(false);
     }
   };
 
   const deleteUser = async (uid: string) => {
-    if (window.confirm("Are you sure you want to delete this user?")) {
+    if (window.confirm("Are you sure you want to delete this user? This will remove their access to the portal.")) {
       try {
         const { error } = await supabase.from('users').delete().eq('uid', uid);
         if (error) throw error;
       } catch (error) {
-         console.error("Error deleting user:", error);
+        console.error("Error deleting user:", error);
       }
     }
   };
+
+  const openCreateModal = () => {
+    setEditingUser(null);
+    setFormData({ name: '', email: '', role: 'auditor', region: '', active: true });
+    setIsModalOpen(true);
+  };
+
+  if (!['admin', 'ho'].includes(profile?.role || '')) {
+    return <div className="p-8 text-center text-red-500 font-bold">Access Denied. Admin only.</div>;
+  }
 
   return (
     <div className="space-y-8 pb-12">
@@ -109,185 +127,215 @@ export function UsersModule() {
           <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-400 group-focus-within:text-black transition-colors" size={18} />
           <input 
             type="text" 
-            placeholder="Search users by name, email or role..." 
+            placeholder="Search team members by name, email, or role..." 
             className="w-full pl-12 pr-4 py-4 bg-white border border-zinc-200 rounded-2xl focus:ring-0 focus:border-black transition-all shadow-sm"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
           />
         </div>
+        
         <button 
-          onClick={() => { setEditingUser(null); setIsModalOpen(true); }}
+          onClick={openCreateModal}
           className="flex items-center justify-center gap-2 px-6 py-4 bg-black text-white rounded-2xl font-bold hover:bg-zinc-800 transition-all shadow-xl shadow-black/10 active:scale-95"
         >
-          <UserPlus size={20} />
-          Add New User
+          <Plus size={20} />
+          Add Team Member
         </button>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {filteredUsers.map((user) => (
-          <motion.div 
-            layout
-            key={user.uid}
-            className="bg-white p-6 rounded-[2rem] border border-zinc-200 shadow-sm hover:shadow-md transition-all group"
-          >
-            <div className="flex items-start justify-between mb-6">
-              <div className="w-14 h-14 rounded-2xl bg-zinc-100 flex items-center justify-center text-zinc-500 font-bold text-xl">
-                {user.name.charAt(0)}
-              </div>
-              <div className="flex gap-2">
-                <button 
-                  onClick={() => { setEditingUser(user); setFormData(user); setIsModalOpen(true); }}
-                  className="p-2 text-zinc-400 hover:text-black hover:bg-zinc-50 rounded-xl transition-all"
-                >
-                  <Edit2 size={16} />
-                </button>
-                <button 
-                  onClick={() => deleteUser(user.uid)}
-                  className="p-2 text-zinc-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all"
-                >
-                  <Trash2 size={16} />
-                </button>
-              </div>
-            </div>
-
-            <div className="space-y-1 mb-6">
-              <h5 className="text-lg font-bold tracking-tight">{user.name}</h5>
-              <div className="flex items-center gap-2">
-                <span className={cn(
-                  "px-2 py-0.5 rounded-lg text-[10px] font-black uppercase tracking-widest",
-                  ['admin', 'ho'].includes(user.role) ? "bg-black text-white" : "bg-zinc-100 text-zinc-600"
-                )}>
-                  {user.role}
-                </span>
-                {user.active ? (
-                  <span className="flex items-center gap-1 text-[10px] font-bold text-emerald-600 uppercase tracking-wider">
-                    <CheckCircle2 size={10} /> Active
-                  </span>
-                ) : (
-                  <span className="flex items-center gap-1 text-[10px] font-bold text-zinc-400 uppercase tracking-wider">
-                    <XCircle size={10} /> Inactive
-                  </span>
-                )}
-              </div>
-            </div>
-
-            <div className="space-y-3 text-sm text-zinc-500">
-              <div className="flex items-center gap-3">
-                <Mail size={14} className="shrink-0" />
-                <span className="truncate">{user.email}</span>
-              </div>
-              {user.mobile && (
-                <div className="flex items-center gap-3">
-                  <Phone size={14} className="shrink-0" />
-                  <span>{user.mobile}</span>
-                </div>
+      <div className="bg-white rounded-[2.5rem] border border-zinc-200 shadow-sm overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead>
+              <tr className="text-left bg-zinc-50/50 border-b border-zinc-100">
+                <th className="px-8 py-5 text-xs font-bold text-zinc-400 uppercase tracking-wider">User Details</th>
+                <th className="px-8 py-5 text-xs font-bold text-zinc-400 uppercase tracking-wider">Role & Access</th>
+                <th className="px-8 py-5 text-xs font-bold text-zinc-400 uppercase tracking-wider">Region</th>
+                <th className="px-8 py-5 text-xs font-bold text-zinc-400 uppercase tracking-wider text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-zinc-100">
+              {filteredUsers.map((u) => {
+                const isMe = u.uid === profile?.uid;
+                
+                return (
+                  <tr key={u.uid} className="hover:bg-zinc-50/50 transition-colors group">
+                    <td className="px-8 py-5">
+                      <div className="flex items-center gap-4">
+                        <div className="w-12 h-12 rounded-full bg-zinc-100 flex items-center justify-center shrink-0 text-zinc-500 font-bold">
+                          {u.name.charAt(0).toUpperCase()}
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2 mb-1">
+                            <p className="font-bold text-zinc-900">{u.name}</p>
+                            {isMe && <span className="bg-blue-100 text-blue-700 text-[10px] font-bold px-2 py-0.5 rounded-md uppercase">You</span>}
+                            {!u.active && <span className="bg-red-100 text-red-600 text-[10px] font-bold px-2 py-0.5 rounded-md uppercase">Inactive</span>}
+                          </div>
+                          <p className="text-xs text-zinc-500 flex items-center gap-1">
+                            <Mail size={12} /> {u.email}
+                          </p>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-8 py-5">
+                      <div className="flex items-center gap-2 text-sm font-bold bg-zinc-50 px-3 py-1.5 rounded-xl inline-flex border border-zinc-100 uppercase tracking-wider text-[10px] text-zinc-700">
+                        <Shield size={14} className="text-zinc-400" />
+                        {u.role}
+                      </div>
+                    </td>
+                    <td className="px-8 py-5">
+                      {u.region ? (
+                        <div className="flex items-center gap-2 text-sm text-zinc-600 bg-zinc-50 px-3 py-1.5 rounded-xl inline-flex border border-zinc-100">
+                          <MapPin size={14} className="text-zinc-400 shrink-0" />
+                          <span>{u.region}</span>
+                        </div>
+                      ) : (
+                        <span className="text-sm text-zinc-400 italic">Global</span>
+                      )}
+                    </td>
+                    <td className="px-8 py-5 text-right">
+                      <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button 
+                          onClick={() => { setEditingUser(u); setFormData(u); setIsModalOpen(true); }}
+                          className="p-2 text-zinc-400 hover:text-black hover:bg-zinc-100 rounded-xl transition-all"
+                          title="Edit User"
+                        >
+                          <Edit2 size={16} />
+                        </button>
+                        {!isMe && (
+                          <button 
+                            onClick={() => deleteUser(u.uid)}
+                            className="p-2 text-zinc-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all"
+                            title="Delete User"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
+              {filteredUsers.length === 0 && (
+                <tr>
+                  <td colSpan={4} className="px-8 py-16 text-center">
+                    <div className="flex flex-col items-center justify-center text-zinc-400">
+                      <UserIcon size={48} className="mb-4 text-zinc-200" />
+                      <p className="text-lg font-medium text-zinc-900 mb-1">No users found</p>
+                      <p className="text-sm">Try adjusting your search.</p>
+                    </div>
+                  </td>
+                </tr>
               )}
-              {user.region && (
-                <div className="flex items-center gap-3">
-                  <MapPin size={14} className="shrink-0" />
-                  <span>{user.region}</span>
-                </div>
-              )}
-            </div>
-          </motion.div>
-        ))}
+            </tbody>
+          </table>
+        </div>
       </div>
 
-      {/* Modal */}
       <AnimatePresence>
         {isModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-6">
             <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setIsModalOpen(false)}
-              className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} 
+              onClick={() => !isLoading && setIsModalOpen(false)} 
+              className="absolute inset-0 bg-black/40 backdrop-blur-sm" 
             />
             <motion.div 
-              initial={{ opacity: 0, scale: 0.9, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className="relative w-full max-w-lg bg-white rounded-[2.5rem] shadow-2xl overflow-hidden"
+              initial={{ opacity: 0, scale: 0.9, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9, y: 20 }} 
+              className="relative w-full max-w-2xl bg-white rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
             >
-              <div className="p-8 border-b border-zinc-100 flex items-center justify-between">
-                <h4 className="text-2xl font-bold tracking-tight">{editingUser ? 'Edit User' : 'Add New User'}</h4>
-                <button onClick={() => setIsModalOpen(false)} className="p-2 hover:bg-zinc-100 rounded-xl transition-colors">
+              <div className="p-6 md:p-8 border-b border-zinc-100 flex items-center justify-between shrink-0 bg-white z-10">
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 bg-zinc-100 rounded-2xl flex items-center justify-center">
+                    <UserIcon className="text-black" size={20} />
+                  </div>
+                  <div>
+                    <h4 className="text-xl md:text-2xl font-bold tracking-tight">{editingUser ? 'Edit Team Member' : 'Add New Team Member'}</h4>
+                    <p className="text-sm text-zinc-500">{editingUser ? 'Update user details and access.' : 'Create an account and securely email an invite link.'}</p>
+                  </div>
+                </div>
+                <button type="button" onClick={() => !isLoading && setIsModalOpen(false)} className="p-2 hover:bg-zinc-100 rounded-xl transition-colors">
                   <X size={20} />
                 </button>
               </div>
-              <form onSubmit={handleSubmit} className="p-8 space-y-6">
-                <div className="grid grid-cols-2 gap-6">
-                  <div className="col-span-2 space-y-2">
-                    <label className="text-xs font-bold uppercase tracking-wider text-zinc-400">Full Name</label>
-                    <input 
-                      required
-                      className="w-full px-4 py-3 bg-zinc-50 border-none rounded-xl focus:ring-2 focus:ring-black transition-all"
-                      value={formData.name}
-                      onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                    />
+              
+              <div className="p-6 md:p-8 overflow-y-auto custom-scrollbar">
+                <form id="user-form" onSubmit={handleSubmit} className="space-y-8">
+                  
+                  <div>
+                    <h5 className="text-sm font-bold uppercase tracking-wider text-zinc-900 mb-4 flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-blue-500"></span> User Identity
+                    </h5>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <label className="text-xs font-bold uppercase tracking-wider text-zinc-400">Full Name *</label>
+                        <input required className="w-full px-4 py-3 bg-zinc-50 border-none rounded-xl focus:ring-2 focus:ring-black transition-all" value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} placeholder="John Doe" disabled={isLoading} />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-xs font-bold uppercase tracking-wider text-zinc-400">Email Address *</label>
+                        <input required type="email" className="w-full px-4 py-3 bg-zinc-50 border-none rounded-xl focus:ring-2 focus:ring-black transition-all" value={formData.email} onChange={(e) => setFormData({ ...formData, email: e.target.value })} placeholder="john@company.com" disabled={isLoading || !!editingUser} />
+                      </div>
+                    </div>
                   </div>
-                  <div className="col-span-2 space-y-2">
-                    <label className="text-xs font-bold uppercase tracking-wider text-zinc-400">Email Address</label>
-                    <input 
-                      required
-                      type="email"
-                      className="w-full px-4 py-3 bg-zinc-50 border-none rounded-xl focus:ring-2 focus:ring-black transition-all"
-                      value={formData.email}
-                      onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                    />
+
+                  {!editingUser && (
+                    <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-100 flex items-start gap-3">
+                      <CheckCircle2 size={20} className="text-emerald-500 shrink-0 mt-0.5" />
+                      <div>
+                        <h5 className="text-sm font-bold text-emerald-900">Secure Invite Link</h5>
+                        <p className="text-xs text-emerald-700 mt-1">
+                          Instead of emailing a plain-text password, Supabase will securely email this user an invite link via Google SMTP to set their own password.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  <hr className="border-zinc-100" />
+
+                  <div>
+                    <h5 className="text-sm font-bold uppercase tracking-wider text-zinc-900 mb-4 flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-zinc-800"></span> Role & Access
+                    </h5>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <label className="text-xs font-bold uppercase tracking-wider text-zinc-400">System Role *</label>
+                        <select 
+                          required
+                          className="w-full px-4 py-3 bg-zinc-50 border-none rounded-xl focus:ring-2 focus:ring-black transition-all" 
+                          value={formData.role} 
+                          onChange={(e) => setFormData({ ...formData, role: e.target.value as any })}
+                          disabled={isLoading}
+                        >
+                          <option value="admin">Administrator (Full Access)</option>
+                          <option value="ho">Head Office (View/Approve)</option>
+                          <option value="ase">Area Sales Executive</option>
+                          <option value="auditor">Field Auditor</option>
+                        </select>
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-xs font-bold uppercase tracking-wider text-zinc-400">Region (Optional)</label>
+                        <input className="w-full px-4 py-3 bg-zinc-50 border-none rounded-xl focus:ring-2 focus:ring-black transition-all" value={formData.region} onChange={(e) => setFormData({ ...formData, region: e.target.value })} placeholder="e.g. North India" disabled={isLoading} />
+                      </div>
+                    </div>
                   </div>
-                  <div className="space-y-2">
-                    <label className="text-xs font-bold uppercase tracking-wider text-zinc-400">Role</label>
-                    <select 
-                      className="w-full px-4 py-3 bg-zinc-50 border-none rounded-xl focus:ring-2 focus:ring-black transition-all"
-                      value={formData.role}
-                      onChange={(e) => setFormData({ ...formData, role: e.target.value as UserRole })}
-                    >
-                      <option value="admin">System Admin</option>
-                      <option value="ho">H.O (Head Office)</option>
-                      <option value="dm">District Manager</option>
-                      <option value="sm">Sales Manager</option>
-                      <option value="asm">Area Sales Manager</option>
-                      <option value="ase">Area Sales Executive</option>
-                      <option value="distributor">Distributor</option>
-                      <option value="auditor">Auditor</option>
-                    </select>
+
+                  <div className="flex items-center gap-3 bg-zinc-50 p-4 rounded-xl border border-zinc-100">
+                    <input type="checkbox" id="userActive" className="w-5 h-5 rounded border-zinc-300 text-black focus:ring-black cursor-pointer" checked={formData.active} onChange={(e) => setFormData({ ...formData, active: e.target.checked })} disabled={isLoading} />
+                    <label htmlFor="userActive" className="text-sm font-bold cursor-pointer select-none">Active Account (Can log in)</label>
                   </div>
-                  <div className="space-y-2">
-                    <label className="text-xs font-bold uppercase tracking-wider text-zinc-400">Mobile</label>
-                    <input 
-                      className="w-full px-4 py-3 bg-zinc-50 border-none rounded-xl focus:ring-2 focus:ring-black transition-all"
-                      value={formData.mobile}
-                      onChange={(e) => setFormData({ ...formData, mobile: e.target.value })}
-                    />
-                  </div>
-                  <div className="col-span-2 space-y-2">
-                    <label className="text-xs font-bold uppercase tracking-wider text-zinc-400">Region</label>
-                    <input 
-                      className="w-full px-4 py-3 bg-zinc-50 border-none rounded-xl focus:ring-2 focus:ring-black transition-all"
-                      value={formData.region}
-                      onChange={(e) => setFormData({ ...formData, region: e.target.value })}
-                    />
-                  </div>
-                  <div className="col-span-2 flex items-center gap-3 pt-4">
-                    <input 
-                      type="checkbox"
-                      id="active"
-                      className="w-5 h-5 rounded border-zinc-300 text-black focus:ring-black"
-                      checked={formData.active}
-                      onChange={(e) => setFormData({ ...formData, active: e.target.checked })}
-                    />
-                    <label htmlFor="active" className="text-sm font-bold">Active Account</label>
-                  </div>
-                </div>
-                <div className="pt-4">
-                  <button type="submit" className="w-full py-4 bg-black text-white rounded-2xl font-bold hover:bg-zinc-800 transition-all shadow-xl shadow-black/10">
-                    {editingUser ? 'Update Profile' : 'Create User'}
-                  </button>
-                </div>
-              </form>
+
+                </form>
+              </div>
+              
+              <div className="p-6 md:p-8 border-t border-zinc-100 shrink-0 bg-white z-10">
+                <button type="submit" form="user-form" disabled={isLoading} className="w-full py-4 bg-black text-white rounded-2xl font-bold hover:bg-zinc-800 transition-all shadow-xl shadow-black/10 active:scale-95 text-lg flex items-center justify-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed">
+                  {isLoading ? (
+                    <><Loader2 className="animate-spin" size={20} /> Processing...</>
+                  ) : (
+                    editingUser ? 'Save Changes' : 'Create User & Send Invite'
+                  )}
+                </button>
+              </div>
             </motion.div>
           </div>
         )}

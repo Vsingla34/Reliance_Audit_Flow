@@ -1,12 +1,14 @@
+// KEEP THIS EXACT URL. Do not put your personal Supabase URL here.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
-// 1. Paste your exact URL inside the quotes below
-const supabaseUrl = "https://qxtdyegsbqvcklbjvvxw.supabase.co";
+// This pulls your personal URL and Key from the .env.local file automatically
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
-// 2. Paste your exact Anon Key inside the quotes below
-const supabaseAnonKey = "sb_publishable_ADs82Sql4KPCeJfREHAiFg_O_RbYsPg";
+if (!supabaseUrl || !supabaseAnonKey) {
+  console.error("Missing Supabase environment variables. Check your .env.local file.");
+}
 
-// Initialize the client directly
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 export enum OperationType {
