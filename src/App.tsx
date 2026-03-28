@@ -1,4 +1,7 @@
-
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { supabase } from './supabase';
@@ -8,6 +11,7 @@ import {
   LayoutDashboard, 
   Users, 
   Store, 
+  Database,
   Calendar, 
   ClipboardCheck, 
   BarChart3, 
@@ -26,6 +30,7 @@ import { twMerge } from 'tailwind-merge';
 import { DashboardModule } from './modules/Dashboard';
 import { UsersModule } from './modules/Users';
 import { DistributorsModule } from './modules/Distributors';
+import { MastersModule } from './modules/Masters';
 import { SchedulerModule } from './modules/Scheduler';
 import { ExecutionModule } from './modules/Execution';
 import { ReportsModule } from './modules/Reports';
@@ -300,6 +305,7 @@ export default function App() {
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, roles: ['admin', 'ase', 'asm', 'sm', 'dm', 'auditor'] },
     { id: 'users', label: 'User Management', icon: Users, roles: ['admin'] },
     { id: 'distributors', label: 'Distributors', icon: Store, roles: ['admin', 'ase', 'asm', 'sm', 'dm'] },
+    { id: 'masters', label: 'Data Masters', icon: Database, roles: ['admin', 'ho'] },
     { id: 'scheduler', label: 'Audit Scheduler', icon: Calendar, roles: ['admin', 'ase', 'asm', 'auditor'] },
     { id: 'execution', label: 'Execution', icon: ClipboardCheck, roles: ['admin', 'auditor', 'ase'] },
     { id: 'reports', label: 'Reports', icon: BarChart3, roles: ['admin', 'sm', 'dm'] },
@@ -404,6 +410,7 @@ export default function App() {
                   {activeTab === 'dashboard' && <DashboardModule />}
                   {activeTab === 'users' && <UsersModule />}
                   {activeTab === 'distributors' && <DistributorsModule />}
+                  {activeTab === 'masters' && <MastersModule />}
                   {activeTab === 'scheduler' && <SchedulerModule />}
                   {activeTab === 'execution' && <ExecutionModule />}
                   {activeTab === 'reports' && <ReportsModule />}

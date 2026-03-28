@@ -16,11 +16,15 @@ export interface UserProfile {
   mobile?: string;
   region?: string;
   active: boolean;
+  createdAt?: string;
 }
+
+// --- MASTERS ---
 
 export interface Distributor {
   id: string;
   code: string;
+  anchorName?: string; // NEW
   name: string;
   contactPerson?: string;
   contactNumber?: string;
@@ -28,13 +32,34 @@ export interface Distributor {
   address?: string;
   city?: string;
   state?: string;
+  region?: string; // NEW
   approvedValue: number;
   aseId: string | null;
   asmId?: string | null;
   smId?: string | null;
   dmId?: string | null;
+  hoId?: string | null; // NEW
   active: boolean;
 }
+
+export interface ItemMaster { // NEW
+  id: string;
+  itemCode: string;
+  itemName: string;
+  gst: number;
+  category: string;
+  approxShelfLife: string;
+}
+
+export interface SalesDumpItem { // OVERHAULED
+  id: string;
+  distributorCode: string; 
+  itemCode: string;
+  quantity: number;
+  rate: number;
+}
+
+// --- EXECUTION & SCHEDULING ---
 
 export interface DateProposal {
   id: string;
@@ -98,15 +123,16 @@ export interface AuditTicket {
   };
   media: MediaUpload[];
   dateProposals?: DateProposal[]; 
-  comments?: AuditComment[]; // <-- ADDED THIS LINE so the chat works!
+  comments?: AuditComment[];
   createdAt: string;
   updatedAt: string;
+  auditDays?: number;
 }
 
 export interface AuditLineItem {
   id: string;
   ticketId: string;
-  articleNumber: string;
+  articleNumber: string; // Maps to itemCode
   description: string;
   category: string;
   quantity: number;
@@ -114,12 +140,4 @@ export interface AuditLineItem {
   totalValue: number;
   reasonCode: string;
   remarks?: string;
-}
-
-export interface SalesDumpItem {
-  id: string;
-  articleNumber: string;
-  description: string;
-  category: string;
-  rate: number;
 }

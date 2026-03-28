@@ -307,8 +307,11 @@ export function UsersModule() {
                           disabled={isLoading}
                         >
                           <option value="admin">Administrator (Full Access)</option>
-                          <option value="ho">Head Office (View/Approve)</option>
-                          <option value="ase">Area Sales Executive</option>
+                          <option value="ho">Head Office (HO)</option>
+                          <option value="dm">Division Manager (DM)</option>
+                          <option value="sm">Sales Manager (SM)</option>
+                          <option value="asm">Area Sales Manager (ASM)</option>
+                          <option value="ase">Area Sales Executive (ASE)</option>
                           <option value="auditor">Field Auditor</option>
                         </select>
                       </div>

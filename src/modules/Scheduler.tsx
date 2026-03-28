@@ -1,20 +1,21 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { supabase } from '../supabase';
 import { AuditTicket, Distributor, UserProfile, DateProposal } from '../types';
 import { 
   Calendar as CalendarIcon, 
   Plus, 
   Store, 
+  MapPin, 
+  CheckCircle2, 
   X, 
-  ChevronLeft, 
-  ChevronRight, 
-  User as UserIcon,
-  MessageSquare,
-  CheckCircle2,
-  Clock,
-  Send,
+  Send, 
   AlertCircle,
-  Filter
+  MessageSquare,
+  Filter,
+  Trash2,
+  CalendarCheck,
+  ChevronLeft,
+  ChevronRight
 } from 'lucide-react';
 import { cn, useAuth } from '../App';
 import { motion, AnimatePresence } from 'motion/react';
@@ -38,105 +39,153 @@ export function SchedulerModule() {
   const [pendingFilterAse, setPendingFilterAse] = useState<string>('all');
 
   // Forms
-  const [createData, setCreateData] = useState({ distributorId: '', proposedDate: '', auditorId: '' });
+  // --- ADDED auditDays TO STATE ---
+  const [createData, setCreateData] = useState({ distributorId: '', proposedDate: '', auditorId: '', auditDays: 1 });
   const [proposalData, setProposalData] = useState({ date: '', remarks: '' });
   const [approvalAuditorId, setApprovalAuditorId] = useState('');
+  const [approvalAuditDays, setApprovalAuditDays] = useState(1); // --- ADDED APPROVAL DAYS ---
 
   const isAdminOrHO = ['admin', 'ho'].includes(profile?.role || '');
 
-  const fetchData = async () => {
-    if (!profile) return;
+  const distMap = useMemo(() => {
+    const map: Record<string, Distributor> = {};
+    distributors.forEach(d => { map[d.id] = d; });
+    return map;
+  }, [distributors]);
 
-    try {
-      let dQuery = supabase.from('distributors').select('*');
-      
-      if (profile.role === 'ase') {
-        dQuery = dQuery.eq('aseId', profile.uid);
-      } else if (profile.role === 'distributor') {
-        dQuery = dQuery.eq('email', profile.email);
+  const userMap = useMemo(() => {
+    const map: Record<string, UserProfile> = {};
+    allUsers.forEach(u => { map[u.uid] = u; });
+    return map;
+  }, [allUsers]);
+
+  const ticketsByDate = useMemo(() => {
+    const map: Record<string, AuditTicket[]> = {};
+    tickets.forEach(t => {
+      const dateStr = t.status === 'tentative' ? t.proposedDate : t.scheduledDate;
+      if (dateStr) {
+        if (!map[dateStr]) map[dateStr] = [];
+        map[dateStr].push(t);
       }
-      
-      const [dRes, uRes] = await Promise.all([
-        dQuery,
-        supabase.from('users').select('*') 
-      ]);
-
-      if (dRes.error) throw dRes.error;
-      const fetchedDistributors = (dRes.data || []) as Distributor[];
-      
-      setDistributors(fetchedDistributors);
-      
-      if (uRes.data) {
-        const usersList = uRes.data as UserProfile[];
-        setAllUsers(usersList);
-        setAuditors(usersList.filter(u => u.role === 'auditor'));
-      }
-
-      let tQuery = supabase.from('auditTickets').select('*');
-
-      if (profile.role === 'auditor') {
-        tQuery = tQuery.eq('auditorId', profile.uid);
-      } else if (['ase', 'distributor'].includes(profile.role)) {
-        const distIds = fetchedDistributors.map(d => d.id);
-        if (distIds.length > 0) {
-          tQuery = tQuery.in('distributorId', distIds);
-        } else {
-          setTickets([]);
-          return;
-        }
-      }
-
-      const tRes = await tQuery;
-      if (tRes.error) throw tRes.error;
-      if (tRes.data) setTickets(tRes.data as AuditTicket[]);
-
-    } catch (error) {
-      console.error("Error fetching scheduler data:", error);
-    }
-  };
+    });
+    return map;
+  }, [tickets]);
 
   useEffect(() => {
+    const fetchData = async () => {
+      if (!profile) return;
+      try {
+        let dQuery = supabase.from('distributors').select('*');
+        if (profile.role === 'ase') dQuery = dQuery.eq('aseId', profile.uid);
+        else if (profile.role === 'distributor') dQuery = dQuery.eq('email', profile.email);
+        
+        const [dRes, uRes] = await Promise.all([
+          dQuery,
+          supabase.from('users').select('*') 
+        ]);
+
+        if (dRes.error) throw dRes.error;
+        const fetchedDistributors = (dRes.data || []) as Distributor[];
+        setDistributors(fetchedDistributors);
+        
+        if (uRes.data) {
+          const usersList = uRes.data as UserProfile[];
+          setAllUsers(usersList);
+          setAuditors(usersList.filter(u => u.role === 'auditor'));
+        }
+
+        let tQuery = supabase.from('auditTickets').select('*');
+        if (profile.role === 'auditor') {
+          tQuery = tQuery.eq('auditorId', profile.uid);
+        } else if (['ase', 'distributor'].includes(profile.role)) {
+          const distIds = fetchedDistributors.map(d => d.id);
+          if (distIds.length > 0) tQuery = tQuery.in('distributorId', distIds);
+          else return setTickets([]);
+        }
+
+        const tRes = await tQuery;
+        if (tRes.error) throw tRes.error;
+        
+        if (tRes.data) {
+          const validTickets = (tRes.data as AuditTicket[]).filter(t => 
+            fetchedDistributors.some(d => d.id === t.distributorId)
+          );
+          setTickets(validTickets);
+        }
+      } catch (error) {
+        console.error("Error fetching scheduler data:", error);
+      }
+    };
+
     fetchData();
     const channel = supabase.channel('scheduler-changes')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'auditTickets' }, fetchData)
       .subscribe();
+    
     return () => { supabase.removeChannel(channel); };
-  }, [profile]);
+  }, [profile?.uid, profile?.role, profile?.email]);
 
   useEffect(() => {
     if (negotiationTicket) {
       const updated = tickets.find(t => t.id === negotiationTicket.id);
       if (updated) setNegotiationTicket(updated);
     }
-  }, [tickets]);
+  }, [tickets, negotiationTicket?.id]);
+
+  const deleteTicket = async (ticketId: string) => {
+    if (window.confirm("Are you sure you want to permanently delete this ticket?")) {
+      try {
+        await supabase.from('auditLineItems').delete().eq('ticketId', ticketId);
+        await supabase.from('auditTickets').delete().eq('id', ticketId);
+        setNegotiationTicket(null);
+      } catch (error) {
+        console.error("Error deleting ticket:", error);
+      }
+    }
+  };
 
   const handleCreateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const dist = distributors.find(d => d.id === createData.distributorId);
+      const dist = distMap[createData.distributorId];
       if (!dist) return;
 
-      const newTicket: Partial<AuditTicket> = {
-        id: Math.random().toString(36).substring(7),
-        distributorId: createData.distributorId,
-        proposedDate: createData.proposedDate,
-        auditorId: createData.auditorId || null,
-        approvedValue: dist.approvedValue,
-        maxAllowedValue: dist.approvedValue * 1.05,
-        status: createData.auditorId ? 'scheduled' : 'tentative',
-        scheduledDate: createData.auditorId ? createData.proposedDate : null,
-        verifiedTotal: 0,
-        presenceLogs: [],
-        signOffs: {},
-        media: [],
-        dateProposals: [],
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      };
+      const existingTicket = tickets.find(t => t.distributorId === createData.distributorId && t.status === 'tentative');
 
-      await supabase.from('auditTickets').insert([newTicket]);
+      // --- SAVE auditDays TO DATABASE ---
+      if (existingTicket) {
+        await supabase.from('auditTickets').update({
+          proposedDate: createData.proposedDate,
+          scheduledDate: createData.proposedDate,
+          auditorId: createData.auditorId,
+          auditDays: createData.auditDays, // <--- SAVING DURATION
+          status: 'scheduled',
+          updatedAt: new Date().toISOString()
+        }).eq('id', existingTicket.id);
+      } else {
+        const newTicket: Partial<AuditTicket> = {
+          id: Math.random().toString(36).substring(7),
+          distributorId: createData.distributorId,
+          proposedDate: createData.proposedDate,
+          auditorId: createData.auditorId,
+          auditDays: createData.auditDays, // <--- SAVING DURATION
+          approvedValue: dist.approvedValue,
+          maxAllowedValue: dist.approvedValue * 1.05,
+          status: 'scheduled', 
+          scheduledDate: createData.proposedDate,
+          verifiedTotal: 0,
+          presenceLogs: [],
+          signOffs: {},
+          media: [],
+          dateProposals: [],
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        };
+        await supabase.from('auditTickets').insert([newTicket]);
+      }
+
       setIsCreateModalOpen(false);
-      setCreateData({ distributorId: '', proposedDate: '', auditorId: '' });
+      setCreateData({ distributorId: '', proposedDate: '', auditorId: '', auditDays: 1 });
     } catch (error) {
       console.error("Error creating audit ticket:", error);
     }
@@ -166,14 +215,11 @@ export function SchedulerModule() {
       const updatedProposals = [...(negotiationTicket.dateProposals || []), newProposal];
       const newMainDate = proposalData.date ? proposalData.date : negotiationTicket.proposedDate;
 
-      await supabase
-        .from('auditTickets')
-        .update({
-          proposedDate: newMainDate,
-          dateProposals: updatedProposals,
-          updatedAt: new Date().toISOString()
-        })
-        .eq('id', negotiationTicket.id);
+      await supabase.from('auditTickets').update({
+        proposedDate: newMainDate,
+        dateProposals: updatedProposals,
+        updatedAt: new Date().toISOString()
+      }).eq('id', negotiationTicket.id);
 
       setProposalData({ date: '', remarks: '' });
     } catch (error) {
@@ -188,18 +234,17 @@ export function SchedulerModule() {
     }
 
     try {
-      await supabase
-        .from('auditTickets')
-        .update({
-          status: 'scheduled',
-          scheduledDate: proposalDate, 
-          auditorId: approvalAuditorId, 
-          updatedAt: new Date().toISOString()
-        })
-        .eq('id', negotiationTicket.id);
+      await supabase.from('auditTickets').update({
+        status: 'scheduled',
+        scheduledDate: proposalDate, 
+        auditorId: approvalAuditorId, 
+        auditDays: approvalAuditDays, // <--- SAVING DURATION ON APPROVAL
+        updatedAt: new Date().toISOString()
+      }).eq('id', negotiationTicket.id);
 
       setNegotiationTicket(null); 
       setApprovalAuditorId('');
+      setApprovalAuditDays(1);
       alert("Audit successfully scheduled and auditor assigned!");
     } catch (error) {
       console.error("Error approving schedule:", error);
@@ -212,24 +257,24 @@ export function SchedulerModule() {
   const startDayOfWeek = monthStart.getDay();
   const paddingDays = Array.from({ length: startDayOfWeek }).map((_, i) => i);
 
-  const allPendingTickets = tickets.filter(t => t.status === 'tentative');
+  const allPendingTickets = useMemo(() => tickets.filter(t => t.status === 'tentative'), [tickets]);
   
-  const uniquePendingAseIds = Array.from(new Set(
-    allPendingTickets
-      .map(t => distributors.find(d => d.id === t.distributorId)?.aseId)
-      .filter(Boolean) as string[]
-  ));
+  const uniquePendingAseIds = useMemo(() => {
+    const ids = allPendingTickets.map(t => distMap[t.distributorId]?.aseId).filter(Boolean) as string[];
+    return Array.from(new Set(ids));
+  }, [allPendingTickets, distMap]);
 
-  const filteredPendingTickets = allPendingTickets.filter(t => {
-    if (pendingFilterAse !== 'all') {
-      const dist = distributors.find(d => d.id === t.distributorId);
-      return dist?.aseId === pendingFilterAse;
-    }
-    return true;
-  });
+  const filteredPendingTickets = useMemo(() => {
+    return allPendingTickets.filter(t => {
+      if (pendingFilterAse !== 'all') {
+        return distMap[t.distributorId]?.aseId === pendingFilterAse;
+      }
+      return true;
+    });
+  }, [allPendingTickets, pendingFilterAse, distMap]);
 
-  const awaitingApproval = filteredPendingTickets.filter(t => t.dateProposals && t.dateProposals.length > 0);
-  const awaitingProposal = filteredPendingTickets.filter(t => !t.dateProposals || t.dateProposals.length === 0);
+  const awaitingApproval = useMemo(() => filteredPendingTickets.filter(t => t.dateProposals && t.dateProposals.length > 0), [filteredPendingTickets]);
+  const awaitingProposal = useMemo(() => filteredPendingTickets.filter(t => !t.dateProposals || t.dateProposals.length === 0), [filteredPendingTickets]);
   
   const displayTickets = pendingTab === 'approval' ? awaitingApproval : awaitingProposal;
 
@@ -237,7 +282,7 @@ export function SchedulerModule() {
     if (awaitingApproval.length === 0 && awaitingProposal.length > 0 && pendingTab === 'approval') {
       setPendingTab('waiting');
     }
-  }, [awaitingApproval.length, awaitingProposal.length]);
+  }, [awaitingApproval.length, awaitingProposal.length, pendingTab]);
 
   return (
     <div className="space-y-8 pb-12">
@@ -295,13 +340,13 @@ export function SchedulerModule() {
               <div className="flex items-center gap-2">
                 <Filter size={16} className="text-zinc-400" />
                 <select
-                  className="text-sm px-4 py-2 bg-white border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black outline-none font-medium shadow-sm"
+                  className="text-sm px-4 py-2 bg-white border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black outline-none font-medium shadow-sm cursor-pointer"
                   value={pendingFilterAse}
                   onChange={(e) => setPendingFilterAse(e.target.value)}
                 >
                   <option value="all">All Area Sales Execs</option>
                   {uniquePendingAseIds.map(id => {
-                    const ase = allUsers.find(u => u.uid === id);
+                    const ase = userMap[id];
                     return <option key={id} value={id}>{ase?.name || 'Unknown ASE'}</option>
                   })}
                 </select>
@@ -318,8 +363,8 @@ export function SchedulerModule() {
             ) : (
               <div className="space-y-3">
                 {displayTickets.map(ticket => {
-                  const dist = distributors.find(d => d.id === ticket.distributorId);
-                  const ase = allUsers.find(u => u.uid === dist?.aseId);
+                  const dist = distMap[ticket.distributorId];
+                  const ase = dist ? userMap[dist.aseId || ''] : null;
                   const lastProposal = ticket.dateProposals?.[ticket.dateProposals.length - 1];
 
                   return (
@@ -390,7 +435,7 @@ export function SchedulerModule() {
           
           {days.map(day => {
             const dayStr = format(day, 'yyyy-MM-dd');
-            const dayTickets = tickets.filter(t => t.scheduledDate === dayStr || (t.status === 'tentative' && t.proposedDate === dayStr));
+            const dayTickets = ticketsByDate[dayStr] || [];
             const isCurrentDay = isToday(day);
             
             return (
@@ -412,7 +457,7 @@ export function SchedulerModule() {
                 
                 <div className="space-y-2 flex-1 overflow-y-auto custom-scrollbar pr-1">
                   {dayTickets.map(ticket => {
-                    const dist = distributors.find(d => d.id === ticket.distributorId);
+                    const dist = distMap[ticket.distributorId];
                     return (
                       <div 
                         key={ticket.id}
@@ -432,9 +477,9 @@ export function SchedulerModule() {
                           </div>
                         ) : (
                           <div className="flex items-center gap-1 text-[10px] font-medium text-emerald-700 bg-emerald-100/50 px-1.5 py-0.5 rounded">
-                            <UserIcon size={10} />
+                            <Store size={10} />
                             <span className="truncate">
-                              {auditors.find(a => a.uid === ticket.auditorId)?.name || 'Assigned'}
+                              {userMap[ticket.auditorId || '']?.name || 'Assigned'}
                             </span>
                           </div>
                         )}
@@ -448,6 +493,7 @@ export function SchedulerModule() {
         </div>
       </div>
 
+      {/* --- NEGOTIATION & SCHEDULING MODAL --- */}
       <AnimatePresence>
         {negotiationTicket && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-6">
@@ -463,13 +509,24 @@ export function SchedulerModule() {
                   <div>
                     <h4 className="text-xl font-bold tracking-tight">Date Negotiation</h4>
                     <p className="text-sm text-zinc-500 truncate max-w-[250px]">
-                      {distributors.find(d => d.id === negotiationTicket.distributorId)?.name}
+                      {distMap[negotiationTicket.distributorId]?.name}
                     </p>
                   </div>
                 </div>
-                <button onClick={() => setNegotiationTicket(null)} className="p-2 hover:bg-zinc-100 rounded-xl transition-colors">
-                  <X size={20} />
-                </button>
+                <div className="flex items-center gap-2">
+                  {isAdminOrHO && (
+                    <button 
+                      onClick={() => deleteTicket(negotiationTicket.id)} 
+                      className="p-2 text-zinc-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-colors"
+                      title="Delete this ticket"
+                    >
+                      <Trash2 size={20} />
+                    </button>
+                  )}
+                  <button onClick={() => setNegotiationTicket(null)} className="p-2 hover:bg-zinc-100 rounded-xl transition-colors">
+                    <X size={20} />
+                  </button>
+                </div>
               </div>
               
               <div className="p-6 md:p-8 overflow-y-auto bg-zinc-50/50 flex-1 space-y-6 custom-scrollbar">
@@ -516,7 +573,7 @@ export function SchedulerModule() {
                         {isAdminOrHO && prop.date && (
                           <div className="pt-3 mt-3 border-t border-zinc-100 flex items-center gap-3">
                             <select 
-                              className="flex-1 text-sm p-2 rounded-xl bg-zinc-50 border border-zinc-200 focus:ring-2 focus:ring-black"
+                              className="flex-1 text-sm p-2 rounded-xl bg-zinc-50 border border-zinc-200 focus:ring-2 focus:ring-black cursor-pointer"
                               value={approvalAuditorId}
                               onChange={(e) => setApprovalAuditorId(e.target.value)}
                             >
@@ -525,11 +582,21 @@ export function SchedulerModule() {
                                 <option key={a.uid} value={a.uid}>{a.name}</option>
                               ))}
                             </select>
+
+                            {/* --- ADDED DURATION TO APPROVAL --- */}
+                            <select 
+                              className="w-32 text-sm p-2 rounded-xl bg-zinc-50 border border-zinc-200 focus:ring-2 focus:ring-black cursor-pointer"
+                              value={approvalAuditDays}
+                              onChange={(e) => setApprovalAuditDays(parseInt(e.target.value))}
+                            >
+                              {[1,2,3,4,5].map(n => <option key={n} value={n}>{n} Day{n>1?'s':''}</option>)}
+                            </select>
+
                             <button 
                               onClick={() => approveAndSchedule(prop.date)}
                               className="flex items-center gap-1 px-4 py-2 bg-emerald-500 text-white text-sm font-bold rounded-xl hover:bg-emerald-600 transition-colors"
                             >
-                              <CheckCircle2 size={16} /> Approve Date
+                              <CheckCircle2 size={16} /> Approve
                             </button>
                           </div>
                         )}
@@ -540,22 +607,56 @@ export function SchedulerModule() {
               </div>
 
               <div className="p-6 md:p-8 bg-white border-t border-zinc-100 shrink-0">
-                <form onSubmit={submitProposal} className="space-y-4">
-                  <h5 className="text-sm font-bold tracking-tight text-zinc-900">Add a Reply or Suggest a Date</h5>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <div className="md:col-span-1">
+                <form onSubmit={(e) => {
+                  e.preventDefault();
+                  if (isAdminOrHO && approvalAuditorId) {
+                    if (!proposalData.date) return alert("Select a date to schedule.");
+                    approveAndSchedule(proposalData.date);
+                  } else {
+                    submitProposal(e);
+                  }
+                }} className="space-y-4">
+                  <h5 className="text-sm font-bold tracking-tight text-zinc-900">
+                    {isAdminOrHO ? "Schedule Audit or Send Reply" : "Add a Reply or Suggest a Date"}
+                  </h5>
+                  <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
+                    <div className="md:col-span-3">
                       <input 
                         type="date" 
                         min={new Date().toISOString().split('T')[0]} 
-                        className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black transition-all text-sm font-medium text-zinc-700" 
+                        className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black transition-all text-sm font-medium text-zinc-700 cursor-pointer" 
                         value={proposalData.date} 
                         onChange={e => setProposalData({...proposalData, date: e.target.value})} 
                       />
                     </div>
-                    <div className="md:col-span-2 relative">
+                    {isAdminOrHO && (
+                      <>
+                        <div className="md:col-span-3">
+                          <select 
+                            className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black transition-all text-sm font-medium text-zinc-700 cursor-pointer"
+                            value={approvalAuditorId}
+                            onChange={(e) => setApprovalAuditorId(e.target.value)}
+                          >
+                            <option value="">Assign Auditor...</option>
+                            {auditors.map(a => <option key={a.uid} value={a.uid}>{a.name}</option>)}
+                          </select>
+                        </div>
+                        {/* --- ADDED DURATION TO MANUAL REPLY --- */}
+                        <div className="md:col-span-2">
+                          <select 
+                            className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black transition-all text-sm font-medium text-zinc-700 cursor-pointer"
+                            value={approvalAuditDays}
+                            onChange={(e) => setApprovalAuditDays(parseInt(e.target.value))}
+                          >
+                            {[1,2,3,4,5].map(n => <option key={n} value={n}>{n} Day{n>1?'s':''}</option>)}
+                          </select>
+                        </div>
+                      </>
+                    )}
+                    <div className={cn("relative", isAdminOrHO ? "md:col-span-4" : "md:col-span-9")}>
                       <input 
                         type="text"
-                        placeholder="Type your message or reason..." 
+                        placeholder="Type message..." 
                         className="w-full pl-4 pr-12 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black transition-all text-sm" 
                         value={proposalData.remarks} 
                         onChange={e => setProposalData({...proposalData, remarks: e.target.value})} 
@@ -577,6 +678,7 @@ export function SchedulerModule() {
         )}
       </AnimatePresence>
 
+      {/* --- FORCE SCHEDULE MODAL --- */}
       <AnimatePresence>
         {isCreateModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-6">
@@ -589,27 +691,38 @@ export function SchedulerModule() {
               <form onSubmit={handleCreateSubmit} className="space-y-4">
                 <div>
                   <label className="text-xs font-bold uppercase tracking-wider text-zinc-400">Select Distributor</label>
-                  <select required className="w-full mt-1 px-4 py-3 bg-zinc-50 border-none rounded-xl focus:ring-2 focus:ring-black transition-all" value={createData.distributorId} onChange={e => setCreateData({...createData, distributorId: e.target.value})}>
+                  <select required className="w-full mt-1 px-4 py-3 bg-zinc-50 border-none rounded-xl focus:ring-2 focus:ring-black transition-all cursor-pointer" value={createData.distributorId} onChange={e => setCreateData({...createData, distributorId: e.target.value})}>
                     <option value="">Choose a distributor...</option>
                     {distributors.filter(d => d.active).map(d => (
                       <option key={d.id} value={d.id}>{d.name} ({d.code})</option>
                     ))}
                   </select>
                 </div>
-                <div>
-                  <label className="text-xs font-bold uppercase tracking-wider text-zinc-400">Fixed Date</label>
-                  <input required type="date" min={new Date().toISOString().split('T')[0]} className="w-full mt-1 px-4 py-3 bg-zinc-50 border-none rounded-xl focus:ring-2 focus:ring-black transition-all" value={createData.proposedDate} onChange={e => setCreateData({...createData, proposedDate: e.target.value})} />
+                
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-xs font-bold uppercase tracking-wider text-zinc-400">Start Date</label>
+                    <input required type="date" min={new Date().toISOString().split('T')[0]} className="w-full mt-1 px-4 py-3 bg-zinc-50 border-none rounded-xl focus:ring-2 focus:ring-black transition-all cursor-pointer" value={createData.proposedDate} onChange={e => setCreateData({...createData, proposedDate: e.target.value})} />
+                  </div>
+                  {/* --- ADDED DURATION FIELD TO FORCE SCHEDULE --- */}
+                  <div>
+                    <label className="text-xs font-bold uppercase tracking-wider text-zinc-400">Duration</label>
+                    <select required className="w-full mt-1 px-4 py-3 bg-zinc-50 border-none rounded-xl focus:ring-2 focus:ring-black transition-all cursor-pointer" value={createData.auditDays} onChange={e => setCreateData({...createData, auditDays: parseInt(e.target.value)})}>
+                      {[1,2,3,4,5].map(n => <option key={n} value={n}>{n} Day{n>1?'s':''}</option>)}
+                    </select>
+                  </div>
                 </div>
+
                 <div>
                   <label className="text-xs font-bold uppercase tracking-wider text-zinc-400">Assign Auditor</label>
-                  <select required className="w-full mt-1 px-4 py-3 bg-zinc-50 border-none rounded-xl focus:ring-2 focus:ring-black transition-all" value={createData.auditorId} onChange={e => setCreateData({...createData, auditorId: e.target.value})}>
+                  <select required className="w-full mt-1 px-4 py-3 bg-zinc-50 border-none rounded-xl focus:ring-2 focus:ring-black transition-all cursor-pointer" value={createData.auditorId} onChange={e => setCreateData({...createData, auditorId: e.target.value})}>
                     <option value="">Select Auditor...</option>
                     {auditors.map(a => (
                       <option key={a.uid} value={a.uid}>{a.name}</option>
                     ))}
                   </select>
                 </div>
-                <button type="submit" className="w-full mt-4 py-4 bg-black text-white rounded-2xl font-bold hover:bg-zinc-800 transition-all shadow-xl shadow-black/10">Schedule Audit</button>
+                <button type="submit" className="w-full mt-4 py-4 bg-black text-white rounded-2xl font-bold hover:bg-zinc-800 transition-all shadow-xl shadow-black/10 active:scale-95">Schedule Audit</button>
               </form>
             </motion.div>
           </div>
