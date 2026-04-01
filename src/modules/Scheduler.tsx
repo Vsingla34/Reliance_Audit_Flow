@@ -15,7 +15,8 @@ import {
   Trash2,
   CalendarCheck,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  Clock
 } from 'lucide-react';
 import { cn, useAuth } from '../App';
 import { motion, AnimatePresence } from 'motion/react';
@@ -39,11 +40,10 @@ export function SchedulerModule() {
   const [pendingFilterAse, setPendingFilterAse] = useState<string>('all');
 
   // Forms
-  // --- ADDED auditDays TO STATE ---
   const [createData, setCreateData] = useState({ distributorId: '', proposedDate: '', auditorId: '', auditDays: 1 });
   const [proposalData, setProposalData] = useState({ date: '', remarks: '' });
   const [approvalAuditorId, setApprovalAuditorId] = useState('');
-  const [approvalAuditDays, setApprovalAuditDays] = useState(1); // --- ADDED APPROVAL DAYS ---
+  const [approvalAuditDays, setApprovalAuditDays] = useState(1);
 
   const isAdminOrHO = ['admin', 'ho'].includes(profile?.role || '');
 
@@ -152,13 +152,12 @@ export function SchedulerModule() {
 
       const existingTicket = tickets.find(t => t.distributorId === createData.distributorId && t.status === 'tentative');
 
-      // --- SAVE auditDays TO DATABASE ---
       if (existingTicket) {
         await supabase.from('auditTickets').update({
           proposedDate: createData.proposedDate,
           scheduledDate: createData.proposedDate,
           auditorId: createData.auditorId,
-          auditDays: createData.auditDays, // <--- SAVING DURATION
+          auditDays: createData.auditDays,
           status: 'scheduled',
           updatedAt: new Date().toISOString()
         }).eq('id', existingTicket.id);
@@ -168,7 +167,7 @@ export function SchedulerModule() {
           distributorId: createData.distributorId,
           proposedDate: createData.proposedDate,
           auditorId: createData.auditorId,
-          auditDays: createData.auditDays, // <--- SAVING DURATION
+          auditDays: createData.auditDays,
           approvedValue: dist.approvedValue,
           maxAllowedValue: dist.approvedValue * 1.05,
           status: 'scheduled', 
@@ -238,7 +237,7 @@ export function SchedulerModule() {
         status: 'scheduled',
         scheduledDate: proposalDate, 
         auditorId: approvalAuditorId, 
-        auditDays: approvalAuditDays, // <--- SAVING DURATION ON APPROVAL
+        auditDays: approvalAuditDays, 
         updatedAt: new Date().toISOString()
       }).eq('id', negotiationTicket.id);
 
@@ -583,7 +582,6 @@ export function SchedulerModule() {
                               ))}
                             </select>
 
-                            {/* --- ADDED DURATION TO APPROVAL --- */}
                             <select 
                               className="w-32 text-sm p-2 rounded-xl bg-zinc-50 border border-zinc-200 focus:ring-2 focus:ring-black cursor-pointer"
                               value={approvalAuditDays}
@@ -641,7 +639,6 @@ export function SchedulerModule() {
                             {auditors.map(a => <option key={a.uid} value={a.uid}>{a.name}</option>)}
                           </select>
                         </div>
-                        {/* --- ADDED DURATION TO MANUAL REPLY --- */}
                         <div className="md:col-span-2">
                           <select 
                             className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black transition-all text-sm font-medium text-zinc-700 cursor-pointer"
@@ -704,7 +701,6 @@ export function SchedulerModule() {
                     <label className="text-xs font-bold uppercase tracking-wider text-zinc-400">Start Date</label>
                     <input required type="date" min={new Date().toISOString().split('T')[0]} className="w-full mt-1 px-4 py-3 bg-zinc-50 border-none rounded-xl focus:ring-2 focus:ring-black transition-all cursor-pointer" value={createData.proposedDate} onChange={e => setCreateData({...createData, proposedDate: e.target.value})} />
                   </div>
-                  {/* --- ADDED DURATION FIELD TO FORCE SCHEDULE --- */}
                   <div>
                     <label className="text-xs font-bold uppercase tracking-wider text-zinc-400">Duration</label>
                     <select required className="w-full mt-1 px-4 py-3 bg-zinc-50 border-none rounded-xl focus:ring-2 focus:ring-black transition-all cursor-pointer" value={createData.auditDays} onChange={e => setCreateData({...createData, auditDays: parseInt(e.target.value)})}>
@@ -728,7 +724,6 @@ export function SchedulerModule() {
           </div>
         )}
       </AnimatePresence>
-
     </div>
   );
 }

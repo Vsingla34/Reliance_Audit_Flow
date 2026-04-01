@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { supabase } from '../supabase';
 import { AuditTicket, Distributor, AuditLineItem, SignOff, MediaUpload } from '../types';
-import { ClipboardCheck, Plus, Store, MapPin, CheckCircle2, ArrowLeft, AlertCircle, MessageSquare, PackageSearch, Lock, Camera, Video, Trash2, ChevronRight, Send, Loader2 } from 'lucide-react';
+import { ClipboardCheck, Plus, Store, MapPin, CheckCircle2, ArrowLeft, AlertCircle, MessageSquare, PackageSearch, Lock, Camera, Video, Trash2, ChevronRight, Send, Loader2, RotateCcw } from 'lucide-react';
 import { cn, useAuth } from '../App';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -9,8 +9,7 @@ import { CheckInBlock } from '../components/Execution/CheckInBlock';
 import { AddItemModal } from '../components/Execution/AddItemModal';
 import { ChatModal } from '../components/Execution/ChatModal';
 
-// 👉 CHANGE THIS TO YOUR EXACT SUPABASE BUCKET NAME! 
-const BUCKET_NAME = 'audit-attachments'; 
+const BUCKET_NAME = 'audit-media'; 
 
 interface CombinedDumpItem {
   id: string; itemCode: string; itemName: string; expectedQty: number; rate: number; category: string;
@@ -72,11 +71,8 @@ export function ExecutionModule() {
     try {
       const { data: dump } = await supabase.from('salesDump').select('*').ilike('distributorCode', distCode.trim());
       if (dump && dump.length > 0) {
-        const itemCodes = dump.map(d => d.itemCode);
-        const { data: master } = await supabase.from('itemMaster').select('*').in('itemCode', itemCodes);
         const combined = dump.map(d => {
-          const m = master?.find(x => x.itemCode === d.itemCode);
-          return { id: d.id, itemCode: d.itemCode, itemName: m?.itemName || 'Unknown Item', expectedQty: d.quantity, rate: d.rate, category: m?.category || 'Uncategorized' };
+          return { id: d.id, itemCode: d.itemCode, itemName: d.itemName || 'Unknown Item', expectedQty: d.quantity, rate: d.rate, category: d.category || 'Uncategorized' };
         });
         setAvailableDumpItems(combined);
       } else { setAvailableDumpItems([]); }
@@ -100,6 +96,21 @@ export function ExecutionModule() {
     }
   }, [tickets]);
 
+  const resetAuditTicket = async () => {
+    if (!activeTicket) return;
+    if (!window.confirm("Are you sure you want to completely clear this ticket? It will be removed from Execution and sent back to the Scheduler as a blank request.")) return;
+
+    try {
+      await supabase.from('auditLineItems').delete().eq('ticketId', activeTicket.id);
+      await supabase.from('auditTickets').update({ 
+        status: 'tentative', scheduledDate: null as any, auditorId: null as any, presenceLogs: [], media: [], signOffs: {}, comments: [], dateProposals: [], verifiedTotal: 0, updatedAt: new Date().toISOString()
+      }).eq('id', activeTicket.id);
+      
+      setTickets(prev => prev.filter(t => t.id !== activeTicket.id)); setActiveTicket(null);
+      alert("Ticket cleared successfully! It is now back in the Scheduler page.");
+    } catch (error) { console.error("Error resetting audit ticket:", error); alert("Failed to reset ticket."); }
+  };
+
   const handleEvidenceUpload = async (e: React.ChangeEvent<HTMLInputElement>, type: 'image' | 'video') => {
     const file = e.target.files?.[0];
     if (!file || !activeTicket || !user) return;
@@ -109,7 +120,6 @@ export function ExecutionModule() {
       const fileName = `${activeTicket.id}-evidence-${Date.now()}.${fileExt}`;
       const filePath = `evidence/${fileName}`;
       
-      // Using the central variable here
       const { error: uploadError } = await supabase.storage.from(BUCKET_NAME).upload(filePath, file, { upsert: true });
       if (uploadError) throw new Error(uploadError.message);
       const { data: { publicUrl } } = supabase.storage.from(BUCKET_NAME).getPublicUrl(filePath);
@@ -129,14 +139,15 @@ export function ExecutionModule() {
     } catch (error) { console.error(error); }
   };
 
-  const handleInlineChange = (id: string, field: 'quantity' | 'reasonCode', value: any) => {
+  const handleInlineChange = (id: string, field: 'qtyNonSaleable' | 'qtyBBD' | 'qtyDamaged', value: any) => {
     setItems(prev => prev.map(item => {
       if (item.id === id) {
-        const updatedItem = { ...item, [field]: value };
-        if (field === 'quantity') {
-          updatedItem.totalValue = (parseInt(value) || 0) * updatedItem.unitValue;
-          if (updatedItem.reasonCode === 'Verified / OK') updatedItem.reasonCode = 'Missing / Shortage'; 
-        }
+        const numVal = parseInt(value) || 0;
+        const updatedItem = { ...item, [field]: numVal };
+        
+        updatedItem.quantity = (updatedItem.qtyNonSaleable || 0) + (updatedItem.qtyBBD || 0) + (updatedItem.qtyDamaged || 0);
+        updatedItem.totalValue = updatedItem.quantity * updatedItem.unitValue;
+        
         return updatedItem;
       }
       return item;
@@ -148,7 +159,13 @@ export function ExecutionModule() {
     const newVerifiedTotal = items.reduce((sum, item) => sum + item.totalValue, 0);
     if (newVerifiedTotal > activeTicket.maxAllowedValue) { alert(`Changes reverted. Exceeds max limit.`); fetchItems(activeTicket.id); return; }
     try {
-      await supabase.from('auditLineItems').update({ quantity: itemToSave.quantity, reasonCode: itemToSave.reasonCode, totalValue: itemToSave.totalValue }).eq('id', itemToSave.id);
+      await supabase.from('auditLineItems').update({ 
+        quantity: itemToSave.quantity, 
+        qtyNonSaleable: itemToSave.qtyNonSaleable,
+        qtyBBD: itemToSave.qtyBBD,
+        qtyDamaged: itemToSave.qtyDamaged,
+        totalValue: itemToSave.totalValue 
+      }).eq('id', itemToSave.id);
       await supabase.from('auditTickets').update({ verifiedTotal: newVerifiedTotal, updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
     } catch (error) { console.error(error); }
   };
@@ -178,23 +195,28 @@ export function ExecutionModule() {
     const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
     const isActionableDate = activeTicket.scheduledDate ? (activeTicket.scheduledDate <= todayStr || activeTicket.status === 'in_progress') : false;
 
-    const validLogs = activeTicket.presenceLogs?.filter((l: any) => l.status !== 'rejected') || [];
-    const hasAnyValidCheckIn = validLogs.length > 0;
+    // --- HARD LOCK: Must have an explicitly 'approved' selfie to edit items ---
+    const approvedLogs = activeTicket.presenceLogs?.filter((l: any) => l.status === 'approved') || [];
+    const hasApprovedCheckIn = approvedLogs.length > 0;
 
     const canUploadFiles = (isAuditor || isAdminOrHO) && !isSubmitted;
-    const canEditItems = canUploadFiles && isActionableDate && hasAnyValidCheckIn; 
+    const canEditItems = canUploadFiles && isActionableDate && hasApprovedCheckIn; 
     
     const percentUsed = ((activeTicket.verifiedTotal || 0) / activeTicket.approvedValue) * 100;
     
     return (
       <div className="space-y-6 pb-12">
-        <div className="flex items-center justify-between">
-          <button onClick={() => setActiveTicket(null)} className="flex items-center gap-2 text-sm font-bold text-zinc-500 hover:text-black transition-colors">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <button onClick={() => setActiveTicket(null)} className="flex items-center gap-2 text-sm font-bold text-zinc-500 hover:text-black transition-colors w-fit">
             <ArrowLeft size={16} /> Back to Schedule
           </button>
-          <button onClick={() => setIsChatOpen(true)} className="flex items-center gap-2 px-4 py-2 bg-blue-50 text-blue-600 rounded-xl text-sm font-bold hover:bg-blue-100 transition-all border border-blue-100">
-            <MessageSquare size={16} /> Discussion {activeTicket.comments?.length ? `(${activeTicket.comments.length})` : ''}
-          </button>
+          
+          <div className="flex items-center gap-3">
+            {isAdminOrHO && (
+              <button onClick={resetAuditTicket} className="flex items-center gap-2 px-4 py-2 bg-red-50 text-red-600 rounded-xl text-sm font-bold hover:bg-red-100 transition-all border border-red-100"><RotateCcw size={16} /> Reset to Scheduler</button>
+            )}
+            <button onClick={() => setIsChatOpen(true)} className="flex items-center gap-2 px-4 py-2 bg-blue-50 text-blue-600 rounded-xl text-sm font-bold hover:bg-blue-100 transition-all border border-blue-100"><MessageSquare size={16} /> Discussion {activeTicket.comments?.length ? `(${activeTicket.comments.length})` : ''}</button>
+          </div>
         </div>
 
         {/* HEADER BLOCK */}
@@ -204,16 +226,13 @@ export function ExecutionModule() {
               <div className="w-16 h-16 bg-zinc-100 rounded-2xl flex items-center justify-center shrink-0"><Store className="text-black" size={24} /></div>
               <div>
                 <h3 className="text-2xl font-bold tracking-tight">{dist?.name || 'Unknown Distributor'}</h3>
-                <div className="flex items-center gap-2 mt-1 text-sm text-zinc-500">
-                  <span className="font-mono bg-zinc-100 px-2 py-0.5 rounded text-xs">{dist?.code}</span>
-                  <MapPin size={14} /> {dist?.city || 'No city'}, {dist?.state}
-                </div>
+                <div className="flex items-center gap-2 mt-1 text-sm text-zinc-500"><span className="font-mono bg-zinc-100 px-2 py-0.5 rounded text-xs">{dist?.code}</span><MapPin size={14} /> {dist?.city || 'No city'}, {dist?.state}</div>
               </div>
             </div>
             <div className="flex flex-col items-end gap-2">
               <div className="text-right">
                 <p className="text-xs font-bold uppercase tracking-wider text-zinc-400 mb-1">Total Verified Value</p>
-                <p className="text-3xl font-black text-emerald-600">₹{(activeTicket.verifiedTotal || 0).toLocaleString()}</p>
+                <p className="text-3xl font-black text-emerald-600">₹{(activeTicket.verifiedTotal || 0).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</p>
               </div>
               <div className="w-full max-w-[200px] h-2 bg-zinc-100 rounded-full overflow-hidden">
                 <div className={cn("h-full rounded-full transition-all", percentUsed > 100 ? "bg-red-500" : percentUsed > 90 ? "bg-amber-500" : "bg-emerald-500")} style={{ width: `${Math.min(percentUsed, 100)}%` }} />
@@ -232,82 +251,92 @@ export function ExecutionModule() {
             </div>
           )}
 
-          {/* CHECK-IN COMPONENT (NOW MULTI-DAY) */}
-          {!isSubmitted && (isAuditor || isAdminOrHO) && (
-            <CheckInBlock 
-              activeTicket={activeTicket} 
-              setActiveTicket={setActiveTicket} 
-              user={user} 
-              profile={profile} 
-              isAdminOrHO={isAdminOrHO} 
-              isActionableDate={isActionableDate} 
-            />
+          {/* NEW: Wait for Check-in Approval Warning */}
+          {isActionableDate && canUploadFiles && !hasApprovedCheckIn && (
+            <div className="mb-8 p-5 bg-blue-50 border border-blue-100 rounded-2xl flex items-start gap-4">
+              <Lock className="text-blue-500 shrink-0 mt-0.5" size={24} />
+              <div>
+                <h4 className="font-bold text-blue-900">Awaiting Selfie Approval</h4>
+                <p className="text-sm text-blue-800 mt-1">Your check-in selfie must be <strong>approved by an Admin</strong> before you can begin counting line items.</p>
+              </div>
+            </div>
           )}
 
-          {/* LINE ITEMS */}
+          {!isSubmitted && (isAuditor || isAdminOrHO) && (
+            <CheckInBlock activeTicket={activeTicket} setActiveTicket={setActiveTicket} user={user} profile={profile} isAdminOrHO={isAdminOrHO} isActionableDate={isActionableDate} />
+          )}
+
           <div className="space-y-8">
             <div>
               <div className="flex items-center justify-between gap-4 mb-4">
                 <h4 className="font-bold text-lg flex items-center gap-2"><ClipboardCheck className="text-zinc-400" size={20} /> Audit Line Items</h4>
                 {canEditItems && (
-                  <button onClick={() => setIsAddModalOpen(true)} className="flex items-center gap-2 px-6 py-2.5 bg-black text-white rounded-xl text-sm font-bold hover:bg-zinc-800 transition-all shadow-lg shadow-black/10 active:scale-95">
-                    <Plus size={18} /> Add Item
-                  </button>
+                  <button onClick={() => setIsAddModalOpen(true)} className="flex items-center gap-2 px-6 py-2.5 bg-black text-white rounded-xl text-sm font-bold hover:bg-zinc-800 transition-all shadow-lg shadow-black/10 active:scale-95"><Plus size={18} /> Add Item</button>
                 )}
               </div>
               
               <div className="bg-white border border-zinc-200 rounded-3xl overflow-hidden">
-                <table className="w-full text-sm">
-                  <thead className="bg-zinc-50 border-b border-zinc-200">
-                    <tr>
-                      <th className="px-6 py-4 text-left font-bold text-zinc-500">Article & Desc</th>
-                      <th className="px-6 py-4 text-center font-bold text-zinc-500">System Qty</th>
-                      <th className="px-6 py-4 text-center font-bold text-zinc-500">Physical Qty</th>
-                      <th className="px-6 py-4 text-right font-bold text-zinc-500">Rate</th>
-                      <th className="px-6 py-4 text-right font-bold text-zinc-500">Total</th>
-                      <th className="px-6 py-4 text-center font-bold text-zinc-500">Status</th>
-                      {canEditItems && <th className="px-6 py-4"></th>}
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-zinc-100">
-                    {items.map(item => {
-                      const dumpMatch = availableDumpItems.find(d => d.itemCode === item.articleNumber);
-                      const systemQty = dumpMatch ? dumpMatch.expectedQty : 0;
-                      return (
-                        <tr key={item.id} className="hover:bg-zinc-50/50 transition-colors group">
-                          <td className="px-6 py-4">
-                            <p className="font-bold text-zinc-900">{item.articleNumber}</p>
-                            <p className="text-xs text-zinc-500 truncate max-w-[150px]">{item.description}</p>
-                          </td>
-                          <td className="px-6 py-4 text-center"><span className="font-mono text-zinc-500 bg-zinc-100 px-2 py-1 rounded">{systemQty}</span></td>
-                          <td className="px-6 py-4 text-center">
-                            {canEditItems ? (
-                              <input type="number" min="0" value={item.quantity} onChange={(e) => handleInlineChange(item.id, 'quantity', e.target.value)} onBlur={() => saveInlineEdit(item)} className="w-16 text-center bg-white border text-sm font-bold rounded-lg px-2 py-1.5 focus:ring-2 focus:ring-black outline-none shadow-sm border-zinc-200" />
-                            ) : <span className="font-bold text-zinc-900">{item.quantity}</span>}
-                          </td>
-                          <td className="px-6 py-4 text-right text-zinc-500">₹{item.unitValue}</td>
-                          <td className="px-6 py-4 text-right font-black text-zinc-900">₹{item.totalValue.toLocaleString()}</td>
-                          <td className="px-6 py-4 text-center">
-                            {canEditItems ? (
-                              <select value={item.reasonCode} onChange={(e) => handleInlineChange(item.id, 'reasonCode', e.target.value)} onBlur={() => saveInlineEdit(item)} className="border text-[10px] font-bold uppercase tracking-wider rounded-lg px-2 py-1.5 outline-none shadow-sm cursor-pointer">
-                                {['Verified / OK', 'Missing / Shortage', 'Damage - Transit', 'Surprise Find'].map(code => <option key={code}>{code}</option>)}
-                              </select>
-                            ) : <span className="px-2 py-1 rounded text-[10px] font-bold uppercase">{item.reasonCode}</span>}
-                          </td>
-                          {canEditItems && <td className="px-6 py-4 text-right"><button onClick={() => deleteItem(item)} className="p-2 text-zinc-300 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button></td>}
-                        </tr>
-                      )
-                    })}
-                    {items.length === 0 && (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm min-w-[800px]">
+                    <thead className="bg-zinc-50 border-b border-zinc-200">
                       <tr>
-                        <td colSpan={canEditItems ? 7 : 6} className="px-6 py-12 text-center text-zinc-400">
-                          <PackageSearch size={32} className="mx-auto mb-3 opacity-30" />
-                          <p className="font-bold text-zinc-600">No items counted yet.</p>
-                        </td>
+                        <th className="px-4 py-4 text-left font-bold text-zinc-500">Article & Desc</th>
+                        <th className="px-3 py-4 text-center font-bold text-zinc-500 bg-zinc-100 border-x border-zinc-200">Sys Qty</th>
+                        <th className="px-3 py-4 text-center font-bold text-red-500 bg-red-50 border-r border-red-100">Non-Saleable</th>
+                        <th className="px-3 py-4 text-center font-bold text-amber-500 bg-amber-50 border-r border-amber-100">BBD</th>
+                        <th className="px-3 py-4 text-center font-bold text-purple-500 bg-purple-50 border-r border-purple-100">Damaged</th>
+                        <th className="px-3 py-4 text-center font-black text-zinc-900 bg-zinc-100 border-r border-zinc-200">Total Count</th>
+                        <th className="px-4 py-4 text-right font-bold text-zinc-500">Rate</th>
+                        <th className="px-4 py-4 text-right font-bold text-zinc-500">Total Value</th>
+                        {canEditItems && <th className="px-3 py-4"></th>}
                       </tr>
-                    )}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody className="divide-y divide-zinc-100">
+                      {items.map(item => {
+                        const dumpMatch = availableDumpItems.find(d => d.itemCode === item.articleNumber);
+                        const systemQty = dumpMatch ? dumpMatch.expectedQty : 0;
+                        return (
+                          <tr key={item.id} className="hover:bg-zinc-50/50 transition-colors group">
+                            <td className="px-4 py-4">
+                              <p className="font-bold text-zinc-900">{item.articleNumber}</p>
+                              <p className="text-[10px] text-zinc-500 truncate max-w-[150px]">{item.description}</p>
+                            </td>
+                            <td className="px-3 py-4 text-center bg-zinc-50/50 border-x border-zinc-100"><span className="font-mono text-zinc-500">{systemQty}</span></td>
+                            
+                            <td className="px-3 py-4 text-center bg-red-50/30 border-r border-red-100">
+                              {canEditItems ? <input type="number" min="0" value={item.qtyNonSaleable} onChange={(e) => handleInlineChange(item.id, 'qtyNonSaleable', e.target.value)} onBlur={() => saveInlineEdit(item)} className="w-12 text-center bg-white border text-xs font-bold rounded px-1 py-1 focus:ring-2 focus:ring-red-500 outline-none text-red-700 border-red-200" /> : <span className="font-bold text-red-700">{item.qtyNonSaleable}</span>}
+                            </td>
+                            
+                            <td className="px-3 py-4 text-center bg-amber-50/30 border-r border-amber-100">
+                              {canEditItems ? <input type="number" min="0" value={item.qtyBBD} onChange={(e) => handleInlineChange(item.id, 'qtyBBD', e.target.value)} onBlur={() => saveInlineEdit(item)} className="w-12 text-center bg-white border text-xs font-bold rounded px-1 py-1 focus:ring-2 focus:ring-amber-500 outline-none text-amber-700 border-amber-200" /> : <span className="font-bold text-amber-700">{item.qtyBBD}</span>}
+                            </td>
+                            
+                            <td className="px-3 py-4 text-center bg-purple-50/30 border-r border-purple-100">
+                              {canEditItems ? <input type="number" min="0" value={item.qtyDamaged} onChange={(e) => handleInlineChange(item.id, 'qtyDamaged', e.target.value)} onBlur={() => saveInlineEdit(item)} className="w-12 text-center bg-white border text-xs font-bold rounded px-1 py-1 focus:ring-2 focus:ring-purple-500 outline-none text-purple-700 border-purple-200" /> : <span className="font-bold text-purple-700">{item.qtyDamaged}</span>}
+                            </td>
+                            
+                            <td className="px-3 py-4 text-center bg-zinc-50 border-r border-zinc-100">
+                              <span className={cn("font-black", item.quantity !== systemQty && item.reasonCode !== 'Surprise Find' ? "text-red-600" : "text-zinc-900")}>{item.quantity}</span>
+                            </td>
+
+                            <td className="px-4 py-4 text-right text-zinc-500 text-xs">₹{item.unitValue.toFixed(2)}</td>
+                            <td className="px-4 py-4 text-right font-black text-zinc-900">₹{item.totalValue.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</td>
+                            
+                            {canEditItems && <td className="px-3 py-4 text-right"><button onClick={() => deleteItem(item)} className="p-2 text-zinc-300 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button></td>}
+                          </tr>
+                        )
+                      })}
+                      {items.length === 0 && (
+                        <tr>
+                          <td colSpan={canEditItems ? 9 : 8} className="px-6 py-12 text-center text-zinc-400">
+                            <PackageSearch size={32} className="mx-auto mb-3 opacity-30" />
+                            <p className="font-bold text-zinc-600">No items counted yet.</p>
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
 
@@ -364,20 +393,10 @@ export function ExecutionModule() {
           </div>
         </div>
 
-        {/* --- MODALS --- */}
-        <AddItemModal 
-          isOpen={isAddModalOpen} 
-          onClose={() => setIsAddModalOpen(false)} 
-          activeTicket={activeTicket} 
-          distributor={dist} 
-          availableDumpItems={availableDumpItems} 
-          existingItemCodes={items.map(i => i.articleNumber)} 
-        />
-        
+        <AddItemModal isOpen={isAddModalOpen} onClose={() => setIsAddModalOpen(false)} activeTicket={activeTicket} distributor={dist} availableDumpItems={availableDumpItems} existingItemCodes={items.map(i => i.articleNumber)} />
         <AnimatePresence>
           {isChatOpen && <ChatModal isOpen={isChatOpen} onClose={() => setIsChatOpen(false)} activeTicket={activeTicket} user={user} profile={profile} />}
         </AnimatePresence>
-
       </div>
     );
   }
@@ -393,12 +412,8 @@ export function ExecutionModule() {
           return (
             <motion.div layout key={ticket.id} onClick={() => setActiveTicket(ticket)} className="bg-white p-6 rounded-[2rem] border border-zinc-200 shadow-sm hover:shadow-md hover:border-black transition-all cursor-pointer group flex flex-col">
               <div className="flex justify-between items-start mb-4">
-                <div className="w-12 h-12 bg-zinc-100 rounded-2xl flex items-center justify-center">
-                  <Store className="text-zinc-600" size={20} />
-                </div>
-                <span className={cn("px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider bg-zinc-100 text-zinc-600")}>
-                  {ticket.status.replace('_', ' ')}
-                </span>
+                <div className="w-12 h-12 bg-zinc-100 rounded-2xl flex items-center justify-center"><Store className="text-zinc-600" size={20} /></div>
+                <span className={cn("px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider bg-zinc-100 text-zinc-600")}>{ticket.status.replace('_', ' ')}</span>
               </div>
               <h4 className="text-lg font-bold tracking-tight mb-1">{dist?.name || 'Loading...'}</h4>
               <p className="text-sm text-zinc-500 flex items-center gap-2 mb-6"><MapPin size={14} /> {dist?.city}</p>

@@ -138,6 +138,17 @@ export function CheckInBlock({ activeTicket, setActiveTicket, user, profile, isA
 
   return (
     <div className="space-y-6 mb-8">
+      {/* NEW: Instruction Banner */}
+      <div className="p-4 bg-blue-50 border border-blue-100 rounded-2xl flex items-start gap-3">
+        <AlertCircle className="text-blue-600 shrink-0 mt-0.5" size={20} />
+        <div>
+          <h4 className="font-bold text-blue-900">Check-In Selfie Requirement</h4>
+          <p className="text-sm text-blue-800 mt-1">
+            In Checking selfie there should be all the Auditors, ASE and Distributors.
+          </p>
+        </div>
+      </div>
+
       <input type="file" accept="image/*" capture="environment" className="hidden" ref={checkInFileRef} onChange={handleCheckInUpload} />
       
       {Array.from({ length: auditDays }).map((_, dayIndex) => {
@@ -211,7 +222,7 @@ export function CheckInBlock({ activeTicket, setActiveTicket, user, profile, isA
                 {isAdminOrHO && isPending && !hasError && (
                   <div className="p-4 bg-blue-50 flex flex-col sm:flex-row items-center justify-between gap-4 border-t border-blue-100">
                     <div>
-                      <p className="text-sm text-blue-800 font-medium">Verify Day {dayIndex + 1} Storefront</p>
+                      <p className="text-sm text-blue-800 font-medium">Verify Day {dayIndex + 1} Selfie</p>
                     </div>
                     
                     {rejectingDay === dayIndex ? (
@@ -237,8 +248,8 @@ export function CheckInBlock({ activeTicket, setActiveTicket, user, profile, isA
                       <Camera className="text-zinc-400" size={20} />
                     </div>
                     <div>
-                      <h4 className="font-bold text-zinc-700">Photo Required</h4>
-                      <p className="text-sm text-zinc-500">Upload storefront image for Day {dayIndex + 1}.</p>
+                      <h4 className="font-bold text-zinc-700">Check-In Selfie Required</h4>
+                      <p className="text-sm text-zinc-500">Upload selfie for Day {dayIndex + 1}.</p>
                     </div>
                   </div>
                   {(profile.role === 'auditor' || isAdminOrHO) && (
