@@ -1,10 +1,14 @@
 import React, { useState } from 'react';
 import { supabase } from '../../supabase';
 import { AuditTicket, Distributor } from '../../types';
-import { Box, X, Search, ChevronDown } from 'lucide-react';
+import { Box, X, Search, ChevronDown, Info } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
-interface CombinedDumpItem { id: string; itemCode: string; itemName: string; expectedQty: number; rate: number; category: string; }
+
+interface CombinedDumpItem { 
+  id: string; itemCode: string; itemName: string; expectedQty: number; rate: number; category: string; 
+  billingDate?: string; plant?: string; billingDoc?: string; gst?: number; approxShelfLife?: string; standardPack?: string;
+}
 
 interface AddItemModalProps {
   isOpen: boolean; onClose: () => void; activeTicket: AuditTicket; distributor: Distributor | undefined; availableDumpItems: CombinedDumpItem[]; existingItemCodes: string[];
@@ -84,9 +88,9 @@ export function AddItemModal({ isOpen, onClose, activeTicket, distributor, avail
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={resetAndClose}/>
       <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="relative w-full max-w-lg bg-white rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
-        <div className="p-6 border-b border-zinc-100 flex items-center justify-between shrink-0 bg-white">
+        <div className="p-6 border-b border-zinc-100 flex items-center justify-between shrink-0 bg-white z-10">
           <h3 className="text-xl font-bold flex items-center gap-2"><Box size={20} className="text-blue-600"/> Add Line Item</h3>
-          <button type="button" onClick={resetAndClose} className="p-2 hover:bg-zinc-100 rounded-xl"><X size={20}/></button>
+          <button type="button" onClick={resetAndClose} className="p-2 hover:bg-zinc-100 rounded-xl transition-colors"><X size={20}/></button>
         </div>
 
         {!selectedDumpItem && !isManualMode && (
@@ -110,10 +114,20 @@ export function AddItemModal({ isOpen, onClose, activeTicket, distributor, avail
                     <button key={item.id} onClick={() => setSelectedDumpItem(item)} className="w-full text-left p-4 bg-white border border-zinc-200 rounded-2xl hover:border-black hover:shadow-md transition-all group">
                       <div className="flex justify-between items-start mb-1">
                         <span className="font-bold text-zinc-900 group-hover:text-blue-600 transition-colors">{item.itemCode}</span>
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-500 bg-zinc-100 px-2 py-0.5 rounded">System Qty: {item.expectedQty}</span>
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-500 bg-zinc-100 px-2 py-0.5 rounded">Sys Qty: <span className="text-zinc-900 font-black">{item.expectedQty}</span></span>
                       </div>
-                      <p className="text-sm text-zinc-600 truncate mb-1">{item.itemName}</p>
-                      <p className="text-xs text-zinc-400 font-medium">Rate: ₹{item.rate}</p>
+                      <p className="text-sm text-zinc-600 truncate mb-2">{item.itemName}</p>
+                      
+                      {/* --- NEW: Display Rich Details in Search --- */}
+                      <div className="flex flex-wrap items-center gap-1.5 mt-1 text-[10px] font-medium text-zinc-500">
+                         {item.category && <span className="bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded border border-blue-100">{item.category}</span>}
+                         {item.plant && <span className="bg-zinc-100 px-1.5 py-0.5 rounded">Plant: {item.plant}</span>}
+                         {item.billingDoc && <span className="bg-zinc-100 px-1.5 py-0.5 rounded">Inv: {item.billingDoc}</span>}
+                      </div>
+                      <div className="flex justify-between items-center mt-3 pt-2 border-t border-zinc-100">
+                         <span className="text-[10px] text-zinc-400">Std Pack: {item.standardPack || '-'}</span>
+                         <span className="text-xs text-zinc-600 font-bold">Rate: ₹{item.rate.toFixed(2)}</span>
+                      </div>
                     </button>
                   ))}
                   {searchResults.length > visibleCount && (
@@ -137,14 +151,44 @@ export function AddItemModal({ isOpen, onClose, activeTicket, distributor, avail
         )}
 
         {selectedDumpItem && !isManualMode && (
-          <form onSubmit={handleDumpItemSubmit} className="p-6 space-y-6 overflow-y-auto bg-white">
+          <form onSubmit={handleDumpItemSubmit} className="p-6 space-y-6 overflow-y-auto bg-white custom-scrollbar">
             <div className="flex justify-between items-center mb-2">
               <h4 className="font-bold text-zinc-900">Enter Physical Count</h4>
               <button type="button" onClick={() => setSelectedDumpItem(null)} className="text-xs font-bold text-blue-600 hover:underline">Change Item</button>
             </div>
+            
             <div className="p-4 bg-blue-50 border border-blue-100 rounded-2xl">
               <span className="font-black text-blue-900 block mb-1">{selectedDumpItem.itemCode}</span>
-              <p className="text-sm text-blue-800 mb-3">{selectedDumpItem.itemName}</p>
+              <p className="text-sm text-blue-800 mb-3 leading-snug">{selectedDumpItem.itemName}</p>
+              
+              {/* --- NEW: Extensive Item Details Grid --- */}
+              <div className="grid grid-cols-2 gap-y-2 gap-x-4 mb-4 pb-4 border-b border-blue-200/50 text-[10px] font-medium text-blue-800">
+                <div className="flex justify-between">
+                  <span className="opacity-70 uppercase tracking-wider">Category:</span>
+                  <span className="font-bold text-blue-900 text-right truncate max-w-[80px]">{selectedDumpItem.category}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="opacity-70 uppercase tracking-wider">Plant:</span>
+                  <span className="font-bold text-blue-900">{selectedDumpItem.plant || 'N/A'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="opacity-70 uppercase tracking-wider">Invoice:</span>
+                  <span className="font-bold text-blue-900">{selectedDumpItem.billingDoc || 'N/A'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="opacity-70 uppercase tracking-wider">Std Pack:</span>
+                  <span className="font-bold text-blue-900">{selectedDumpItem.standardPack || 'N/A'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="opacity-70 uppercase tracking-wider">GST:</span>
+                  <span className="font-bold text-blue-900">{selectedDumpItem.gst ? `${selectedDumpItem.gst}%` : 'N/A'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="opacity-70 uppercase tracking-wider">Shelf Life:</span>
+                  <span className="font-bold text-blue-900 text-right truncate max-w-[70px]">{selectedDumpItem.approxShelfLife || 'N/A'}</span>
+                </div>
+              </div>
+
               <div className="flex gap-4 text-xs font-bold text-blue-700/70 uppercase tracking-wider">
                 <span>System Qty: <span className="text-blue-900 bg-blue-100 px-2 py-0.5 rounded">{selectedDumpItem.expectedQty}</span></span>
                 <span>Rate: <span className="text-blue-900">₹{selectedDumpItem.rate.toFixed(2)}</span></span>
@@ -166,7 +210,7 @@ export function AddItemModal({ isOpen, onClose, activeTicket, distributor, avail
               </div>
             </div>
 
-            <div className="bg-zinc-100 p-4 rounded-xl flex justify-between items-center">
+            <div className="bg-zinc-100 p-4 rounded-xl flex justify-between items-center border border-zinc-200">
               <span className="text-sm font-bold text-zinc-500 uppercase tracking-wider">Total Count:</span>
               <span className="text-2xl font-black text-black">{totalQty}</span>
             </div>
@@ -176,20 +220,23 @@ export function AddItemModal({ isOpen, onClose, activeTicket, distributor, avail
         )}
 
         {isManualMode && (
-          <form onSubmit={handleManualItemSubmit} className="p-6 space-y-5 overflow-y-auto bg-white">
+          <form onSubmit={handleManualItemSubmit} className="p-6 space-y-5 overflow-y-auto bg-white custom-scrollbar">
             <div className="flex justify-between items-center mb-2">
               <h4 className="font-bold text-zinc-900">Add Manual Item</h4>
               <button type="button" onClick={() => setIsManualMode(false)} className="text-xs font-bold text-blue-600 hover:underline">Back to Search</button>
             </div>
-            <div className="p-3 bg-blue-50 border border-blue-100 rounded-xl text-xs font-medium text-blue-800 mb-2">This item was not found in the ERP dump. The <strong>System Quantity will be 0</strong>.</div>
+            <div className="p-3 bg-blue-50 border border-blue-100 rounded-xl text-xs font-medium text-blue-800 mb-2 flex gap-2 items-start">
+               <Info size={16} className="shrink-0 mt-0.5" />
+               <p>This item was not found in the ERP dump. The <strong>System Quantity will be 0</strong>.</p>
+            </div>
             
             <div className="space-y-2">
               <label className="text-xs font-bold uppercase tracking-wider text-zinc-400">Article Number / Code *</label>
-              <input required autoFocus className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black outline-none" value={manualItem.articleNumber} onChange={e => setManualItem({...manualItem, articleNumber: e.target.value})} />
+              <input required autoFocus className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black outline-none transition-all" value={manualItem.articleNumber} onChange={e => setManualItem({...manualItem, articleNumber: e.target.value})} />
             </div>
             <div className="space-y-2">
               <label className="text-xs font-bold uppercase tracking-wider text-zinc-400">Description *</label>
-              <input required className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black outline-none" value={manualItem.description} onChange={e => setManualItem({...manualItem, description: e.target.value})} />
+              <input required className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black outline-none transition-all" value={manualItem.description} onChange={e => setManualItem({...manualItem, description: e.target.value})} />
             </div>
             
             <div className="grid grid-cols-3 gap-3">
@@ -210,9 +257,9 @@ export function AddItemModal({ isOpen, onClose, activeTicket, distributor, avail
             <div className="flex items-center gap-4">
               <div className="space-y-2 flex-1">
                 <label className="text-xs font-bold uppercase tracking-wider text-zinc-400">Rate (₹) *</label>
-                <input required type="number" min="0" step="0.01" className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black outline-none font-black" value={manualItem.unitValue} onChange={e => setManualItem({...manualItem, unitValue: e.target.value})} />
+                <input required type="number" min="0" step="0.01" className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black outline-none font-black transition-all" value={manualItem.unitValue} onChange={e => setManualItem({...manualItem, unitValue: e.target.value})} />
               </div>
-              <div className="bg-zinc-100 p-3 rounded-xl flex flex-col justify-center items-center shrink-0 min-w-[100px]">
+              <div className="bg-zinc-100 p-3 rounded-xl flex flex-col justify-center items-center shrink-0 min-w-[100px] border border-zinc-200">
                 <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">Total Qty</span>
                 <span className="text-xl font-black text-black">{totalQty}</span>
               </div>
@@ -221,8 +268,7 @@ export function AddItemModal({ isOpen, onClose, activeTicket, distributor, avail
             <button type="submit" disabled={totalQty === 0} className="w-full mt-2 py-4 bg-black text-white rounded-xl font-bold hover:bg-zinc-800 transition-all shadow-lg active:scale-95 text-lg disabled:opacity-50">Save Manual Item</button>
           </form>
         )}
-
       </motion.div>
     </div>
-  );
+  );6
 }

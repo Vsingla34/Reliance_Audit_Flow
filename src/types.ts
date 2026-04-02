@@ -50,7 +50,10 @@ export interface MediaUpload { id: string; type: 'image' | 'video'; url: string;
 export interface AuditComment { id: string; userId: string; userName: string; userRole: string; message: string; timestamp: string; }
 
 export interface AuditTicket {
-  id: string; distributorId: string; scheduledDate: string | null; proposedDate: string | null; auditorId: string | null; approvedValue: number; maxAllowedValue: number; status: 'tentative' | 'scheduled' | 'in_progress' | 'submitted' | 'signed' | 'evidence_uploaded' | 'closed'; verifiedTotal: number; presenceLogs: PresenceLog[]; signOffs: { auditor?: SignOff; ase?: SignOff; distributor?: SignOff; }; media: MediaUpload[]; dateProposals?: DateProposal[]; comments?: AuditComment[]; createdAt: string; updatedAt: string; auditDays?: number;
+  id: string; distributorId: string; scheduledDate: string | null; proposedDate: string | null; 
+  auditorId: string | null; 
+  auditorIds?: string[]; 
+  approvedValue: number; maxAllowedValue: number; status: 'tentative' | 'scheduled' | 'in_progress' | 'submitted' | 'signed' | 'evidence_uploaded' | 'closed'; verifiedTotal: number; presenceLogs: PresenceLog[]; signOffs: { auditor?: SignOff; ase?: SignOff; distributor?: SignOff; }; media: MediaUpload[]; dateProposals?: DateProposal[]; comments?: AuditComment[]; createdAt: string; updatedAt: string; auditDays?: number;
 }
 
 export interface AuditLineItem {
@@ -59,15 +62,13 @@ export interface AuditLineItem {
   articleNumber: string; 
   description: string;
   category: string;
-  
-  // THE 3 SPECIFIC QUANTITIES
   qtyNonSaleable: number;
   qtyBBD: number;
   qtyDamaged: number;
   quantity: number; 
-  
   unitValue: number;
   totalValue: number;
   reasonCode: string;
   remarks?: string;
+  photoUrl?: string; // NEW: Item-level image
 }

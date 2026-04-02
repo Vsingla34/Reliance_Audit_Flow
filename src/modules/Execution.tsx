@@ -11,8 +11,10 @@ import { ChatModal } from '../components/Execution/ChatModal';
 
 const BUCKET_NAME = 'audit-media'; 
 
-interface CombinedDumpItem {
+// --- EXPANDED INTERFACE TO HOLD NEW DETAILS ---
+export interface CombinedDumpItem {
   id: string; itemCode: string; itemName: string; expectedQty: number; rate: number; category: string;
+  billingDate?: string; plant?: string; billingDoc?: string; gst?: number; approxShelfLife?: string; standardPack?: string;
 }
 
 export function ExecutionModule() {
@@ -44,7 +46,9 @@ export function ExecutionModule() {
       setDistributors(fetchedDistributors);
 
       let tQuery = supabase.from('auditTickets').select('*').in('status', ['scheduled', 'in_progress', 'submitted', 'evidence_uploaded', 'signed']);
-      if (profile.role === 'auditor') tQuery = tQuery.eq('auditorId', profile.uid);
+      if (profile.role === 'auditor') {
+        tQuery = tQuery.or(`auditorId.eq.${profile.uid},auditorIds.cs.{${profile.uid}}`);
+      }
       else if (['ase', 'asm', 'sm', 'dm'].includes(profile.role)) {
         const distIds = fetchedDistributors.map(d => d.id);
         if (distIds.length > 0) tQuery = tQuery.in('distributorId', distIds);
@@ -71,8 +75,12 @@ export function ExecutionModule() {
     try {
       const { data: dump } = await supabase.from('salesDump').select('*').ilike('distributorCode', distCode.trim());
       if (dump && dump.length > 0) {
+        // --- PASS ALL NEW FIELDS DOWN TO THE MODAL ---
         const combined = dump.map(d => {
-          return { id: d.id, itemCode: d.itemCode, itemName: d.itemName || 'Unknown Item', expectedQty: d.quantity, rate: d.rate, category: d.category || 'Uncategorized' };
+          return { 
+            id: d.id, itemCode: d.itemCode, itemName: d.itemName || 'Unknown Item', expectedQty: d.quantity, rate: d.rate, category: d.category || 'Uncategorized',
+            billingDate: d.billingDate, plant: d.plant, billingDoc: d.billingDoc, gst: d.gst, approxShelfLife: d.approxShelfLife, standardPack: d.standardPack
+          };
         });
         setAvailableDumpItems(combined);
       } else { setAvailableDumpItems([]); }
@@ -103,7 +111,7 @@ export function ExecutionModule() {
     try {
       await supabase.from('auditLineItems').delete().eq('ticketId', activeTicket.id);
       await supabase.from('auditTickets').update({ 
-        status: 'tentative', scheduledDate: null as any, auditorId: null as any, presenceLogs: [], media: [], signOffs: {}, comments: [], dateProposals: [], verifiedTotal: 0, updatedAt: new Date().toISOString()
+        status: 'tentative', scheduledDate: null as any, auditorId: null as any, auditorIds: [], presenceLogs: [], media: [], signOffs: {}, comments: [], dateProposals: [], verifiedTotal: 0, updatedAt: new Date().toISOString()
       }).eq('id', activeTicket.id);
       
       setTickets(prev => prev.filter(t => t.id !== activeTicket.id)); setActiveTicket(null);
@@ -195,7 +203,6 @@ export function ExecutionModule() {
     const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
     const isActionableDate = activeTicket.scheduledDate ? (activeTicket.scheduledDate <= todayStr || activeTicket.status === 'in_progress') : false;
 
-    // --- HARD LOCK: Must have an explicitly 'approved' selfie to edit items ---
     const approvedLogs = activeTicket.presenceLogs?.filter((l: any) => l.status === 'approved') || [];
     const hasApprovedCheckIn = approvedLogs.length > 0;
 
@@ -251,7 +258,6 @@ export function ExecutionModule() {
             </div>
           )}
 
-          {/* NEW: Wait for Check-in Approval Warning */}
           {isActionableDate && canUploadFiles && !hasApprovedCheckIn && (
             <div className="mb-8 p-5 bg-blue-50 border border-blue-100 rounded-2xl flex items-start gap-4">
               <Lock className="text-blue-500 shrink-0 mt-0.5" size={24} />
@@ -270,9 +276,13 @@ export function ExecutionModule() {
             <div>
               <div className="flex items-center justify-between gap-4 mb-4">
                 <h4 className="font-bold text-lg flex items-center gap-2"><ClipboardCheck className="text-zinc-400" size={20} /> Audit Line Items</h4>
-                {canEditItems && (
-                  <button onClick={() => setIsAddModalOpen(true)} className="flex items-center gap-2 px-6 py-2.5 bg-black text-white rounded-xl text-sm font-bold hover:bg-zinc-800 transition-all shadow-lg shadow-black/10 active:scale-95"><Plus size={18} /> Add Item</button>
-                )}
+                <button 
+                  onClick={() => setIsAddModalOpen(true)} 
+                  disabled={!canEditItems}
+                  className={cn("flex items-center gap-2 px-6 py-2.5 rounded-xl text-sm font-bold transition-all shadow-lg active:scale-95", canEditItems ? "bg-black text-white hover:bg-zinc-800 shadow-black/10" : "bg-zinc-200 text-zinc-400 cursor-not-allowed")}
+                >
+                  <Plus size={18} /> Add Item
+                </button>
               </div>
               
               <div className="bg-white border border-zinc-200 rounded-3xl overflow-hidden">
@@ -347,10 +357,14 @@ export function ExecutionModule() {
                 {canUploadFiles && (
                   <div className="flex gap-4">
                     <input type="file" accept="image/*" capture="environment" className="hidden" ref={evidenceImageRef} onChange={(e) => handleEvidenceUpload(e, 'image')} />
-                    <button onClick={() => evidenceImageRef.current?.click()} disabled={isUploadingEvidence} className="flex-1 flex flex-col items-center justify-center p-6 bg-zinc-50 border-2 border-dashed border-zinc-200 rounded-3xl hover:border-black transition-all"><Camera className="text-zinc-400 mb-2" size={24} /><span className="text-sm font-bold text-zinc-600">Upload Photos</span></button>
+                    <button onClick={() => evidenceImageRef.current?.click()} disabled={isUploadingEvidence || !canEditItems} className={cn("flex-1 flex flex-col items-center justify-center p-6 border-2 border-dashed rounded-3xl transition-all", canEditItems ? "bg-zinc-50 border-zinc-200 hover:border-black" : "bg-zinc-50/50 border-zinc-100 cursor-not-allowed opacity-50")}>
+                      <Camera className="text-zinc-400 mb-2" size={24} /><span className="text-sm font-bold text-zinc-600">Upload Photos</span>
+                    </button>
                     
                     <input type="file" accept="video/*" capture="environment" className="hidden" ref={evidenceVideoRef} onChange={(e) => handleEvidenceUpload(e, 'video')} />
-                    <button onClick={() => evidenceVideoRef.current?.click()} disabled={isUploadingEvidence} className="flex-1 flex flex-col items-center justify-center p-6 bg-zinc-50 border-2 border-dashed border-zinc-200 rounded-3xl hover:border-black transition-all"><Video className="text-zinc-400 mb-2" size={24} /><span className="text-sm font-bold text-zinc-600">Upload Video</span></button>
+                    <button onClick={() => evidenceVideoRef.current?.click()} disabled={isUploadingEvidence || !canEditItems} className={cn("flex-1 flex flex-col items-center justify-center p-6 border-2 border-dashed rounded-3xl transition-all", canEditItems ? "bg-zinc-50 border-zinc-200 hover:border-black" : "bg-zinc-50/50 border-zinc-100 cursor-not-allowed opacity-50")}>
+                      <Video className="text-zinc-400 mb-2" size={24} /><span className="text-sm font-bold text-zinc-600">Upload Video</span>
+                    </button>
                   </div>
                 )}
                 {/* LARGER EVIDENCE PREVIEW GRID */}

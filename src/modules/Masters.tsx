@@ -1,6 +1,13 @@
 import React, { useRef, useState } from 'react';
 import { supabase } from '../supabase';
-import { Database, Upload, Download, FileSpreadsheet, Trash2, Loader2, CheckCircle2 } from 'lucide-react';
+import { 
+  Database, 
+  Upload, 
+  Download, 
+  FileSpreadsheet, 
+  Trash2, 
+  Loader2,
+} from 'lucide-react';
 import { useAuth } from '../App';
 import { motion } from 'motion/react';
 
@@ -26,7 +33,6 @@ export function MastersModule() {
   };
 
   const downloadSalesTemplate = () => {
-    // UPDATED TEMPLATE WITH MEGA COLUMNS
     const csv = "BillingDate,SoldToParty,MaterialNo,ItemName,Plant,BillingDoc,Category,TotalValue,TotalQty,GST,ApproxShelfLife,StandardPack\n2023-10-01,DIST-001,ITM-001,Premium Shampoo,PLNT1,INV-1001,Personal Care,37575.00,150,18,24 Months,12";
     triggerDownload(csv, "Sales_Dump_Template.csv");
   };
@@ -34,6 +40,15 @@ export function MastersModule() {
   const triggerDownload = (content: string, filename: string) => {
     const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = filename; link.click();
+  };
+
+  // --- SMART HEADER PARSER HELPER ---
+  const getColValue = (headers: string[], rowVals: string[], possibleNames: string[]) => {
+    for (const name of possibleNames) {
+      const idx = headers.findIndex(h => h.toLowerCase() === name.toLowerCase());
+      if (idx !== -1) return rowVals[idx]?.trim() || '';
+    }
+    return '';
   };
 
   const handleItemMasterUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -46,11 +61,31 @@ export function MastersModule() {
       try {
         const text = event.target?.result as string;
         const lines = text.split('\n').filter(line => line.trim() !== '');
+        if (lines.length < 2) throw new Error("File is empty or missing headers");
+
+        const headers = lines[0].split(',').map(h => h.trim().replace(/['"\r]/g, ''));
         
         const items = lines.slice(1).map(line => {
-          const [itemCode, itemName, gst, category, approxShelfLife, standardPack] = line.split(',');
+          const cols = line.split(',');
+          
+          const itemCode = getColValue(headers, cols, ['ItemCode', 'MaterialNo']);
+          const itemName = getColValue(headers, cols, ['ItemName', 'Description']);
+          const gst = getColValue(headers, cols, ['GST']);
+          const category = getColValue(headers, cols, ['Category']);
+          const approxShelfLife = getColValue(headers, cols, ['ApproxShelfLife', 'ShelfLife']);
+          const standardPack = getColValue(headers, cols, ['StandardPack']);
+
           if (!itemCode || !itemName) return null;
-          return { id: Math.random().toString(36).substring(7), itemCode: itemCode.trim(), itemName: itemName.trim(), gst: parseFloat(gst) || 0, category: category?.trim() || 'Uncategorized', approxShelfLife: approxShelfLife?.trim() || 'N/A', standardPack: standardPack?.trim() || 'N/A' };
+          
+          return { 
+            id: Math.random().toString(36).substring(7), 
+            itemCode, 
+            itemName, 
+            gst: parseFloat(gst) || 0, 
+            category: category || 'Uncategorized', 
+            approxShelfLife: approxShelfLife || 'N/A', 
+            standardPack: standardPack || 'N/A' 
+          };
         }).filter(Boolean);
 
         if (items.length === 0) throw new Error("No valid data found in CSV.");
@@ -80,10 +115,18 @@ export function MastersModule() {
       try {
         const text = event.target?.result as string;
         const lines = text.split('\n').filter(line => line.trim() !== '');
+        if (lines.length < 2) throw new Error("File is empty or missing headers");
+
+        const headers = lines[0].split(',').map(h => h.trim().replace(/['"\r]/g, ''));
         
         const dumpItems = lines.slice(1).map(line => {
-          // --- UPDATED PARSER ---
-          const [billingDate, soldToParty, materialNo, itemName, plant, billingDoc, category, totalValueStr, totalQtyStr, gstStr, approxShelfLife, standardPack] = line.split(',');
+          const cols = line.split(',');
+
+          // SMART PARSING: Finds the column regardless of where it is in the CSV
+          const soldToParty = getColValue(headers, cols, ['SoldToParty', 'DistributorCode']);
+          const materialNo = getColValue(headers, cols, ['MaterialNo', 'ItemCode']);
+          const totalQtyStr = getColValue(headers, cols, ['TotalQty', 'Quantity']);
+          const totalValueStr = getColValue(headers, cols, ['TotalValue']);
           
           if (!soldToParty || !materialNo) return null;
           
@@ -93,22 +136,22 @@ export function MastersModule() {
           
           return {
             id: Math.random().toString(36).substring(7),
-            distributorCode: soldToParty.trim(),
-            itemCode: materialNo.trim(),
+            distributorCode: soldToParty,
+            itemCode: materialNo,
             quantity: totalQty,
             rate: rate,
-            billingDate: billingDate?.trim() || '',
-            soldToParty: soldToParty.trim(),
-            materialNo: materialNo.trim(),
-            plant: plant?.trim() || '',
-            billingDoc: billingDoc?.trim() || '',
-            category: category?.trim() || '',
+            billingDate: getColValue(headers, cols, ['BillingDate', 'Date']),
+            soldToParty: soldToParty,
+            materialNo: materialNo,
+            plant: getColValue(headers, cols, ['Plant']),
+            billingDoc: getColValue(headers, cols, ['BillingDoc', 'InvoiceNo']),
+            category: getColValue(headers, cols, ['Category']),
             totalValue: totalValue,
             totalQty: totalQty,
-            itemName: itemName?.trim() || '',
-            gst: parseFloat(gstStr) || 0,
-            approxShelfLife: approxShelfLife?.trim() || '',
-            standardPack: standardPack?.trim() || ''
+            itemName: getColValue(headers, cols, ['ItemName', 'Description']),
+            gst: parseFloat(getColValue(headers, cols, ['GST'])) || 0,
+            approxShelfLife: getColValue(headers, cols, ['ApproxShelfLife', 'ShelfLife']),
+            standardPack: getColValue(headers, cols, ['StandardPack'])
           };
         }).filter(Boolean);
 
