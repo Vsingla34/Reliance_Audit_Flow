@@ -14,25 +14,8 @@ export interface ItemMaster {
 }
 
 export interface SalesDumpItem { 
-  id: string;
-  distributorCode: string; 
-  itemCode: string;        
-  quantity: number;        
-  rate: number;            
-  
-  billingDate?: string;
-  soldToParty?: string;
-  materialNo?: string;
-  plant?: string;
-  billingDoc?: string;
-  category?: string;
-  totalValue?: number;
-  totalQty?: number;
-  
-  itemName?: string;
-  gst?: number;
-  approxShelfLife?: string;
-  standardPack?: string;
+  id: string; distributorCode: string; itemCode: string; quantity: number; rate: number; 
+  billingDate?: string; soldToParty?: string; materialNo?: string; plant?: string; billingDoc?: string; category?: string; totalValue?: number; totalQty?: number; itemName?: string; gst?: number; approxShelfLife?: string; standardPack?: string;
 }
 
 export interface DateProposal {
@@ -51,24 +34,18 @@ export interface AuditComment { id: string; userId: string; userName: string; us
 
 export interface AuditTicket {
   id: string; distributorId: string; scheduledDate: string | null; proposedDate: string | null; 
-  auditorId: string | null; 
-  auditorIds?: string[]; 
-  approvedValue: number; maxAllowedValue: number; status: 'tentative' | 'scheduled' | 'in_progress' | 'submitted' | 'signed' | 'evidence_uploaded' | 'closed'; verifiedTotal: number; presenceLogs: PresenceLog[]; signOffs: { auditor?: SignOff; ase?: SignOff; distributor?: SignOff; }; media: MediaUpload[]; dateProposals?: DateProposal[]; comments?: AuditComment[]; createdAt: string; updatedAt: string; auditDays?: number;
+  auditorId: string | null; auditorIds?: string[]; approvedValue: number; maxAllowedValue: number; 
+  status: 'tentative' | 'scheduled' | 'in_progress' | 'auditor_submitted' | 'submitted' | 'signed' | 'evidence_uploaded' | 'closed'; 
+  verifiedTotal: number; presenceLogs: PresenceLog[]; signOffs: { auditor?: SignOff; ase?: SignOff; distributor?: SignOff; }; media: MediaUpload[]; dateProposals?: DateProposal[]; comments?: AuditComment[]; createdAt: string; updatedAt: string; auditDays?: number;
 }
 
 export interface AuditLineItem {
-  id: string;
-  ticketId: string;
-  articleNumber: string; 
-  description: string;
-  category: string;
-  qtyNonSaleable: number;
-  qtyBBD: number;
-  qtyDamaged: number;
-  quantity: number; 
-  unitValue: number;
-  totalValue: number;
-  reasonCode: string;
-  remarks?: string;
-  photoUrl?: string; // NEW: Item-level image
+  id: string; ticketId: string; articleNumber: string; description: string; category: string; 
+  qtyNonSaleable: number; qtyBBD: number; qtyDamaged: number; quantity: number; unitValue: number; totalValue: number; 
+  reasonCode: string; remarks?: string; photoUrl?: string; 
+  mfgDate?: string; expDate?: string; productLife?: string;
+}
+
+export interface ActivityLog {
+  id: string; userId: string; userName: string; userRole: string; action: string; details?: string; timestamp: string;
 }

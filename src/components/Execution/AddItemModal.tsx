@@ -1,9 +1,8 @@
-import React, { useState } from 'react';
-import { supabase } from '../../supabase';
+import React, { useState, useEffect } from 'react';
+import { supabase, logActivity } from '../../supabase';
 import { AuditTicket, Distributor } from '../../types';
 import { Box, X, Search, ChevronDown, Info } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-
 
 interface CombinedDumpItem { 
   id: string; itemCode: string; itemName: string; expectedQty: number; rate: number; category: string; 
@@ -12,9 +11,10 @@ interface CombinedDumpItem {
 
 interface AddItemModalProps {
   isOpen: boolean; onClose: () => void; activeTicket: AuditTicket; distributor: Distributor | undefined; availableDumpItems: CombinedDumpItem[]; existingItemCodes: string[];
+  user: any; profile: any; // FIX: Added back to prevent the crash!
 }
 
-export function AddItemModal({ isOpen, onClose, activeTicket, distributor, availableDumpItems, existingItemCodes }: AddItemModalProps) {
+export function AddItemModal({ isOpen, onClose, activeTicket, distributor, availableDumpItems, existingItemCodes, user, profile }: AddItemModalProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [visibleCount, setVisibleCount] = useState(50);
   const [selectedDumpItem, setSelectedDumpItem] = useState<CombinedDumpItem | null>(null);
@@ -24,16 +24,32 @@ export function AddItemModal({ isOpen, onClose, activeTicket, distributor, avail
   const [qtyBBD, setQtyBBD] = useState<number | ''>(0);
   const [qtyDamaged, setQtyDamaged] = useState<number | ''>(0);
   
+  const [mfgDate, setMfgDate] = useState('');
+  const [expDate, setExpDate] = useState('');
+  const [productLife, setProductLife] = useState('-');
+  
   const [reasonCode, setReasonCode] = useState('Verified / OK');
   const [manualItem, setManualItem] = useState({ articleNumber: '', description: '', unitValue: '' });
 
   const totalQty = (Number(qtyNonSaleable) || 0) + (Number(qtyBBD) || 0) + (Number(qtyDamaged) || 0);
+
+  useEffect(() => {
+    if (mfgDate && expDate) {
+      const m = new Date(mfgDate);
+      const e = new Date(expDate);
+      if (!isNaN(m.getTime()) && !isNaN(e.getTime())) {
+        const diffDays = Math.ceil((e.getTime() - m.getTime()) / (1000 * 60 * 60 * 24));
+        setProductLife(`${diffDays} Days`);
+      } else { setProductLife('-'); }
+    } else { setProductLife('-'); }
+  }, [mfgDate, expDate]);
 
   const resetAndClose = () => {
     onClose();
     setTimeout(() => {
       setSearchQuery(''); setVisibleCount(50); setSelectedDumpItem(null); setIsManualMode(false);
       setQtyNonSaleable(0); setQtyBBD(0); setQtyDamaged(0);
+      setMfgDate(''); setExpDate(''); setProductLife('-');
       setReasonCode('Verified / OK'); setManualItem({ articleNumber: '', description: '', unitValue: '' });
     }, 200);
   };
@@ -48,16 +64,21 @@ export function AddItemModal({ isOpen, onClose, activeTicket, distributor, avail
     const newVerifiedTotal = (activeTicket.verifiedTotal || 0) + totalValue;
 
     if (newVerifiedTotal > activeTicket.maxAllowedValue) {
-      alert(`Error: This item pushes the total to ₹${newVerifiedTotal.toLocaleString()}, exceeding the approved limit.`);
+      alert(`HARD LIMIT REACHED: This item pushes the total to ₹${newVerifiedTotal.toLocaleString()}, which exceeds the absolute maximum 5% buffer limit of ₹${activeTicket.maxAllowedValue.toLocaleString()}.`);
       return;
     }
 
     try {
+      if (newVerifiedTotal > activeTicket.approvedValue && (activeTicket.verifiedTotal || 0) <= activeTicket.approvedValue) {
+        logActivity(user, profile, "Buffer Zone Triggered", `Audit for ${distributor?.name} exceeded the primary limit of ₹${activeTicket.approvedValue.toLocaleString()} and entered the 5% buffer zone.`);
+      }
+
       const id = Math.random().toString(36).substring(7);
       await supabase.from('auditLineItems').insert([{ 
         id, ticketId: activeTicket.id, articleNumber, description, category, 
         quantity: finalQty, qtyNonSaleable: qNonSaleable, qtyBBD: qBBD, qtyDamaged: qDamaged,
-        unitValue, totalValue, reasonCode: reason 
+        unitValue, totalValue, reasonCode: reason,
+        mfgDate, expDate, productLife
       }]);
       await supabase.from('auditTickets').update({ verifiedTotal: newVerifiedTotal, updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
       resetAndClose();
@@ -118,7 +139,6 @@ export function AddItemModal({ isOpen, onClose, activeTicket, distributor, avail
                       </div>
                       <p className="text-sm text-zinc-600 truncate mb-2">{item.itemName}</p>
                       
-                      {/* --- NEW: Display Rich Details in Search --- */}
                       <div className="flex flex-wrap items-center gap-1.5 mt-1 text-[10px] font-medium text-zinc-500">
                          {item.category && <span className="bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded border border-blue-100">{item.category}</span>}
                          {item.plant && <span className="bg-zinc-100 px-1.5 py-0.5 rounded">Plant: {item.plant}</span>}
@@ -161,32 +181,13 @@ export function AddItemModal({ isOpen, onClose, activeTicket, distributor, avail
               <span className="font-black text-blue-900 block mb-1">{selectedDumpItem.itemCode}</span>
               <p className="text-sm text-blue-800 mb-3 leading-snug">{selectedDumpItem.itemName}</p>
               
-              {/* --- NEW: Extensive Item Details Grid --- */}
               <div className="grid grid-cols-2 gap-y-2 gap-x-4 mb-4 pb-4 border-b border-blue-200/50 text-[10px] font-medium text-blue-800">
-                <div className="flex justify-between">
-                  <span className="opacity-70 uppercase tracking-wider">Category:</span>
-                  <span className="font-bold text-blue-900 text-right truncate max-w-[80px]">{selectedDumpItem.category}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="opacity-70 uppercase tracking-wider">Plant:</span>
-                  <span className="font-bold text-blue-900">{selectedDumpItem.plant || 'N/A'}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="opacity-70 uppercase tracking-wider">Invoice:</span>
-                  <span className="font-bold text-blue-900">{selectedDumpItem.billingDoc || 'N/A'}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="opacity-70 uppercase tracking-wider">Std Pack:</span>
-                  <span className="font-bold text-blue-900">{selectedDumpItem.standardPack || 'N/A'}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="opacity-70 uppercase tracking-wider">GST:</span>
-                  <span className="font-bold text-blue-900">{selectedDumpItem.gst ? `${selectedDumpItem.gst}%` : 'N/A'}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="opacity-70 uppercase tracking-wider">Shelf Life:</span>
-                  <span className="font-bold text-blue-900 text-right truncate max-w-[70px]">{selectedDumpItem.approxShelfLife || 'N/A'}</span>
-                </div>
+                <div className="flex justify-between"><span className="opacity-70 uppercase tracking-wider">Category:</span><span className="font-bold text-blue-900 text-right truncate max-w-[80px]">{selectedDumpItem.category}</span></div>
+                <div className="flex justify-between"><span className="opacity-70 uppercase tracking-wider">Plant:</span><span className="font-bold text-blue-900">{selectedDumpItem.plant || 'N/A'}</span></div>
+                <div className="flex justify-between"><span className="opacity-70 uppercase tracking-wider">Invoice:</span><span className="font-bold text-blue-900">{selectedDumpItem.billingDoc || 'N/A'}</span></div>
+                <div className="flex justify-between"><span className="opacity-70 uppercase tracking-wider">Std Pack:</span><span className="font-bold text-blue-900">{selectedDumpItem.standardPack || 'N/A'}</span></div>
+                <div className="flex justify-between"><span className="opacity-70 uppercase tracking-wider">GST:</span><span className="font-bold text-blue-900">{selectedDumpItem.gst ? `${selectedDumpItem.gst}%` : 'N/A'}</span></div>
+                <div className="flex justify-between"><span className="opacity-70 uppercase tracking-wider">Shelf Life:</span><span className="font-bold text-blue-900 text-right truncate max-w-[70px]">{selectedDumpItem.approxShelfLife || 'N/A'}</span></div>
               </div>
 
               <div className="flex gap-4 text-xs font-bold text-blue-700/70 uppercase tracking-wider">
@@ -194,8 +195,19 @@ export function AddItemModal({ isOpen, onClose, activeTicket, distributor, avail
                 <span>Rate: <span className="text-blue-900">₹{selectedDumpItem.rate.toFixed(2)}</span></span>
               </div>
             </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">Mfg Date</label>
+                <input type="date" className="w-full mt-1 px-3 py-2 text-sm font-bold bg-white border border-zinc-200 text-zinc-900 rounded-xl focus:ring-2 focus:ring-black outline-none" value={mfgDate} onChange={e => setMfgDate(e.target.value)} />
+              </div>
+              <div>
+                <label className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">Exp Date</label>
+                <input type="date" className="w-full mt-1 px-3 py-2 text-sm font-bold bg-white border border-zinc-200 text-zinc-900 rounded-xl focus:ring-2 focus:ring-black outline-none" value={expDate} onChange={e => setExpDate(e.target.value)} />
+              </div>
+            </div>
             
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-3 gap-3 pt-2">
               <div>
                 <label className="text-[10px] font-bold uppercase tracking-wider text-red-500">Non-Saleable</label>
                 <input autoFocus type="number" min="0" className="w-full mt-1 px-3 py-3 text-lg font-black bg-red-50 border border-red-200 text-red-700 rounded-xl focus:ring-2 focus:ring-red-500 outline-none" value={qtyNonSaleable} onChange={e => setQtyNonSaleable(parseInt(e.target.value))} />
@@ -212,7 +224,10 @@ export function AddItemModal({ isOpen, onClose, activeTicket, distributor, avail
 
             <div className="bg-zinc-100 p-4 rounded-xl flex justify-between items-center border border-zinc-200">
               <span className="text-sm font-bold text-zinc-500 uppercase tracking-wider">Total Count:</span>
-              <span className="text-2xl font-black text-black">{totalQty}</span>
+              <div className="text-right">
+                <p className="text-2xl font-black text-black leading-none">{totalQty}</p>
+                <p className="text-[10px] font-bold text-zinc-400 mt-1 uppercase">Life: {productLife}</p>
+              </div>
             </div>
 
             <button type="submit" disabled={totalQty === 0} className="w-full py-4 bg-black text-white rounded-xl font-bold hover:bg-zinc-800 transition-all shadow-lg active:scale-95 text-lg disabled:opacity-50">Save Item</button>
@@ -238,6 +253,17 @@ export function AddItemModal({ isOpen, onClose, activeTicket, distributor, avail
               <label className="text-xs font-bold uppercase tracking-wider text-zinc-400">Description *</label>
               <input required className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black outline-none transition-all" value={manualItem.description} onChange={e => setManualItem({...manualItem, description: e.target.value})} />
             </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">Mfg Date</label>
+                <input type="date" className="w-full mt-1 px-3 py-2 text-sm font-bold bg-white border border-zinc-200 text-zinc-900 rounded-xl focus:ring-2 focus:ring-black outline-none" value={mfgDate} onChange={e => setMfgDate(e.target.value)} />
+              </div>
+              <div>
+                <label className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">Exp Date</label>
+                <input type="date" className="w-full mt-1 px-3 py-2 text-sm font-bold bg-white border border-zinc-200 text-zinc-900 rounded-xl focus:ring-2 focus:ring-black outline-none" value={expDate} onChange={e => setExpDate(e.target.value)} />
+              </div>
+            </div>
             
             <div className="grid grid-cols-3 gap-3">
               <div>
@@ -261,14 +287,16 @@ export function AddItemModal({ isOpen, onClose, activeTicket, distributor, avail
               </div>
               <div className="bg-zinc-100 p-3 rounded-xl flex flex-col justify-center items-center shrink-0 min-w-[100px] border border-zinc-200">
                 <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">Total Qty</span>
-                <span className="text-xl font-black text-black">{totalQty}</span>
+                <span className="text-xl font-black text-black leading-none">{totalQty}</span>
+                <span className="text-[9px] font-bold text-zinc-400 mt-1 uppercase">Life: {productLife}</span>
               </div>
             </div>
 
             <button type="submit" disabled={totalQty === 0} className="w-full mt-2 py-4 bg-black text-white rounded-xl font-bold hover:bg-zinc-800 transition-all shadow-lg active:scale-95 text-lg disabled:opacity-50">Save Manual Item</button>
           </form>
         )}
+
       </motion.div>
     </div>
-  );6
+  );
 }

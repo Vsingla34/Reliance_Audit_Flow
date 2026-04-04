@@ -1,109 +1,82 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { supabase } from '../supabase';
-import { ShieldCheck, Loader2, Lock } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { ShieldAlert, Loader2, CheckCircle2 } from 'lucide-react';
 
-export function ForcePasswordSetup() {
-  const [isOpen, setIsOpen] = useState(false);
+// Notice we added the { user, onComplete } props so it works with App.tsx!
+export function ForcePasswordSetup({ user, onComplete }: { user: any, onComplete: () => void }) {
   const [password, setPassword] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState(false);
 
-  useEffect(() => {
-    // Watch the URL for the secret Supabase invite/recovery tags
-    const hash = window.location.hash;
-    if (hash && (hash.includes('type=invite') || hash.includes('type=recovery'))) {
-      setIsOpen(true);
-    }
-  }, []);
-
-  const handleSetPassword = async (e: React.FormEvent) => {
+  const handleSetup = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (password.length < 6) {
-      alert("Password must be at least 6 characters.");
-      return;
-    }
+    if (password.length < 6) return setError("Password must be at least 6 characters.");
+    
+    setLoading(true); 
+    setError('');
 
-    setIsLoading(true);
     try {
-      // This securely updates the currently logged-in user's password
-      const { error } = await supabase.auth.updateUser({ password });
+      // 1. Save the new password to their Auth account
+      const { error: updateError } = await supabase.auth.updateUser({ password });
+      if (updateError) throw updateError;
+
+      // 2. Turn off the setup flag in the database so they don't see this again
+      const { error: dbError } = await supabase.from('users').update({ password_setup_required: false }).eq('uid', user.id);
+      if (dbError) throw dbError;
+
+      setSuccess(true);
+      setTimeout(() => { onComplete(); }, 1500);
       
-      if (error) throw error;
-      
-      alert("Password secured! You can use this to log in normally next time.");
-      setIsOpen(false);
-      
-      // Clean up the URL so the modal doesn't pop up again if they refresh the page
-      window.history.replaceState(null, '', window.location.pathname);
-      
-    } catch (error: any) {
-      console.error("Error setting password:", error);
-      alert(error.message);
+    } catch (err: any) {
+      setError(err.message || "Failed to update password.");
     } finally {
-      setIsLoading(false);
+      setLoading(false);
     }
   };
 
-  return (
-    <AnimatePresence>
-      {isOpen && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
-          {/* A solid backdrop so they can't click away without setting a password */}
-          <motion.div 
-            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} 
-            className="absolute inset-0 bg-zinc-900/80 backdrop-blur-md" 
-          />
-          
-          <motion.div 
-            initial={{ opacity: 0, scale: 0.9, y: 20 }} 
-            animate={{ opacity: 1, scale: 1, y: 0 }} 
-            exit={{ opacity: 0, scale: 0.9, y: 20 }} 
-            className="relative w-full max-w-md bg-white rounded-[2.5rem] shadow-2xl overflow-hidden p-8"
-          >
-            <div className="w-16 h-16 bg-emerald-50 rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-sm border border-emerald-100">
-              <ShieldCheck className="text-emerald-600" size={28} />
-            </div>
-            
-            <div className="text-center mb-8">
-              <h3 className="text-2xl font-bold tracking-tight mb-2">Secure Your Account</h3>
-              <p className="text-sm text-zinc-500">
-                Welcome to the Audit Portal! Your email has been verified. Please set a permanent password for future logins.
-              </p>
-            </div>
-
-            <form onSubmit={handleSetPassword} className="space-y-6">
-              <div className="space-y-2">
-                <label className="text-xs font-bold uppercase tracking-wider text-zinc-400">New Password</label>
-                <div className="relative">
-                  <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-400" size={18} />
-                  <input 
-                    required 
-                    type="password" 
-                    minLength={6}
-                    className="w-full pl-12 pr-4 py-4 bg-zinc-50 border border-zinc-200 rounded-2xl focus:ring-2 focus:ring-black transition-all font-medium" 
-                    value={password} 
-                    onChange={(e) => setPassword(e.target.value)} 
-                    placeholder="Minimum 6 characters..." 
-                    disabled={isLoading}
-                  />
-                </div>
-              </div>
-
-              <button 
-                type="submit" 
-                disabled={isLoading || password.length < 6} 
-                className="w-full py-4 bg-black text-white rounded-2xl font-bold hover:bg-zinc-800 transition-all shadow-xl shadow-black/10 active:scale-95 text-lg flex items-center justify-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed"
-              >
-                {isLoading ? (
-                  <><Loader2 className="animate-spin" size={20} /> Saving...</>
-                ) : (
-                  'Save Password & Continue'
-                )}
-              </button>
-            </form>
-          </motion.div>
+  if (success) {
+    return (
+      <div className="min-h-screen bg-zinc-50 flex items-center justify-center p-4">
+        <div className="max-w-md w-full bg-white p-8 rounded-[2.5rem] shadow-2xl text-center border border-zinc-100">
+          <div className="w-20 h-20 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-6 shadow-inner">
+            <CheckCircle2 size={40} />
+          </div>
+          <h2 className="text-2xl font-bold mb-2 tracking-tight">Password Updated!</h2>
+          <p className="text-zinc-500 font-medium">Redirecting to your dashboard...</p>
         </div>
-      )}
-    </AnimatePresence>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-zinc-50 flex items-center justify-center p-4">
+      <div className="max-w-md w-full bg-white p-8 rounded-[2.5rem] shadow-2xl border border-zinc-100">
+        <div className="w-16 h-16 bg-blue-600 rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-lg">
+          <ShieldAlert className="text-white" size={32} />
+        </div>
+        <h2 className="text-2xl font-bold text-center mb-2 tracking-tight">Set Your Password</h2>
+        <p className="text-center text-zinc-500 mb-8 text-sm">Welcome! Please set a secure personal password to activate your account.</p>
+        
+        {error && <div className="mb-6 p-4 bg-red-50 text-red-600 text-sm font-bold rounded-xl text-center border border-red-100">{error}</div>}
+        
+        <form onSubmit={handleSetup}>
+          <div className="mb-8">
+            <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 ml-1">New Password</label>
+            <input 
+              type="password" 
+              required 
+              placeholder="••••••••"
+              className="w-full mt-1 px-4 py-4 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black outline-none transition-all text-lg font-black tracking-widest" 
+              value={password} 
+              onChange={(e) => setPassword(e.target.value)} 
+            />
+          </div>
+          <button type="submit" disabled={loading} className="w-full py-4 bg-black text-white rounded-xl font-bold hover:bg-zinc-800 transition-all active:scale-95 shadow-xl shadow-black/10 flex justify-center items-center">
+            {loading ? <Loader2 className="animate-spin" size={20} /> : 'Save Password & Enter Portal'}
+          </button>
+        </form>
+      </div>
+    </div>
   );
 }

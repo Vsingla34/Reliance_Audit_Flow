@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { supabase } from '../supabase';
+import { supabase, logActivity } from '../supabase';
 import { AuditTicket, Distributor, AuditLineItem, SignOff, MediaUpload } from '../types';
 import { ClipboardCheck, Plus, Store, MapPin, CheckCircle2, ArrowLeft, AlertCircle, MessageSquare, PackageSearch, Lock, Camera, Video, Trash2, ChevronRight, Send, Loader2, RotateCcw } from 'lucide-react';
 import { cn, useAuth } from '../App';
@@ -11,7 +11,6 @@ import { ChatModal } from '../components/Execution/ChatModal';
 
 const BUCKET_NAME = 'audit-media'; 
 
-// --- EXPANDED INTERFACE TO HOLD NEW DETAILS ---
 export interface CombinedDumpItem {
   id: string; itemCode: string; itemName: string; expectedQty: number; rate: number; category: string;
   billingDate?: string; plant?: string; billingDoc?: string; gst?: number; approxShelfLife?: string; standardPack?: string;
@@ -45,7 +44,7 @@ export function ExecutionModule() {
       const fetchedDistributors = (dData || []) as Distributor[];
       setDistributors(fetchedDistributors);
 
-      let tQuery = supabase.from('auditTickets').select('*').in('status', ['scheduled', 'in_progress', 'submitted', 'evidence_uploaded', 'signed']);
+      let tQuery = supabase.from('auditTickets').select('*').in('status', ['scheduled', 'in_progress', 'auditor_submitted', 'submitted', 'evidence_uploaded', 'signed']);
       if (profile.role === 'auditor') {
         tQuery = tQuery.or(`auditorId.eq.${profile.uid},auditorIds.cs.{${profile.uid}}`);
       }
@@ -75,7 +74,6 @@ export function ExecutionModule() {
     try {
       const { data: dump } = await supabase.from('salesDump').select('*').ilike('distributorCode', distCode.trim());
       if (dump && dump.length > 0) {
-        // --- PASS ALL NEW FIELDS DOWN TO THE MODAL ---
         const combined = dump.map(d => {
           return { 
             id: d.id, itemCode: d.itemCode, itemName: d.itemName || 'Unknown Item', expectedQty: d.quantity, rate: d.rate, category: d.category || 'Uncategorized',
@@ -147,14 +145,26 @@ export function ExecutionModule() {
     } catch (error) { console.error(error); }
   };
 
-  const handleInlineChange = (id: string, field: 'qtyNonSaleable' | 'qtyBBD' | 'qtyDamaged', value: any) => {
+  const handleInlineChange = (id: string, field: 'qtyNonSaleable' | 'qtyBBD' | 'qtyDamaged' | 'mfgDate' | 'expDate', value: any) => {
     setItems(prev => prev.map(item => {
       if (item.id === id) {
-        const numVal = parseInt(value) || 0;
-        const updatedItem = { ...item, [field]: numVal };
+        const updatedItem = { ...item, [field]: value };
         
-        updatedItem.quantity = (updatedItem.qtyNonSaleable || 0) + (updatedItem.qtyBBD || 0) + (updatedItem.qtyDamaged || 0);
-        updatedItem.totalValue = updatedItem.quantity * updatedItem.unitValue;
+        if (['qtyNonSaleable', 'qtyBBD', 'qtyDamaged'].includes(field)) {
+           updatedItem.quantity = (Number(updatedItem.qtyNonSaleable) || 0) + (Number(updatedItem.qtyBBD) || 0) + (Number(updatedItem.qtyDamaged) || 0);
+           updatedItem.totalValue = updatedItem.quantity * updatedItem.unitValue;
+        }
+
+        if (field === 'mfgDate' || field === 'expDate') {
+           if (updatedItem.mfgDate && updatedItem.expDate) {
+             const m = new Date(updatedItem.mfgDate);
+             const e = new Date(updatedItem.expDate);
+             if (!isNaN(m.getTime()) && !isNaN(e.getTime())) {
+               const diffDays = Math.ceil((e.getTime() - m.getTime()) / (1000 * 60 * 60 * 24));
+               updatedItem.productLife = `${diffDays} Days`;
+             } else { updatedItem.productLife = '-'; }
+           } else { updatedItem.productLife = '-'; }
+        }
         
         return updatedItem;
       }
@@ -165,23 +175,45 @@ export function ExecutionModule() {
   const saveInlineEdit = async (itemToSave: AuditLineItem) => {
     if (!activeTicket) return;
     const newVerifiedTotal = items.reduce((sum, item) => sum + item.totalValue, 0);
-    if (newVerifiedTotal > activeTicket.maxAllowedValue) { alert(`Changes reverted. Exceeds max limit.`); fetchItems(activeTicket.id); return; }
+    
+    // --- NEW: 5% HARD LIMIT CHECK FOR INLINE EDITS ---
+    if (newVerifiedTotal > activeTicket.maxAllowedValue) { 
+      alert(`Changes reverted. This update exceeds the absolute 5% maximum limit (₹${activeTicket.maxAllowedValue.toLocaleString()}).`); 
+      fetchItems(activeTicket.id); 
+      return; 
+    }
+
     try {
+      // --- NEW: LOG CREATION ON BUFFER ENTRY ---
+      if (newVerifiedTotal > activeTicket.approvedValue && (activeTicket.verifiedTotal || 0) <= activeTicket.approvedValue) {
+        const dist = distributors.find(d => d.id === activeTicket.distributorId);
+        logActivity(user, profile, "Buffer Zone Triggered", `Audit for ${dist?.name} exceeded the primary limit of ₹${activeTicket.approvedValue.toLocaleString()} and entered the 5% buffer zone.`);
+      }
+
       await supabase.from('auditLineItems').update({ 
         quantity: itemToSave.quantity, 
         qtyNonSaleable: itemToSave.qtyNonSaleable,
         qtyBBD: itemToSave.qtyBBD,
         qtyDamaged: itemToSave.qtyDamaged,
-        totalValue: itemToSave.totalValue 
+        totalValue: itemToSave.totalValue,
+        mfgDate: itemToSave.mfgDate,
+        expDate: itemToSave.expDate,
+        productLife: itemToSave.productLife
       }).eq('id', itemToSave.id);
       await supabase.from('auditTickets').update({ verifiedTotal: newVerifiedTotal, updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
     } catch (error) { console.error(error); }
   };
 
-  const submitForReview = async () => {
+  const submitByAuditor = async () => {
+    if (!activeTicket) return;
+    await supabase.from('auditTickets').update({ status: 'auditor_submitted', updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
+    setActiveTicket(null); alert("Audit successfully forwarded to ASE for review!");
+  };
+
+  const submitByASE = async () => {
     if (!activeTicket) return;
     await supabase.from('auditTickets').update({ status: 'submitted', updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
-    setActiveTicket(null); alert("Audit submitted successfully!");
+    setActiveTicket(null); alert("Audit verified and officially submitted!");
   };
 
   const signOff = async (roleRequired: 'auditor' | 'ase' | 'distributor') => {
@@ -197,6 +229,7 @@ export function ExecutionModule() {
     const dist = distributors.find(d => d.id === activeTicket.distributorId);
     const isAdminOrHO = ['admin', 'ho'].includes(profile?.role || '');
     const isAuditor = profile?.role === 'auditor';
+    const isASE = profile?.role === 'ase';
     const isSubmitted = ['submitted', 'signed', 'evidence_uploaded', 'closed'].includes(activeTicket.status);
     
     const today = new Date();
@@ -206,14 +239,18 @@ export function ExecutionModule() {
     const approvedLogs = activeTicket.presenceLogs?.filter((l: any) => l.status === 'approved') || [];
     const hasApprovedCheckIn = approvedLogs.length > 0;
 
-    const canUploadFiles = (isAuditor || isAdminOrHO) && !isSubmitted;
-    const canEditItems = canUploadFiles && isActionableDate && hasApprovedCheckIn; 
-    
+    const canUploadFiles = (isAuditor || isAdminOrHO) && (!isSubmitted && activeTicket.status !== 'auditor_submitted');
+    const canEditItems = canUploadFiles && isActionableDate && hasApprovedCheckIn && activeTicket.status === 'in_progress'; 
     const percentUsed = ((activeTicket.verifiedTotal || 0) / activeTicket.approvedValue) * 100;
     
+    // --- NEW: UI Logic for limits ---
+    const isOverBudget = (activeTicket.verifiedTotal || 0) > activeTicket.approvedValue;
+    const isMaxedOut = (activeTicket.verifiedTotal || 0) >= activeTicket.maxAllowedValue;
+    
     return (
-      <div className="space-y-6 pb-12">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div className="space-y-6 pb-12 w-full min-w-0">
+
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 w-full">
           <button onClick={() => setActiveTicket(null)} className="flex items-center gap-2 text-sm font-bold text-zinc-500 hover:text-black transition-colors w-fit">
             <ArrowLeft size={16} /> Back to Schedule
           </button>
@@ -227,8 +264,8 @@ export function ExecutionModule() {
         </div>
 
         {/* HEADER BLOCK */}
-        <div className="bg-white rounded-[2.5rem] p-8 border border-zinc-200 shadow-sm">
-          <div className="flex flex-col md:flex-row md:items-start justify-between gap-6 mb-8">
+        <div className="bg-white rounded-[2.5rem] p-8 border border-zinc-200 shadow-sm w-full">
+          <div className="flex flex-col md:flex-row md:items-start justify-between gap-6 mb-8 w-full">
             <div className="flex items-center gap-4">
               <div className="w-16 h-16 bg-zinc-100 rounded-2xl flex items-center justify-center shrink-0"><Store className="text-black" size={24} /></div>
               <div>
@@ -236,12 +273,12 @@ export function ExecutionModule() {
                 <div className="flex items-center gap-2 mt-1 text-sm text-zinc-500"><span className="font-mono bg-zinc-100 px-2 py-0.5 rounded text-xs">{dist?.code}</span><MapPin size={14} /> {dist?.city || 'No city'}, {dist?.state}</div>
               </div>
             </div>
-            <div className="flex flex-col items-end gap-2">
-              <div className="text-right">
+            <div className="flex flex-col items-start md:items-end gap-2 w-full md:w-auto">
+              <div className="text-left md:text-right w-full">
                 <p className="text-xs font-bold uppercase tracking-wider text-zinc-400 mb-1">Total Verified Value</p>
                 <p className="text-3xl font-black text-emerald-600">₹{(activeTicket.verifiedTotal || 0).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</p>
               </div>
-              <div className="w-full max-w-[200px] h-2 bg-zinc-100 rounded-full overflow-hidden">
+              <div className="w-full max-w-full md:max-w-[200px] h-2 bg-zinc-100 rounded-full overflow-hidden">
                 <div className={cn("h-full rounded-full transition-all", percentUsed > 100 ? "bg-red-500" : percentUsed > 90 ? "bg-amber-500" : "bg-emerald-500")} style={{ width: `${Math.min(percentUsed, 100)}%` }} />
               </div>
               <p className="text-xs text-zinc-400">of ₹{activeTicket.approvedValue.toLocaleString()} limit</p>
@@ -268,26 +305,59 @@ export function ExecutionModule() {
             </div>
           )}
 
-          {!isSubmitted && (isAuditor || isAdminOrHO) && (
+          {/* --- NEW: BUDGET BANNERS --- */}
+          {isOverBudget && !isMaxedOut && (
+            <div className="mb-8 p-5 bg-amber-50 border border-amber-100 rounded-2xl flex items-start gap-4">
+              <AlertCircle className="text-amber-500 shrink-0 mt-0.5" size={24} />
+              <div>
+                <h4 className="font-bold text-amber-900">Budget Warning</h4>
+                <p className="text-sm text-amber-800 mt-1">The verified total has exceeded the approved limit of <strong>₹{activeTicket.approvedValue.toLocaleString()}</strong>. You are currently utilizing the 5% emergency buffer.</p>
+              </div>
+            </div>
+          )}
+
+          {isMaxedOut && (
+            <div className="mb-8 p-5 bg-red-50 border border-red-100 rounded-2xl flex items-start gap-4">
+              <Lock className="text-red-500 shrink-0 mt-0.5" size={24} />
+              <div>
+                <h4 className="font-bold text-red-900">Maximum Limit Reached</h4>
+                <p className="text-sm text-red-800 mt-1">The verified total has reached the hard limit of <strong>₹{activeTicket.maxAllowedValue.toLocaleString()}</strong> (Approved + 5%). You cannot add any more items to this audit.</p>
+              </div>
+            </div>
+          )}
+
+          {activeTicket.status === 'auditor_submitted' && (
+            <div className="mb-8 p-5 bg-blue-50 border border-blue-100 rounded-2xl flex items-start gap-4">
+              <AlertCircle className="text-blue-600 shrink-0 mt-0.5" size={24} />
+              <div>
+                <h4 className="font-bold text-blue-900">Awaiting ASE Review</h4>
+                <p className="text-sm text-blue-800 mt-1">The Auditor has completed their count. This audit is currently locked waiting for the ASE to review and submit.</p>
+              </div>
+            </div>
+          )}
+
+          {!isSubmitted && activeTicket.status !== 'auditor_submitted' && (isAuditor || isAdminOrHO) && (
             <CheckInBlock activeTicket={activeTicket} setActiveTicket={setActiveTicket} user={user} profile={profile} isAdminOrHO={isAdminOrHO} isActionableDate={isActionableDate} />
           )}
 
-          <div className="space-y-8">
-            <div>
-              <div className="flex items-center justify-between gap-4 mb-4">
+          <div className="space-y-8 w-full min-w-0">
+            <div className="w-full min-w-0">
+              <div className="flex items-center justify-between gap-4 mb-4 w-full">
                 <h4 className="font-bold text-lg flex items-center gap-2"><ClipboardCheck className="text-zinc-400" size={20} /> Audit Line Items</h4>
+                
+                {/* --- NEW: DISABLE ADD BUTTON IF MAXED OUT --- */}
                 <button 
                   onClick={() => setIsAddModalOpen(true)} 
-                  disabled={!canEditItems}
-                  className={cn("flex items-center gap-2 px-6 py-2.5 rounded-xl text-sm font-bold transition-all shadow-lg active:scale-95", canEditItems ? "bg-black text-white hover:bg-zinc-800 shadow-black/10" : "bg-zinc-200 text-zinc-400 cursor-not-allowed")}
+                  disabled={!canEditItems || isMaxedOut}
+                  className={cn("flex items-center gap-2 px-6 py-2.5 rounded-xl text-sm font-bold transition-all shadow-lg active:scale-95 whitespace-nowrap", (canEditItems && !isMaxedOut) ? "bg-black text-white hover:bg-zinc-800 shadow-black/10" : "bg-zinc-200 text-zinc-400 cursor-not-allowed")}
                 >
                   <Plus size={18} /> Add Item
                 </button>
               </div>
               
-              <div className="bg-white border border-zinc-200 rounded-3xl overflow-hidden">
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm min-w-[800px]">
+              <div className="bg-white border border-zinc-200 rounded-3xl overflow-hidden shadow-sm w-full">
+                <div className="w-full overflow-x-auto custom-scrollbar">
+                  <table className="w-full text-sm min-w-[1000px]">
                     <thead className="bg-zinc-50 border-b border-zinc-200">
                       <tr>
                         <th className="px-4 py-4 text-left font-bold text-zinc-500">Article & Desc</th>
@@ -296,6 +366,11 @@ export function ExecutionModule() {
                         <th className="px-3 py-4 text-center font-bold text-amber-500 bg-amber-50 border-r border-amber-100">BBD</th>
                         <th className="px-3 py-4 text-center font-bold text-purple-500 bg-purple-50 border-r border-purple-100">Damaged</th>
                         <th className="px-3 py-4 text-center font-black text-zinc-900 bg-zinc-100 border-r border-zinc-200">Total Count</th>
+                        
+                        <th className="px-3 py-4 text-center font-bold text-blue-600 bg-blue-50 border-r border-blue-100">Mfg Date</th>
+                        <th className="px-3 py-4 text-center font-bold text-blue-600 bg-blue-50 border-r border-blue-100">Exp Date</th>
+                        <th className="px-3 py-4 text-center font-bold text-blue-600 bg-blue-50 border-r border-blue-100">Life</th>
+                        
                         <th className="px-4 py-4 text-right font-bold text-zinc-500">Rate</th>
                         <th className="px-4 py-4 text-right font-bold text-zinc-500">Total Value</th>
                         {canEditItems && <th className="px-3 py-4"></th>}
@@ -329,16 +404,27 @@ export function ExecutionModule() {
                               <span className={cn("font-black", item.quantity !== systemQty && item.reasonCode !== 'Surprise Find' ? "text-red-600" : "text-zinc-900")}>{item.quantity}</span>
                             </td>
 
+                            <td className="px-3 py-4 text-center bg-blue-50/30 border-r border-blue-100">
+                              {canEditItems ? <input type="date" value={item.mfgDate || ''} onChange={(e) => handleInlineChange(item.id, 'mfgDate', e.target.value)} onBlur={() => saveInlineEdit(item)} className="w-[110px] text-center bg-white border text-[10px] font-bold rounded px-1 py-1 focus:ring-2 focus:ring-blue-500 outline-none text-blue-700 border-blue-200" /> : <span className="font-bold text-blue-700 text-[10px]">{item.mfgDate || '-'}</span>}
+                            </td>
+                            <td className="px-3 py-4 text-center bg-blue-50/30 border-r border-blue-100">
+                              {canEditItems ? <input type="date" value={item.expDate || ''} onChange={(e) => handleInlineChange(item.id, 'expDate', e.target.value)} onBlur={() => saveInlineEdit(item)} className="w-[110px] text-center bg-white border text-[10px] font-bold rounded px-1 py-1 focus:ring-2 focus:ring-blue-500 outline-none text-blue-700 border-blue-200" /> : <span className="font-bold text-blue-700 text-[10px]">{item.expDate || '-'}</span>}
+                            </td>
+                            
+                            <td className="px-3 py-4 text-center bg-blue-50/30 border-r border-blue-100">
+                              <span className="font-bold text-blue-900 text-xs whitespace-nowrap">{item.productLife || '-'}</span>
+                            </td>
+
                             <td className="px-4 py-4 text-right text-zinc-500 text-xs">₹{item.unitValue.toFixed(2)}</td>
                             <td className="px-4 py-4 text-right font-black text-zinc-900">₹{item.totalValue.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</td>
-                            
+
                             {canEditItems && <td className="px-3 py-4 text-right"><button onClick={() => deleteItem(item)} className="p-2 text-zinc-300 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button></td>}
                           </tr>
                         )
                       })}
                       {items.length === 0 && (
                         <tr>
-                          <td colSpan={canEditItems ? 9 : 8} className="px-6 py-12 text-center text-zinc-400">
+                          <td colSpan={canEditItems ? 12 : 11} className="px-6 py-12 text-center text-zinc-400">
                             <PackageSearch size={32} className="mx-auto mb-3 opacity-30" />
                             <p className="font-bold text-zinc-600">No items counted yet.</p>
                           </td>
@@ -351,7 +437,7 @@ export function ExecutionModule() {
             </div>
 
             {/* EVIDENCE & SIGN-OFFS COMPONENT */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-4 border-t border-zinc-100">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-4 border-t border-zinc-100 w-full">
               <div className="space-y-4">
                 <h4 className="font-bold text-lg flex items-center justify-between">Media Evidence {isUploadingEvidence && <Loader2 className="animate-spin text-zinc-400" size={16} />}</h4>
                 {canUploadFiles && (
@@ -400,14 +486,29 @@ export function ExecutionModule() {
             </div>
 
             {(isAuditor || isAdminOrHO) && activeTicket.status === 'in_progress' && items.length > 0 && (
-              <div className="pt-8 flex justify-end border-t border-zinc-100">
-                <button onClick={submitForReview} className="flex items-center gap-2 px-8 py-4 bg-black text-white rounded-2xl font-bold hover:bg-zinc-800 transition-all shadow-xl shadow-black/10 active:scale-95"><Send size={18} /> Submit Audit</button>
+              <div className="pt-8 flex justify-end border-t border-zinc-100 w-full">
+                <button onClick={submitByAuditor} className="flex items-center gap-2 px-8 py-4 bg-black text-white rounded-2xl font-bold hover:bg-zinc-800 transition-all shadow-xl shadow-black/10 active:scale-95"><Send size={18} /> Submit Audit to ASE</button>
+              </div>
+            )}
+
+            {(isASE || isAdminOrHO) && activeTicket.status === 'auditor_submitted' && (
+              <div className="pt-8 flex justify-end border-t border-zinc-100 w-full">
+                <button onClick={submitByASE} className="flex items-center gap-2 px-8 py-4 bg-emerald-600 text-white rounded-2xl font-bold hover:bg-emerald-700 transition-all shadow-xl shadow-emerald-600/20 active:scale-95"><CheckCircle2 size={18} /> Verify & Officially Submit</button>
               </div>
             )}
           </div>
         </div>
 
-        <AddItemModal isOpen={isAddModalOpen} onClose={() => setIsAddModalOpen(false)} activeTicket={activeTicket} distributor={dist} availableDumpItems={availableDumpItems} existingItemCodes={items.map(i => i.articleNumber)} />
+        <AddItemModal 
+          isOpen={isAddModalOpen} 
+          onClose={() => setIsAddModalOpen(false)} 
+          activeTicket={activeTicket} 
+          distributor={dist} 
+          availableDumpItems={availableDumpItems} 
+          existingItemCodes={items.map(i => i.articleNumber)} 
+          user={user}
+          profile={profile}
+        />
         <AnimatePresence>
           {isChatOpen && <ChatModal isOpen={isChatOpen} onClose={() => setIsChatOpen(false)} activeTicket={activeTicket} user={user} profile={profile} />}
         </AnimatePresence>
@@ -415,16 +516,16 @@ export function ExecutionModule() {
     );
   }
 
-  const activeStatuses = ['scheduled', 'in_progress', 'submitted', 'signed'];
+  const activeStatuses = ['scheduled', 'in_progress', 'auditor_submitted', 'submitted', 'signed'];
   const relevantTickets = tickets.filter(t => activeStatuses.includes(t.status));
 
   return (
-    <div className="space-y-8 pb-12">
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+    <div className="space-y-8 pb-12 w-full min-w-0">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 w-full">
         {relevantTickets.map(ticket => {
           const dist = distributors.find(d => d.id === ticket.distributorId);
           return (
-            <motion.div layout key={ticket.id} onClick={() => setActiveTicket(ticket)} className="bg-white p-6 rounded-[2rem] border border-zinc-200 shadow-sm hover:shadow-md hover:border-black transition-all cursor-pointer group flex flex-col">
+            <motion.div layout key={ticket.id} onClick={() => setActiveTicket(ticket)} className="bg-white p-6 rounded-[2rem] border border-zinc-200 shadow-sm hover:shadow-md hover:border-black transition-all cursor-pointer group flex flex-col w-full">
               <div className="flex justify-between items-start mb-4">
                 <div className="w-12 h-12 bg-zinc-100 rounded-2xl flex items-center justify-center"><Store className="text-zinc-600" size={20} /></div>
                 <span className={cn("px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider bg-zinc-100 text-zinc-600")}>{ticket.status.replace('_', ' ')}</span>

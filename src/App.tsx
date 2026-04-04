@@ -1,8 +1,8 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { supabase, logActivity } from './supabase'; // Added logActivity
+import { supabase, logActivity } from './supabase';
 import { User } from '@supabase/supabase-js';
 import { UserProfile, ActivityLog } from './types';
-import { LayoutDashboard, Users, Store, CalendarClock, PlaySquare, FileBarChart, Settings, LogOut, Menu, X, Database, Bell, Trash2, ShieldAlert } from 'lucide-react';
+import { LayoutDashboard, Users, Store, CalendarClock, PlaySquare, FileBarChart, LogOut, Menu, X, Database, Bell, Trash2, ShieldAlert } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 // Modules
@@ -43,7 +43,6 @@ export default function App() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [needsPasswordSetup, setNeedsPasswordSetup] = useState(false);
 
-  // --- NEW: Global Alert/Activity State ---
   const [isActivityOpen, setIsActivityOpen] = useState(false);
   const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
 
@@ -63,7 +62,6 @@ export default function App() {
     return () => subscription.unsubscribe();
   }, []);
 
-  // --- Real-time Activity Listener ---
   useEffect(() => {
     if (!user) return;
     
@@ -105,8 +103,6 @@ export default function App() {
       }
 
       setProfile(data as UserProfile);
-      
-      // Log login activity automatically
       logActivity(user, data, "Logged into the system");
 
     } catch (error) {
@@ -139,9 +135,7 @@ export default function App() {
     if (profile?.role !== 'admin') return;
     try {
       await supabase.from('activityLogs').delete().eq('id', logId);
-    } catch (error) {
-      console.error("Failed to delete log:", error);
-    }
+    } catch (error) { console.error("Failed to delete log:", error); }
   };
 
   const clearAllLogs = async () => {
@@ -149,9 +143,7 @@ export default function App() {
     if (window.confirm("WARNING: This will permanently delete ALL system activity logs. Continue?")) {
       try {
         await supabase.from('activityLogs').delete().neq('id', '0');
-      } catch (error) {
-        console.error("Failed to clear logs:", error);
-      }
+      } catch (error) { console.error("Failed to clear logs:", error); }
     }
   };
 
@@ -228,9 +220,8 @@ export default function App() {
 
   return (
     <AuthContext.Provider value={{ user, profile, signOut }}>
-      <div className="min-h-screen bg-[#F8F9FA] flex">
+      <div className="min-h-screen bg-[#F8F9FA] flex flex-col w-full overflow-x-hidden">
         
-        {/* Desktop Sidebar */}
         <aside className="hidden lg:flex flex-col w-72 bg-white border-r border-zinc-200 fixed h-full z-40">
           <div className="p-8 pb-6 flex items-center gap-3">
             <div className="w-10 h-10 bg-black rounded-xl flex items-center justify-center shadow-lg"><ShieldAlert className="text-white" size={20} /></div>
@@ -261,7 +252,6 @@ export default function App() {
           </div>
         </aside>
 
-        {/* Mobile Header */}
         <div className="lg:hidden fixed top-0 w-full bg-white border-b border-zinc-200 z-40 px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-2"><div className="w-8 h-8 bg-black rounded-lg flex items-center justify-center"><ShieldAlert className="text-white" size={16} /></div><span className="font-black text-lg tracking-tight">AuditPro</span></div>
           
@@ -274,26 +264,19 @@ export default function App() {
           </div>
         </div>
 
-        <main className="flex-1 lg:ml-72 flex flex-col min-h-screen pt-16 lg:pt-0">
+        {/* PERFECT LAYOUT FIX: Used pl-72 instead of ml-72 to prevent horizontal overflow */}
+        <main className="flex-1 lg:pl-72 flex flex-col min-h-screen pt-16 lg:pt-0 w-full">
           
-          {/* Desktop Top Header */}
-          <header className="hidden lg:flex bg-white/80 backdrop-blur-md border-b border-zinc-200 sticky top-0 z-30 px-8 py-5 items-center justify-between">
+          <header className="hidden lg:flex bg-white/80 backdrop-blur-md border-b border-zinc-200 sticky top-0 z-30 px-8 py-5 items-center justify-between w-full">
             <div>
               <h2 className="text-2xl font-bold tracking-tight capitalize">{activeModule.replace('_', ' ')}</h2>
               <p className="text-sm text-zinc-500 mt-0.5">Manage your audit execution and tracking.</p>
             </div>
             <div className="flex items-center gap-4">
               
-              {/* --- NOTIFICATION BELL --- */}
-              <button 
-                onClick={() => setIsActivityOpen(true)} 
-                className="relative p-3 bg-zinc-100 hover:bg-zinc-200 text-zinc-700 rounded-full transition-colors"
-                title="System Activity Logs"
-              >
+              <button onClick={() => setIsActivityOpen(true)} className="relative p-3 bg-zinc-100 hover:bg-zinc-200 text-zinc-700 rounded-full transition-colors" title="System Activity Logs">
                 <Bell size={20} />
-                {activityLogs.length > 0 && (
-                  <span className="absolute top-1 right-1 w-3 h-3 bg-red-500 rounded-full border-2 border-white" />
-                )}
+                {activityLogs.length > 0 && <span className="absolute top-1 right-1 w-3 h-3 bg-red-500 rounded-full border-2 border-white" />}
               </button>
 
               <div className="flex items-center gap-3 bg-zinc-50 pl-2 pr-4 py-2 rounded-full border border-zinc-200">
@@ -306,71 +289,41 @@ export default function App() {
             </div>
           </header>
 
-          <div className="flex-1 p-4 md:p-8 max-w-7xl mx-auto w-full">
+          <div className="flex-1 p-4 md:p-8 max-w-7xl mx-auto w-full min-w-0">
             {renderModule()}
           </div>
         </main>
       </div>
 
-      {/* --- GLOBAL ACTIVITY ALERT BOX (SLIDE-OVER) --- */}
       <AnimatePresence>
         {isActivityOpen && (
           <>
-            <motion.div 
-              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-              onClick={() => setIsActivityOpen(false)}
-              className="fixed inset-0 bg-black/20 backdrop-blur-sm z-50"
-            />
-            <motion.div 
-              initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }} transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-              className="fixed top-0 right-0 w-full sm:w-[400px] h-full bg-white shadow-2xl z-50 border-l border-zinc-200 flex flex-col"
-            >
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsActivityOpen(false)} className="fixed inset-0 bg-black/20 backdrop-blur-sm z-50" />
+            <motion.div initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }} transition={{ type: 'spring', damping: 25, stiffness: 200 }} className="fixed top-0 right-0 w-full sm:w-[400px] h-full bg-white shadow-2xl z-50 border-l border-zinc-200 flex flex-col">
               <div className="p-6 border-b border-zinc-100 flex items-center justify-between shrink-0 bg-zinc-50">
                 <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 bg-black text-white rounded-xl flex items-center justify-center shadow-md">
-                    <Bell size={20} />
-                  </div>
-                  <div>
-                    <h3 className="font-bold text-lg">System Activity</h3>
-                    <p className="text-xs text-zinc-500">Live global logs</p>
-                  </div>
+                  <div className="w-10 h-10 bg-black text-white rounded-xl flex items-center justify-center shadow-md"><Bell size={20} /></div>
+                  <div><h3 className="font-bold text-lg">System Activity</h3><p className="text-xs text-zinc-500">Live global logs</p></div>
                 </div>
                 <div className="flex items-center gap-2">
-                  {profile.role === 'admin' && activityLogs.length > 0 && (
-                    <button onClick={clearAllLogs} className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors" title="Clear All Logs">
-                      <Trash2 size={18} />
-                    </button>
-                  )}
-                  <button onClick={() => setIsActivityOpen(false)} className="p-2 hover:bg-zinc-200 rounded-xl transition-colors">
-                    <X size={20} />
-                  </button>
+                  {profile.role === 'admin' && activityLogs.length > 0 && <button onClick={clearAllLogs} className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors" title="Clear All Logs"><Trash2 size={18} /></button>}
+                  <button onClick={() => setIsActivityOpen(false)} className="p-2 hover:bg-zinc-200 rounded-xl transition-colors"><X size={20} /></button>
                 </div>
               </div>
 
               <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar bg-zinc-50/50">
                 {activityLogs.length === 0 ? (
-                  <div className="text-center py-12 text-zinc-400 flex flex-col items-center">
-                    <Bell size={32} className="mb-3 opacity-20" />
-                    <p className="font-bold">No activity yet</p>
-                    <p className="text-xs mt-1">Actions performed in the system will appear here.</p>
-                  </div>
+                  <div className="text-center py-12 text-zinc-400 flex flex-col items-center"><Bell size={32} className="mb-3 opacity-20" /><p className="font-bold">No activity yet</p><p className="text-xs mt-1">Actions performed in the system will appear here.</p></div>
                 ) : (
                   activityLogs.map(log => (
                     <div key={log.id} className="bg-white p-4 rounded-2xl border border-zinc-100 shadow-sm relative group">
                       <div className="flex items-start justify-between mb-2 gap-4">
                         <div>
-                          <p className="text-sm font-medium text-zinc-900">
-                            <span className="font-bold">{log.userName}</span> {log.action}
-                          </p>
+                          <p className="text-sm font-medium text-zinc-900"><span className="font-bold">{log.userName}</span> {log.action}</p>
                           {log.details && <p className="text-xs text-zinc-500 mt-1 italic">"{log.details}"</p>}
                         </div>
                         {profile.role === 'admin' && (
-                          <button 
-                            onClick={() => deleteActivityLog(log.id)}
-                            className="text-zinc-300 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100 shrink-0"
-                          >
-                            <Trash2 size={14} />
-                          </button>
+                          <button onClick={() => deleteActivityLog(log.id)} className="text-zinc-300 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100 shrink-0"><Trash2 size={14} /></button>
                         )}
                       </div>
                       <div className="flex items-center gap-2 mt-3 text-[10px] font-bold uppercase tracking-wider">
@@ -385,7 +338,6 @@ export default function App() {
           </>
         )}
       </AnimatePresence>
-
     </AuthContext.Provider>
   );
 }

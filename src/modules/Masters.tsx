@@ -45,7 +45,7 @@ export function MastersModule() {
   // --- SMART HEADER PARSER HELPER ---
   const getColValue = (headers: string[], rowVals: string[], possibleNames: string[]) => {
     for (const name of possibleNames) {
-      const idx = headers.findIndex(h => h.toLowerCase() === name.toLowerCase());
+      const idx = headers.findIndex(h => h.toLowerCase() === name.toLowerCase() || h.toLowerCase().replace(/\s/g, '') === name.toLowerCase().replace(/\s/g, ''));
       if (idx !== -1) return rowVals[idx]?.trim() || '';
     }
     return '';
@@ -125,13 +125,16 @@ export function MastersModule() {
           // SMART PARSING: Finds the column regardless of where it is in the CSV
           const soldToParty = getColValue(headers, cols, ['SoldToParty', 'DistributorCode']);
           const materialNo = getColValue(headers, cols, ['MaterialNo', 'ItemCode']);
-          const totalQtyStr = getColValue(headers, cols, ['TotalQty', 'Quantity']);
-          const totalValueStr = getColValue(headers, cols, ['TotalValue']);
+          
+          const totalQtyStr = getColValue(headers, cols, ['TotalQty', 'Quantity', 'Qty']);
+          const totalValueStr = getColValue(headers, cols, ['TotalValue', 'Value', 'Total Value']);
           
           if (!soldToParty || !materialNo) return null;
           
           const totalQty = parseInt(totalQtyStr) || 0;
           const totalValue = parseFloat(totalValueStr) || 0;
+          
+          // Calculates the Rate dynamically for the execution form
           const rate = totalQty > 0 ? (totalValue / totalQty) : 0;
           
           return {
@@ -240,7 +243,7 @@ export function MastersModule() {
           <div className="flex-1 space-y-4 mb-8 text-sm text-zinc-600">
             <div className="p-4 bg-zinc-50 rounded-xl border border-zinc-100">
               <p className="font-bold text-zinc-900 mb-2 text-xs uppercase">Required Columns:</p>
-              <code className="text-[10px] sm:text-xs text-emerald-600">BillingDate, SoldToParty, MaterialNo, ItemName, Plant, BillingDoc, Category, TotalValue, TotalQty, GST, ApproxShelfLife, StandardPack</code>
+              <code className="text-[10px] sm:text-[11px] text-emerald-600 leading-relaxed block break-words">BillingDate, SoldToParty, MaterialNo, ItemName, Plant, BillingDoc, Category, TotalValue, TotalQty, GST, ApproxShelfLife, StandardPack</code>
             </div>
           </div>
           <div className="space-y-3 mt-auto">
