@@ -1,7 +1,7 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { supabase, logActivity } from '../supabase';
-import { AuditTicket, Distributor, AuditLineItem, SignOff, MediaUpload } from '../types';
-import { ClipboardCheck, Plus, Store, MapPin, CheckCircle2, ArrowLeft, AlertCircle, MessageSquare, PackageSearch, Lock, Camera, Video, Trash2, ChevronRight, Send, Loader2, RotateCcw } from 'lucide-react';
+import { Distributor, SignOff, AuditTicket as BaseTicket, AuditLineItem as BaseItem } from '../types';
+import { ClipboardCheck, Plus, Store, MapPin, CheckCircle2, ArrowLeft, AlertCircle, MessageSquare, PackageSearch, Lock, Trash2, Send, RotateCcw, CalendarClock, FileText, Upload, Loader2 } from 'lucide-react';
 import { cn, useAuth } from '../App';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -10,6 +10,14 @@ import { AddItemModal } from '../components/Execution/AddItemModal';
 import { ChatModal } from '../components/Execution/ChatModal';
 
 const BUCKET_NAME = 'audit-media'; 
+
+export interface AuditTicket extends BaseTicket { 
+  drainageDate?: string; 
+  whatsappMediaApproved?: boolean; 
+  signoffDocumentUrl?: string;
+  signoffDocumentApproved?: boolean;
+}
+export interface AuditLineItem extends BaseItem { qtyDrained?: number; }
 
 export interface CombinedDumpItem {
   id: string; itemCode: string; itemName: string; expectedQty: number; rate: number; category: string;
@@ -26,10 +34,22 @@ export function ExecutionModule() {
   
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isChatOpen, setIsChatOpen] = useState(false);
-  const [isUploadingEvidence, setIsUploadingEvidence] = useState(false);
+  const [drainageDateInput, setDrainageDateInput] = useState('');
   
-  const evidenceImageRef = useRef<HTMLInputElement>(null);
-  const evidenceVideoRef = useRef<HTMLInputElement>(null);
+  const [isUploadingSignoff, setIsUploadingSignoff] = useState(false);
+  const signoffFileRef = useRef<HTMLInputElement>(null);
+
+  const distMap = useMemo(() => {
+    const map = new Map<string, Distributor>();
+    distributors.forEach(d => map.set(d.id, d));
+    return map;
+  }, [distributors]);
+
+  const dumpItemMap = useMemo(() => {
+    const map = new Map<string, CombinedDumpItem>();
+    availableDumpItems.forEach(d => map.set(d.itemCode, d));
+    return map;
+  }, [availableDumpItems]);
 
   const fetchData = async () => {
     if (!profile) return;
@@ -44,7 +64,7 @@ export function ExecutionModule() {
       const fetchedDistributors = (dData || []) as Distributor[];
       setDistributors(fetchedDistributors);
 
-      let tQuery = supabase.from('auditTickets').select('*').in('status', ['scheduled', 'in_progress', 'auditor_submitted', 'submitted', 'evidence_uploaded', 'signed']);
+      let tQuery = supabase.from('auditTickets').select('*').in('status', ['scheduled', 'in_progress', 'auditor_submitted', 'drainage_pending', 'submitted', 'evidence_uploaded', 'signed']);
       if (profile.role === 'auditor') {
         tQuery = tQuery.or(`auditorId.eq.${profile.uid},auditorIds.cs.{${profile.uid}}`);
       }
@@ -93,14 +113,16 @@ export function ExecutionModule() {
       const channel = supabase.channel(`items-${activeTicket.id}`).on('postgres_changes', { event: '*', schema: 'public', table: 'auditLineItems', filter: `ticketId=eq.${activeTicket.id}` }, () => fetchItems(activeTicket.id)).subscribe();
       return () => { supabase.removeChannel(channel); };
     } else { setItems([]); setAvailableDumpItems([]); }
-  }, [activeTicket, distributors]);
+  }, [activeTicket?.id, distributors]); 
 
   useEffect(() => {
     if (activeTicket) {
       const updated = tickets.find(t => t.id === activeTicket.id);
-      if (updated) setActiveTicket(updated);
+      if (updated && JSON.stringify(updated) !== JSON.stringify(activeTicket)) {
+        setActiveTicket(updated);
+      }
     }
-  }, [tickets]);
+  }, [tickets, activeTicket]);
 
   const resetAuditTicket = async () => {
     if (!activeTicket) return;
@@ -109,7 +131,7 @@ export function ExecutionModule() {
     try {
       await supabase.from('auditLineItems').delete().eq('ticketId', activeTicket.id);
       await supabase.from('auditTickets').update({ 
-        status: 'tentative', scheduledDate: null as any, auditorId: null as any, auditorIds: [], presenceLogs: [], media: [], signOffs: {}, comments: [], dateProposals: [], verifiedTotal: 0, updatedAt: new Date().toISOString()
+        status: 'tentative', scheduledDate: null as any, drainageDate: null, whatsappMediaApproved: false, signoffDocumentUrl: null, signoffDocumentApproved: false, auditorId: null as any, auditorIds: [], presenceLogs: [], media: [], signOffs: {}, comments: [], dateProposals: [], verifiedTotal: 0, updatedAt: new Date().toISOString()
       }).eq('id', activeTicket.id);
       
       setTickets(prev => prev.filter(t => t.id !== activeTicket.id)); setActiveTicket(null);
@@ -117,24 +139,47 @@ export function ExecutionModule() {
     } catch (error) { console.error("Error resetting audit ticket:", error); alert("Failed to reset ticket."); }
   };
 
-  const handleEvidenceUpload = async (e: React.ChangeEvent<HTMLInputElement>, type: 'image' | 'video') => {
+  const toggleWhatsappApproval = async () => {
+    if (!activeTicket || !user || !profile) return;
+    const newStatus = !activeTicket.whatsappMediaApproved;
+    try {
+      await supabase.from('auditTickets').update({ whatsappMediaApproved: newStatus, updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
+      setActiveTicket({ ...activeTicket, whatsappMediaApproved: newStatus });
+      
+      const dist = distMap.get(activeTicket.distributorId);
+      logActivity(user, profile, "WhatsApp Media Confirmed", `Admin marked WhatsApp evidence as ${newStatus ? 'Approved' : 'Pending'} for ${dist?.name}`);
+    } catch (error) { console.error("Failed to update WhatsApp approval:", error); }
+  };
+
+  const handleSignoffUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !activeTicket || !user) return;
-    setIsUploadingEvidence(true);
+    setIsUploadingSignoff(true);
     try {
       const fileExt = file.name.split('.').pop();
-      const fileName = `${activeTicket.id}-evidence-${Date.now()}.${fileExt}`;
-      const filePath = `evidence/${fileName}`;
+      const fileName = `${activeTicket.id}-signoff-${Date.now()}.${fileExt}`;
+      const filePath = `signoffs/${fileName}`;
       
       const { error: uploadError } = await supabase.storage.from(BUCKET_NAME).upload(filePath, file, { upsert: true });
       if (uploadError) throw new Error(uploadError.message);
       const { data: { publicUrl } } = supabase.storage.from(BUCKET_NAME).getPublicUrl(filePath);
 
-      const media: MediaUpload = { id: Math.random().toString(36).substring(7), type, url: publicUrl, uploadedBy: user.id, timestamp: new Date().toISOString() };
-      const mediaList = [...(activeTicket.media || []), media];
-      await supabase.from('auditTickets').update({ media: mediaList, status: 'evidence_uploaded', updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
-    } catch (error: any) { alert(error.message); } 
-    finally { setIsUploadingEvidence(false); if (evidenceImageRef.current) evidenceImageRef.current.value = ''; if (evidenceVideoRef.current) evidenceVideoRef.current.value = ''; }
+      await supabase.from('auditTickets').update({ signoffDocumentUrl: publicUrl, updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
+      setActiveTicket({ ...activeTicket, signoffDocumentUrl: publicUrl });
+    } catch (error: any) { alert(`Upload failed: ${error.message}`); } 
+    finally { setIsUploadingSignoff(false); if (signoffFileRef.current) signoffFileRef.current.value = ''; }
+  };
+
+  const toggleSignoffApproval = async () => {
+    if (!activeTicket || !user || !profile) return;
+    const newStatus = !activeTicket.signoffDocumentApproved;
+    try {
+      await supabase.from('auditTickets').update({ signoffDocumentApproved: newStatus, updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
+      setActiveTicket({ ...activeTicket, signoffDocumentApproved: newStatus });
+      
+      const dist = distMap.get(activeTicket.distributorId);
+      logActivity(user, profile, "Sign-off Document Confirmed", `Admin marked physical sign-off sheet as ${newStatus ? 'Approved' : 'Pending'} for ${dist?.name}`);
+    } catch (error) { console.error("Failed to update Sign-off approval:", error); }
   };
 
   const deleteItem = async (item: AuditLineItem) => {
@@ -176,7 +221,6 @@ export function ExecutionModule() {
     if (!activeTicket) return;
     const newVerifiedTotal = items.reduce((sum, item) => sum + item.totalValue, 0);
     
-    // --- NEW: 5% HARD LIMIT CHECK FOR INLINE EDITS ---
     if (newVerifiedTotal > activeTicket.maxAllowedValue) { 
       alert(`Changes reverted. This update exceeds the absolute 5% maximum limit (₹${activeTicket.maxAllowedValue.toLocaleString()}).`); 
       fetchItems(activeTicket.id); 
@@ -184,9 +228,8 @@ export function ExecutionModule() {
     }
 
     try {
-      // --- NEW: LOG CREATION ON BUFFER ENTRY ---
       if (newVerifiedTotal > activeTicket.approvedValue && (activeTicket.verifiedTotal || 0) <= activeTicket.approvedValue) {
-        const dist = distributors.find(d => d.id === activeTicket.distributorId);
+        const dist = distMap.get(activeTicket.distributorId);
         logActivity(user, profile, "Buffer Zone Triggered", `Audit for ${dist?.name} exceeded the primary limit of ₹${activeTicket.approvedValue.toLocaleString()} and entered the 5% buffer zone.`);
       }
 
@@ -204,6 +247,33 @@ export function ExecutionModule() {
     } catch (error) { console.error(error); }
   };
 
+  const setDrainageDate = async () => {
+    if (!activeTicket || !drainageDateInput) return;
+    await supabase.from('auditTickets').update({ drainageDate: drainageDateInput, updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
+    setActiveTicket({ ...activeTicket, drainageDate: drainageDateInput });
+    alert("Drainage date saved successfully!");
+  };
+
+  const handleDrainageChange = (id: string, value: string) => {
+    setItems(prev => prev.map(item => {
+      if (item.id === id) {
+        let val: number | string = parseInt(value);
+        if (isNaN(val)) val = '';
+        else if (val > item.quantity) val = item.quantity; 
+        else if (val < 0) val = 0;
+        return { ...item, qtyDrained: val as number };
+      }
+      return item;
+    }));
+  };
+
+  const saveInlineDrainage = async (itemToSave: AuditLineItem) => {
+    if (!activeTicket) return;
+    try {
+      await supabase.from('auditLineItems').update({ qtyDrained: itemToSave.qtyDrained || 0 }).eq('id', itemToSave.id);
+    } catch (error) { console.error(error); }
+  };
+
   const submitByAuditor = async () => {
     if (!activeTicket) return;
     await supabase.from('auditTickets').update({ status: 'auditor_submitted', updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
@@ -212,8 +282,14 @@ export function ExecutionModule() {
 
   const submitByASE = async () => {
     if (!activeTicket) return;
+    await supabase.from('auditTickets').update({ status: 'drainage_pending', updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
+    setActiveTicket(null); alert("Audit verified! It is now pending Drainage scheduling.");
+  };
+
+  const submitDrainage = async () => {
+    if (!activeTicket) return;
     await supabase.from('auditTickets').update({ status: 'submitted', updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
-    setActiveTicket(null); alert("Audit verified and officially submitted!");
+    setActiveTicket(null); alert("Drainage completed! Audit officially submitted for sign-offs.");
   };
 
   const signOff = async (roleRequired: 'auditor' | 'ase' | 'distributor') => {
@@ -226,7 +302,7 @@ export function ExecutionModule() {
   };
 
   if (activeTicket) {
-    const dist = distributors.find(d => d.id === activeTicket.distributorId);
+    const dist = distMap.get(activeTicket.distributorId);
     const isAdminOrHO = ['admin', 'ho'].includes(profile?.role || '');
     const isAuditor = profile?.role === 'auditor';
     const isASE = profile?.role === 'ase';
@@ -234,16 +310,18 @@ export function ExecutionModule() {
     
     const today = new Date();
     const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    
     const isActionableDate = activeTicket.scheduledDate ? (activeTicket.scheduledDate <= todayStr || activeTicket.status === 'in_progress') : false;
 
     const approvedLogs = activeTicket.presenceLogs?.filter((l: any) => l.status === 'approved') || [];
     const hasApprovedCheckIn = approvedLogs.length > 0;
 
-    const canUploadFiles = (isAuditor || isAdminOrHO) && (!isSubmitted && activeTicket.status !== 'auditor_submitted');
-    const canEditItems = canUploadFiles && isActionableDate && hasApprovedCheckIn && activeTicket.status === 'in_progress'; 
-    const percentUsed = ((activeTicket.verifiedTotal || 0) / activeTicket.approvedValue) * 100;
+    const canUploadFiles = (isAuditor || isAdminOrHO) && (!isSubmitted && !['auditor_submitted', 'drainage_pending'].includes(activeTicket.status));
     
-    // --- NEW: UI Logic for limits ---
+    const canEditItems = canUploadFiles && isActionableDate && hasApprovedCheckIn && activeTicket.status === 'in_progress'; 
+    const canEditDrainage = (isAuditor || isAdminOrHO) && activeTicket.status === 'drainage_pending';
+
+    const percentUsed = ((activeTicket.verifiedTotal || 0) / activeTicket.approvedValue) * 100;
     const isOverBudget = (activeTicket.verifiedTotal || 0) > activeTicket.approvedValue;
     const isMaxedOut = (activeTicket.verifiedTotal || 0) >= activeTicket.maxAllowedValue;
     
@@ -263,7 +341,6 @@ export function ExecutionModule() {
           </div>
         </div>
 
-        {/* HEADER BLOCK */}
         <div className="bg-white rounded-[2.5rem] p-8 border border-zinc-200 shadow-sm w-full">
           <div className="flex flex-col md:flex-row md:items-start justify-between gap-6 mb-8 w-full">
             <div className="flex items-center gap-4">
@@ -305,7 +382,6 @@ export function ExecutionModule() {
             </div>
           )}
 
-          {/* --- NEW: BUDGET BANNERS --- */}
           {isOverBudget && !isMaxedOut && (
             <div className="mb-8 p-5 bg-amber-50 border border-amber-100 rounded-2xl flex items-start gap-4">
               <AlertCircle className="text-amber-500 shrink-0 mt-0.5" size={24} />
@@ -331,12 +407,28 @@ export function ExecutionModule() {
               <AlertCircle className="text-blue-600 shrink-0 mt-0.5" size={24} />
               <div>
                 <h4 className="font-bold text-blue-900">Awaiting ASE Review</h4>
-                <p className="text-sm text-blue-800 mt-1">The Auditor has completed their count. This audit is currently locked waiting for the ASE to review and submit.</p>
+                <p className="text-sm text-blue-800 mt-1">The Auditor has completed their count. This audit is currently locked waiting for the ASE to review and move it to Drainage.</p>
               </div>
             </div>
           )}
 
-          {!isSubmitted && activeTicket.status !== 'auditor_submitted' && (isAuditor || isAdminOrHO) && (
+          {activeTicket.status === 'drainage_pending' && (
+            <div className="mb-8 p-5 bg-teal-50 border border-teal-100 rounded-2xl flex items-start gap-4">
+              <CalendarClock className="text-teal-500 shrink-0 mt-0.5" size={24} />
+              <div className="w-full">
+                <h4 className="font-bold text-teal-900">Drainage Phase Active</h4>
+                <p className="text-sm text-teal-800 mt-1 mb-3">
+                  Original line item counts are completely frozen. The <strong>Drained Qty</strong> column is now unlocked for the auditor. Please confirm the scheduled drainage date below.
+                </p>
+                <div className="flex gap-3 max-w-sm">
+                  <input type="date" className="flex-1 px-4 py-2 rounded-xl border border-teal-200 outline-none focus:ring-2 focus:ring-teal-500 text-sm font-bold bg-white" value={drainageDateInput || activeTicket.drainageDate || ''} onChange={(e) => setDrainageDateInput(e.target.value)} />
+                  <button onClick={setDrainageDate} disabled={!drainageDateInput} className="px-6 py-2 bg-teal-600 text-white font-bold rounded-xl hover:bg-teal-700 transition-colors disabled:opacity-50">Save Date</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {!isSubmitted && activeTicket.status !== 'auditor_submitted' && activeTicket.status !== 'drainage_pending' && (isAuditor || isAdminOrHO) && (
             <CheckInBlock activeTicket={activeTicket} setActiveTicket={setActiveTicket} user={user} profile={profile} isAdminOrHO={isAdminOrHO} isActionableDate={isActionableDate} />
           )}
 
@@ -345,7 +437,6 @@ export function ExecutionModule() {
               <div className="flex items-center justify-between gap-4 mb-4 w-full">
                 <h4 className="font-bold text-lg flex items-center gap-2"><ClipboardCheck className="text-zinc-400" size={20} /> Audit Line Items</h4>
                 
-                {/* --- NEW: DISABLE ADD BUTTON IF MAXED OUT --- */}
                 <button 
                   onClick={() => setIsAddModalOpen(true)} 
                   disabled={!canEditItems || isMaxedOut}
@@ -371,6 +462,8 @@ export function ExecutionModule() {
                         <th className="px-3 py-4 text-center font-bold text-blue-600 bg-blue-50 border-r border-blue-100">Exp Date</th>
                         <th className="px-3 py-4 text-center font-bold text-blue-600 bg-blue-50 border-r border-blue-100">Life</th>
                         
+                        <th className="px-3 py-4 text-center font-bold text-teal-600 bg-teal-50 border-r border-teal-100">Drained Qty</th>
+
                         <th className="px-4 py-4 text-right font-bold text-zinc-500">Rate</th>
                         <th className="px-4 py-4 text-right font-bold text-zinc-500">Total Value</th>
                         {canEditItems && <th className="px-3 py-4"></th>}
@@ -378,7 +471,7 @@ export function ExecutionModule() {
                     </thead>
                     <tbody className="divide-y divide-zinc-100">
                       {items.map(item => {
-                        const dumpMatch = availableDumpItems.find(d => d.itemCode === item.articleNumber);
+                        const dumpMatch = dumpItemMap.get(item.articleNumber);
                         const systemQty = dumpMatch ? dumpMatch.expectedQty : 0;
                         return (
                           <tr key={item.id} className="hover:bg-zinc-50/50 transition-colors group">
@@ -391,15 +484,12 @@ export function ExecutionModule() {
                             <td className="px-3 py-4 text-center bg-red-50/30 border-r border-red-100">
                               {canEditItems ? <input type="number" min="0" value={item.qtyNonSaleable} onChange={(e) => handleInlineChange(item.id, 'qtyNonSaleable', e.target.value)} onBlur={() => saveInlineEdit(item)} className="w-12 text-center bg-white border text-xs font-bold rounded px-1 py-1 focus:ring-2 focus:ring-red-500 outline-none text-red-700 border-red-200" /> : <span className="font-bold text-red-700">{item.qtyNonSaleable}</span>}
                             </td>
-                            
                             <td className="px-3 py-4 text-center bg-amber-50/30 border-r border-amber-100">
                               {canEditItems ? <input type="number" min="0" value={item.qtyBBD} onChange={(e) => handleInlineChange(item.id, 'qtyBBD', e.target.value)} onBlur={() => saveInlineEdit(item)} className="w-12 text-center bg-white border text-xs font-bold rounded px-1 py-1 focus:ring-2 focus:ring-amber-500 outline-none text-amber-700 border-amber-200" /> : <span className="font-bold text-amber-700">{item.qtyBBD}</span>}
                             </td>
-                            
                             <td className="px-3 py-4 text-center bg-purple-50/30 border-r border-purple-100">
                               {canEditItems ? <input type="number" min="0" value={item.qtyDamaged} onChange={(e) => handleInlineChange(item.id, 'qtyDamaged', e.target.value)} onBlur={() => saveInlineEdit(item)} className="w-12 text-center bg-white border text-xs font-bold rounded px-1 py-1 focus:ring-2 focus:ring-purple-500 outline-none text-purple-700 border-purple-200" /> : <span className="font-bold text-purple-700">{item.qtyDamaged}</span>}
                             </td>
-                            
                             <td className="px-3 py-4 text-center bg-zinc-50 border-r border-zinc-100">
                               <span className={cn("font-black", item.quantity !== systemQty && item.reasonCode !== 'Surprise Find' ? "text-red-600" : "text-zinc-900")}>{item.quantity}</span>
                             </td>
@@ -410,9 +500,25 @@ export function ExecutionModule() {
                             <td className="px-3 py-4 text-center bg-blue-50/30 border-r border-blue-100">
                               {canEditItems ? <input type="date" value={item.expDate || ''} onChange={(e) => handleInlineChange(item.id, 'expDate', e.target.value)} onBlur={() => saveInlineEdit(item)} className="w-[110px] text-center bg-white border text-[10px] font-bold rounded px-1 py-1 focus:ring-2 focus:ring-blue-500 outline-none text-blue-700 border-blue-200" /> : <span className="font-bold text-blue-700 text-[10px]">{item.expDate || '-'}</span>}
                             </td>
-                            
                             <td className="px-3 py-4 text-center bg-blue-50/30 border-r border-blue-100">
                               <span className="font-bold text-blue-900 text-xs whitespace-nowrap">{item.productLife || '-'}</span>
+                            </td>
+
+                            <td className="px-3 py-4 text-center bg-teal-50/30 border-r border-teal-100">
+                              {canEditDrainage ? (
+                                <input 
+                                  type="number" 
+                                  min="0" 
+                                  max={item.quantity} 
+                                  value={item.qtyDrained ?? ''} 
+                                  onChange={(e) => handleDrainageChange(item.id, e.target.value)} 
+                                  onBlur={() => saveInlineDrainage(item)} 
+                                  className="w-14 text-center bg-white border text-xs font-bold rounded px-1 py-1.5 focus:ring-2 focus:ring-teal-500 outline-none text-teal-800 border-teal-200 shadow-sm" 
+                                  placeholder="0"
+                                />
+                              ) : (
+                                <span className="font-bold text-teal-700">{item.qtyDrained || 0}</span>
+                              )}
                             </td>
 
                             <td className="px-4 py-4 text-right text-zinc-500 text-xs">₹{item.unitValue.toFixed(2)}</td>
@@ -424,7 +530,7 @@ export function ExecutionModule() {
                       })}
                       {items.length === 0 && (
                         <tr>
-                          <td colSpan={canEditItems ? 12 : 11} className="px-6 py-12 text-center text-zinc-400">
+                          <td colSpan={canEditItems ? 13 : 12} className="px-6 py-12 text-center text-zinc-400">
                             <PackageSearch size={32} className="mx-auto mb-3 opacity-30" />
                             <p className="font-bold text-zinc-600">No items counted yet.</p>
                           </td>
@@ -436,37 +542,88 @@ export function ExecutionModule() {
               </div>
             </div>
 
-            {/* EVIDENCE & SIGN-OFFS COMPONENT */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-4 border-t border-zinc-100 w-full">
+              
               <div className="space-y-4">
-                <h4 className="font-bold text-lg flex items-center justify-between">Media Evidence {isUploadingEvidence && <Loader2 className="animate-spin text-zinc-400" size={16} />}</h4>
-                {canUploadFiles && (
-                  <div className="flex gap-4">
-                    <input type="file" accept="image/*" capture="environment" className="hidden" ref={evidenceImageRef} onChange={(e) => handleEvidenceUpload(e, 'image')} />
-                    <button onClick={() => evidenceImageRef.current?.click()} disabled={isUploadingEvidence || !canEditItems} className={cn("flex-1 flex flex-col items-center justify-center p-6 border-2 border-dashed rounded-3xl transition-all", canEditItems ? "bg-zinc-50 border-zinc-200 hover:border-black" : "bg-zinc-50/50 border-zinc-100 cursor-not-allowed opacity-50")}>
-                      <Camera className="text-zinc-400 mb-2" size={24} /><span className="text-sm font-bold text-zinc-600">Upload Photos</span>
+                <h4 className="font-bold text-lg">Verification Evidence</h4>
+                
+                {/* --- WHATSAPP MEDIA APPROVAL BLOCK --- */}
+                <div className="p-5 bg-zinc-50 border border-zinc-200 rounded-2xl flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className={cn("w-12 h-12 rounded-xl flex items-center justify-center shrink-0 shadow-inner", activeTicket.whatsappMediaApproved ? "bg-emerald-100 text-emerald-600" : "bg-zinc-200 text-zinc-500")}>
+                      {activeTicket.whatsappMediaApproved ? <CheckCircle2 size={24} /> : <MessageSquare size={24} />}
+                    </div>
+                    <div>
+                      <h5 className="font-bold text-zinc-900 text-sm">WhatsApp Evidence</h5>
+                      <p className="text-xs text-zinc-500">Stock images & large videos</p>
+                    </div>
+                  </div>
+                  
+                  {isAdminOrHO ? (
+                    <button
+                      onClick={toggleWhatsappApproval}
+                      className={cn("px-4 py-2 text-xs font-bold rounded-xl transition-all active:scale-95", activeTicket.whatsappMediaApproved ? "bg-emerald-600 text-white shadow-lg shadow-emerald-600/20" : "bg-black text-white hover:bg-zinc-800 shadow-md")}
+                    >
+                      {activeTicket.whatsappMediaApproved ? 'Approved' : 'Mark as Received'}
                     </button>
+                  ) : (
+                    <span className={cn("px-3 py-1.5 text-xs font-bold rounded-xl", activeTicket.whatsappMediaApproved ? "bg-emerald-50 border border-emerald-200 text-emerald-700" : "bg-zinc-100 text-zinc-500")}>
+                      {activeTicket.whatsappMediaApproved ? 'Approved by Admin' : 'Pending Admin Approval'}
+                    </span>
+                  )}
+                </div>
+
+                {/* --- PHYSICAL SIGN-OFF SHEET BLOCK --- */}
+                <div className="p-5 bg-zinc-50 border border-zinc-200 rounded-2xl flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className={cn("w-12 h-12 rounded-xl flex items-center justify-center shrink-0 shadow-inner", activeTicket.signoffDocumentApproved ? "bg-emerald-100 text-emerald-600" : activeTicket.signoffDocumentUrl ? "bg-amber-100 text-amber-600" : "bg-zinc-200 text-zinc-500")}>
+                      {activeTicket.signoffDocumentApproved ? <CheckCircle2 size={24} /> : <FileText size={24} />}
+                    </div>
+                    <div>
+                      <h5 className="font-bold text-zinc-900 text-sm">Physical Sign-off</h5>
+                      {activeTicket.signoffDocumentUrl ? (
+                        <a href={activeTicket.signoffDocumentUrl} target="_blank" rel="noreferrer" className="text-xs text-blue-600 hover:underline font-bold flex items-center gap-1 mt-0.5">View Document</a>
+                      ) : (
+                        <p className="text-xs text-zinc-500">Scanned sheet</p>
+                      )}
+                    </div>
+                  </div>
+                  
+                  <div className="flex items-center gap-2">
+                    {!activeTicket.signoffDocumentUrl && (isAuditor || isASE || isAdminOrHO) && activeTicket.status !== 'signed' && (
+                      <>
+                        <input type="file" accept="image/*,application/pdf" capture="environment" className="hidden" ref={signoffFileRef} onChange={handleSignoffUpload} />
+                        <button onClick={() => signoffFileRef.current?.click()} disabled={isUploadingSignoff} className="px-4 py-2 bg-white border border-zinc-200 text-zinc-700 text-xs font-bold rounded-xl hover:bg-zinc-50 transition-all shadow-sm">
+                          {isUploadingSignoff ? <Loader2 className="animate-spin inline" size={14} /> : 'Upload'}
+                        </button>
+                      </>
+                    )}
                     
-                    <input type="file" accept="video/*" capture="environment" className="hidden" ref={evidenceVideoRef} onChange={(e) => handleEvidenceUpload(e, 'video')} />
-                    <button onClick={() => evidenceVideoRef.current?.click()} disabled={isUploadingEvidence || !canEditItems} className={cn("flex-1 flex flex-col items-center justify-center p-6 border-2 border-dashed rounded-3xl transition-all", canEditItems ? "bg-zinc-50 border-zinc-200 hover:border-black" : "bg-zinc-50/50 border-zinc-100 cursor-not-allowed opacity-50")}>
-                      <Video className="text-zinc-400 mb-2" size={24} /><span className="text-sm font-bold text-zinc-600">Upload Video</span>
-                    </button>
+                    {activeTicket.signoffDocumentUrl && isAdminOrHO ? (
+                      <div className="flex items-center gap-2">
+                        {!activeTicket.signoffDocumentApproved && (
+                           <button onClick={() => signoffFileRef.current?.click()} className="p-2 text-zinc-400 hover:text-zinc-900 bg-white border border-zinc-200 rounded-xl transition-all" title="Re-upload Document"><Upload size={14}/></button>
+                        )}
+                        <input type="file" accept="image/*,application/pdf" className="hidden" ref={signoffFileRef} onChange={handleSignoffUpload} />
+                        
+                        <button
+                          onClick={toggleSignoffApproval}
+                          className={cn("px-4 py-2 text-xs font-bold rounded-xl transition-all active:scale-95", activeTicket.signoffDocumentApproved ? "bg-emerald-600 text-white shadow-lg shadow-emerald-600/20" : "bg-black text-white hover:bg-zinc-800 shadow-md")}
+                        >
+                          {activeTicket.signoffDocumentApproved ? 'Approved' : 'Approve'}
+                        </button>
+                      </div>
+                    ) : activeTicket.signoffDocumentUrl && !isAdminOrHO ? (
+                      <span className={cn("px-3 py-1.5 text-xs font-bold rounded-xl", activeTicket.signoffDocumentApproved ? "bg-emerald-50 border border-emerald-200 text-emerald-700" : "bg-amber-50 border border-amber-200 text-amber-700")}>
+                        {activeTicket.signoffDocumentApproved ? 'Approved by Admin' : 'Pending Admin'}
+                      </span>
+                    ) : null}
                   </div>
-                )}
-                {/* LARGER EVIDENCE PREVIEW GRID */}
-                {activeTicket.media && activeTicket.media.length > 0 ? (
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mt-3">
-                    {activeTicket.media.map(m => (
-                       <a href={m.url} target="_blank" rel="noreferrer" key={m.id} className="w-full aspect-square rounded-xl border border-zinc-200 overflow-hidden hover:opacity-80 transition-opacity">
-                         <img src={m.url} alt="Evidence" className="w-full h-full object-cover" />
-                       </a>
-                    ))}
-                  </div>
-                ) : <p className="text-sm text-zinc-500 italic">No media uploaded.</p>}
+                </div>
               </div>
 
               <div className="space-y-4">
-                <h4 className="font-bold text-lg">Sign-offs</h4>
+                <h4 className="font-bold text-lg">Digital Sign-offs</h4>
                 {(isSubmitted || isAuditor) && (
                   <div className="space-y-3">
                     {['auditor', 'ase', 'distributor'].map((role) => {
@@ -493,9 +650,23 @@ export function ExecutionModule() {
 
             {(isASE || isAdminOrHO) && activeTicket.status === 'auditor_submitted' && (
               <div className="pt-8 flex justify-end border-t border-zinc-100 w-full">
-                <button onClick={submitByASE} className="flex items-center gap-2 px-8 py-4 bg-emerald-600 text-white rounded-2xl font-bold hover:bg-emerald-700 transition-all shadow-xl shadow-emerald-600/20 active:scale-95"><CheckCircle2 size={18} /> Verify & Officially Submit</button>
+                <button onClick={submitByASE} className="flex items-center gap-2 px-8 py-4 bg-blue-600 text-white rounded-2xl font-bold hover:bg-blue-700 transition-all shadow-xl shadow-blue-600/20 active:scale-95"><CheckCircle2 size={18} /> Verify & Move to Drainage</button>
               </div>
             )}
+
+            {(isAuditor || isAdminOrHO) && activeTicket.status === 'drainage_pending' && (
+              <div className="pt-8 flex justify-end border-t border-zinc-100 w-full">
+                <button 
+                  onClick={submitDrainage} 
+                  disabled={!activeTicket.drainageDate}
+                  title={!activeTicket.drainageDate ? "Please set a Drainage Date first" : ""}
+                  className="flex items-center gap-2 px-8 py-4 bg-teal-600 text-white rounded-2xl font-bold hover:bg-teal-700 transition-all shadow-xl shadow-teal-600/20 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <CheckCircle2 size={18} /> Complete Drainage & Finalize
+                </button>
+              </div>
+            )}
+
           </div>
         </div>
 
@@ -516,14 +687,14 @@ export function ExecutionModule() {
     );
   }
 
-  const activeStatuses = ['scheduled', 'in_progress', 'auditor_submitted', 'submitted', 'signed'];
+  const activeStatuses = ['scheduled', 'in_progress', 'auditor_submitted', 'drainage_pending', 'submitted', 'signed'];
   const relevantTickets = tickets.filter(t => activeStatuses.includes(t.status));
 
   return (
     <div className="space-y-8 pb-12 w-full min-w-0">
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 w-full">
         {relevantTickets.map(ticket => {
-          const dist = distributors.find(d => d.id === ticket.distributorId);
+          const dist = distMap.get(ticket.distributorId);
           return (
             <motion.div layout key={ticket.id} onClick={() => setActiveTicket(ticket)} className="bg-white p-6 rounded-[2rem] border border-zinc-200 shadow-sm hover:shadow-md hover:border-black transition-all cursor-pointer group flex flex-col w-full">
               <div className="flex justify-between items-start mb-4">
