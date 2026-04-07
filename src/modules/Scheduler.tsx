@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { supabase } from '../supabase';
+import { supabase, logActivity } from '../supabase';
 import { AuditTicket, Distributor, UserProfile, DateProposal } from '../types';
 import { Calendar as CalendarIcon, Plus, Store, MapPin, CheckCircle2, X, Send, AlertCircle, MessageSquare, Filter, Trash2, CalendarCheck, ChevronLeft, ChevronRight, Clock, Edit2 } from 'lucide-react';
 import { cn, useAuth } from '../App';
@@ -24,7 +24,6 @@ export function SchedulerModule() {
   const [pendingTab, setPendingTab] = useState<'approval' | 'waiting'>('approval');
   const [pendingFilterAse, setPendingFilterAse] = useState<string>('all');
 
-  // --- FIXED: createData now uses auditorIds array instead of single auditorId ---
   const [createData, setCreateData] = useState({ distributorId: '', proposedDate: '', auditorIds: [] as string[], auditDays: 1 });
   const [proposalData, setProposalData] = useState({ date: '', remarks: '' });
   const [approvalAuditorIds, setApprovalAuditorIds] = useState<string[]>([]);
@@ -144,7 +143,7 @@ export function SchedulerModule() {
         await supabase.from('auditTickets').update({
           proposedDate: createData.proposedDate,
           scheduledDate: createData.proposedDate,
-          auditorIds: createData.auditorIds, // Array is safely stored
+          auditorIds: createData.auditorIds, 
           auditDays: createData.auditDays,
           status: 'scheduled',
           updatedAt: new Date().toISOString()
@@ -154,7 +153,7 @@ export function SchedulerModule() {
           id: Math.random().toString(36).substring(7),
           distributorId: createData.distributorId,
           proposedDate: createData.proposedDate,
-          auditorIds: createData.auditorIds, // Array is safely stored
+          auditorIds: createData.auditorIds, 
           auditDays: createData.auditDays,
           approvedValue: dist.approvedValue,
           maxAllowedValue: dist.approvedValue * 1.05,
@@ -170,6 +169,8 @@ export function SchedulerModule() {
         };
         await supabase.from('auditTickets').insert([newTicket]);
       }
+
+      logActivity(user, profile, "Audit Scheduled", `Admin scheduled audit for ${dist?.name} on ${createData.proposedDate}`);
 
       setIsCreateModalOpen(false);
       setCreateData({ distributorId: '', proposedDate: '', auditorIds: [], auditDays: 1 });
@@ -191,6 +192,9 @@ export function SchedulerModule() {
         auditDays: editTicketData.auditDays,
         updatedAt: new Date().toISOString()
       }).eq('id', editingActiveTicket.id);
+
+      const dist = distMap[editingActiveTicket.distributorId];
+      logActivity(user, profile, "Audit Re-scheduled", `Admin modified the schedule/auditors for ${dist?.name}`);
 
       setEditingActiveTicket(null);
     } catch (error) {
@@ -248,6 +252,9 @@ export function SchedulerModule() {
         auditDays: approvalAuditDays, 
         updatedAt: new Date().toISOString()
       }).eq('id', negotiationTicket.id);
+
+      const dist = distMap[negotiationTicket.distributorId];
+      logActivity(user, profile, "Audit Scheduled", `Admin approved date proposal and scheduled audit for ${dist?.name} on ${proposalDate}`);
 
       setNegotiationTicket(null); 
       setApprovalAuditorIds([]);
@@ -660,7 +667,6 @@ export function SchedulerModule() {
                 </div>
 
                 <div>
-                  {/* --- FIXED: FORCE SCHEDULE MODAL NOW USES MULTI-SELECT CHECKBOXES --- */}
                   <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 mb-2 block">Assign Auditors</label>
                   <div className="max-h-40 overflow-y-auto border border-zinc-200 rounded-xl p-3 bg-zinc-50 grid grid-cols-1 sm:grid-cols-2 gap-2">
                     {auditors.map(a => (

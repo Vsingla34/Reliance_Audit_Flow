@@ -1,11 +1,10 @@
 import React, { useRef, useState } from 'react';
-import { supabase } from '../../supabase';
+import { supabase, logActivity } from '../../supabase';
 import { AuditTicket } from '../../types';
 import { Camera, Image as ImageIcon, CheckCircle2, Clock, ThumbsDown, ThumbsUp, X, Send, Trash2, Loader2, AlertCircle, Calendar } from 'lucide-react';
 import { cn } from '../../App';
 import { motion, AnimatePresence } from 'motion/react';
 
-// 👇 Fixed to match your actual bucket!
 const BUCKET_NAME = 'audit-media'; 
 
 interface CheckInBlockProps {
@@ -71,6 +70,8 @@ export function CheckInBlock({ activeTicket, setActiveTicket, user, profile, isA
       setActiveTicket({ ...activeTicket, presenceLogs, status: 'in_progress' });
       await supabase.from('auditTickets').update({ presenceLogs, status: 'in_progress', updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
 
+      logActivity(user, profile, "Check-in Uploaded", `Auditor uploaded selfie for Day ${dayIndex + 1}`);
+
     } catch (error: any) {
       console.error(error);
       alert(error.message || `Failed to upload check-in photo for Day ${dayIndex + 1}.`);
@@ -113,6 +114,9 @@ export function CheckInBlock({ activeTicket, setActiveTicket, user, profile, isA
       
       if (error) throw error;
       
+      // LOG THE APPROVAL OR REJECTION
+      logActivity(user, profile, `Selfie ${action === 'approve' ? 'Approved' : 'Rejected'}`, `Admin ${action} check-in selfie for Day ${dayIndex + 1}`);
+
     } catch (error: any) {
       console.error("Error updating check-in status:", error);
       alert("Failed to update status: " + error.message);
@@ -138,7 +142,6 @@ export function CheckInBlock({ activeTicket, setActiveTicket, user, profile, isA
 
   return (
     <div className="space-y-6 mb-8">
-      {/* NEW: Instruction Banner */}
       <div className="p-4 bg-blue-50 border border-blue-100 rounded-2xl flex items-start gap-3">
         <AlertCircle className="text-blue-600 shrink-0 mt-0.5" size={20} />
         <div>
@@ -152,7 +155,6 @@ export function CheckInBlock({ activeTicket, setActiveTicket, user, profile, isA
       <input type="file" accept="image/*" capture="environment" className="hidden" ref={checkInFileRef} onChange={handleCheckInUpload} />
       
       {Array.from({ length: auditDays }).map((_, dayIndex) => {
-        
         const log = activeTicket.presenceLogs?.slice().reverse().find((l:any) => l.dayIndex === dayIndex || (dayIndex === 0 && l.dayIndex === undefined));
         
         const localPhoto = localPhotos[dayIndex];

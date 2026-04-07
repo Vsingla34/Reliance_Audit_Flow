@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { supabase, logActivity } from '../supabase';
 import { Distributor, SignOff, AuditTicket as BaseTicket, AuditLineItem as BaseItem } from '../types';
-import { ClipboardCheck, Plus, Store, MapPin, CheckCircle2, ArrowLeft, AlertCircle, MessageSquare, PackageSearch, Lock, Trash2, Send, RotateCcw, CalendarClock, FileText, Upload, Loader2 } from 'lucide-react';
+import { ClipboardCheck, Plus, Store, MapPin, CheckCircle2, ArrowLeft, AlertCircle, MessageSquare, PackageSearch, Lock, Trash2, Send, RotateCcw, CalendarClock, FileText, Upload, Loader2, User as UserIcon } from 'lucide-react';
 import { cn, useAuth } from '../App';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -16,6 +16,7 @@ export interface AuditTicket extends BaseTicket {
   whatsappMediaApproved?: boolean; 
   signoffDocumentUrl?: string;
   signoffDocumentApproved?: boolean;
+  fieldAuditors?: { name: string; phone: string }[];
 }
 export interface AuditLineItem extends BaseItem { qtyDrained?: number; }
 
@@ -38,6 +39,10 @@ export function ExecutionModule() {
   
   const [isUploadingSignoff, setIsUploadingSignoff] = useState(false);
   const signoffFileRef = useRef<HTMLInputElement>(null);
+
+  // New states for Field Auditor Form
+  const [auditorNameInput, setAuditorNameInput] = useState('');
+  const [auditorPhoneInput, setAuditorPhoneInput] = useState('');
 
   const distMap = useMemo(() => {
     const map = new Map<string, Distributor>();
@@ -131,12 +136,38 @@ export function ExecutionModule() {
     try {
       await supabase.from('auditLineItems').delete().eq('ticketId', activeTicket.id);
       await supabase.from('auditTickets').update({ 
-        status: 'tentative', scheduledDate: null as any, drainageDate: null, whatsappMediaApproved: false, signoffDocumentUrl: null, signoffDocumentApproved: false, auditorId: null as any, auditorIds: [], presenceLogs: [], media: [], signOffs: {}, comments: [], dateProposals: [], verifiedTotal: 0, updatedAt: new Date().toISOString()
+        status: 'tentative', scheduledDate: null as any, drainageDate: null, whatsappMediaApproved: false, signoffDocumentUrl: null, signoffDocumentApproved: false, fieldAuditors: [], auditorId: null as any, auditorIds: [], presenceLogs: [], media: [], signOffs: {}, comments: [], dateProposals: [], verifiedTotal: 0, updatedAt: new Date().toISOString()
       }).eq('id', activeTicket.id);
       
+      const dist = distMap.get(activeTicket.distributorId);
+      logActivity(user, profile, "Audit Reset", `Admin reset the audit for ${dist?.name} back to Scheduler`);
+
       setTickets(prev => prev.filter(t => t.id !== activeTicket.id)); setActiveTicket(null);
       alert("Ticket cleared successfully! It is now back in the Scheduler page.");
     } catch (error) { console.error("Error resetting audit ticket:", error); alert("Failed to reset ticket."); }
+  };
+
+  const handleAddFieldAuditor = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeTicket || !auditorNameInput || !auditorPhoneInput) return;
+    
+    const newList = [...(activeTicket.fieldAuditors || []), { name: auditorNameInput, phone: auditorPhoneInput }];
+    try {
+      await supabase.from('auditTickets').update({ fieldAuditors: newList, updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
+      setActiveTicket({ ...activeTicket, fieldAuditors: newList });
+      setAuditorNameInput('');
+      setAuditorPhoneInput('');
+    } catch (error) { console.error("Failed to add field auditor:", error); }
+  };
+
+  const handleRemoveFieldAuditor = async (index: number) => {
+    if (!activeTicket) return;
+    const newList = [...(activeTicket.fieldAuditors || [])];
+    newList.splice(index, 1);
+    try {
+      await supabase.from('auditTickets').update({ fieldAuditors: newList, updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
+      setActiveTicket({ ...activeTicket, fieldAuditors: newList });
+    } catch (error) { console.error("Failed to remove field auditor:", error); }
   };
 
   const toggleWhatsappApproval = async () => {
@@ -251,6 +282,10 @@ export function ExecutionModule() {
     if (!activeTicket || !drainageDateInput) return;
     await supabase.from('auditTickets').update({ drainageDate: drainageDateInput, updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
     setActiveTicket({ ...activeTicket, drainageDate: drainageDateInput });
+    
+    const dist = distMap.get(activeTicket.distributorId);
+    logActivity(user, profile, "Drainage Scheduled", `Drainage date set to ${drainageDateInput} for ${dist?.name}`);
+    
     alert("Drainage date saved successfully!");
   };
 
@@ -277,18 +312,30 @@ export function ExecutionModule() {
   const submitByAuditor = async () => {
     if (!activeTicket) return;
     await supabase.from('auditTickets').update({ status: 'auditor_submitted', updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
+    
+    const dist = distMap.get(activeTicket.distributorId);
+    logActivity(user, profile, "Audit Count Completed", `Auditor submitted count for ${dist?.name}`);
+
     setActiveTicket(null); alert("Audit successfully forwarded to ASE for review!");
   };
 
   const submitByASE = async () => {
     if (!activeTicket) return;
     await supabase.from('auditTickets').update({ status: 'drainage_pending', updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
+    
+    const dist = distMap.get(activeTicket.distributorId);
+    logActivity(user, profile, "Audit Verified", `ASE verified audit for ${dist?.name} and moved it to Drainage Phase`);
+
     setActiveTicket(null); alert("Audit verified! It is now pending Drainage scheduling.");
   };
 
   const submitDrainage = async () => {
     if (!activeTicket) return;
     await supabase.from('auditTickets').update({ status: 'submitted', updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
+    
+    const dist = distMap.get(activeTicket.distributorId);
+    logActivity(user, profile, "Drainage Completed", `Drainage phase completed and audit officially submitted for ${dist?.name}`);
+
     setActiveTicket(null); alert("Drainage completed! Audit officially submitted for sign-offs.");
   };
 
@@ -299,6 +346,9 @@ export function ExecutionModule() {
     const signOffs = { ...(activeTicket.signOffs || {}), [roleRequired]: signOffData };
     const allSigned = signOffs.auditor && signOffs.ase && signOffs.distributor;
     await supabase.from('auditTickets').update({ signOffs, status: allSigned ? 'signed' : activeTicket.status, updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
+    
+    const dist = distMap.get(activeTicket.distributorId);
+    logActivity(user, profile, "Audit Signed Off", `${roleRequired.toUpperCase()} signed off on the audit for ${dist?.name}`);
   };
 
   if (activeTicket) {
@@ -371,6 +421,39 @@ export function ExecutionModule() {
               </div>
             </div>
           )}
+
+          {/* --- FIELD AUDITORS BLOCK --- */}
+          {(activeTicket.fieldAuditors?.length || (!isSubmitted && activeTicket.status !== 'drainage_pending' && (isAuditor || isAdminOrHO))) ? (
+            <div className="mb-8 p-6 bg-zinc-50 border border-zinc-200 rounded-[2rem] shadow-sm">
+              <h4 className="font-bold text-lg mb-4 flex items-center gap-2"><UserIcon className="text-blue-500" size={20} /> Field Auditor Details</h4>
+              
+              {!isSubmitted && activeTicket.status !== 'drainage_pending' && (isAuditor || isAdminOrHO) && (
+                <form onSubmit={handleAddFieldAuditor} className="flex flex-col sm:flex-row gap-3 mb-4">
+                  <input type="text" required placeholder="Auditor Name" value={auditorNameInput} onChange={e=>setAuditorNameInput(e.target.value)} className="flex-1 px-4 py-3 bg-white border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black outline-none text-sm font-medium shadow-sm" />
+                  <input type="tel" required placeholder="Phone Number" value={auditorPhoneInput} onChange={e=>setAuditorPhoneInput(e.target.value)} className="flex-1 px-4 py-3 bg-white border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black outline-none text-sm font-medium shadow-sm" />
+                  <button type="submit" className="px-6 py-3 bg-black text-white font-bold rounded-xl hover:bg-zinc-800 transition-colors whitespace-nowrap shadow-md active:scale-95 text-sm">Add Detail</button>
+                </form>
+              )}
+
+              {activeTicket.fieldAuditors && activeTicket.fieldAuditors.length > 0 ? (
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                  {activeTicket.fieldAuditors.map((fa, idx) => (
+                    <div key={idx} className="flex items-center justify-between p-4 bg-white border border-zinc-200 shadow-sm rounded-2xl">
+                      <div>
+                        <p className="font-bold text-zinc-900 text-sm">{fa.name}</p>
+                        <p className="text-xs text-zinc-500 font-medium mt-0.5">{fa.phone}</p>
+                      </div>
+                      {!isSubmitted && activeTicket.status !== 'drainage_pending' && (isAuditor || isAdminOrHO) && (
+                        <button onClick={()=>handleRemoveFieldAuditor(idx)} className="p-2 text-zinc-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"><Trash2 size={16}/></button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-zinc-500 italic">No field auditors added yet.</p>
+              )}
+            </div>
+          ) : null}
 
           {isActionableDate && canUploadFiles && !hasApprovedCheckIn && (
             <div className="mb-8 p-5 bg-blue-50 border border-blue-100 rounded-2xl flex items-start gap-4">
@@ -547,7 +630,6 @@ export function ExecutionModule() {
               <div className="space-y-4">
                 <h4 className="font-bold text-lg">Verification Evidence</h4>
                 
-                {/* --- WHATSAPP MEDIA APPROVAL BLOCK --- */}
                 <div className="p-5 bg-zinc-50 border border-zinc-200 rounded-2xl flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <div className={cn("w-12 h-12 rounded-xl flex items-center justify-center shrink-0 shadow-inner", activeTicket.whatsappMediaApproved ? "bg-emerald-100 text-emerald-600" : "bg-zinc-200 text-zinc-500")}>
@@ -573,7 +655,6 @@ export function ExecutionModule() {
                   )}
                 </div>
 
-                {/* --- PHYSICAL SIGN-OFF SHEET BLOCK --- */}
                 <div className="p-5 bg-zinc-50 border border-zinc-200 rounded-2xl flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <div className={cn("w-12 h-12 rounded-xl flex items-center justify-center shrink-0 shadow-inner", activeTicket.signoffDocumentApproved ? "bg-emerald-100 text-emerald-600" : activeTicket.signoffDocumentUrl ? "bg-amber-100 text-amber-600" : "bg-zinc-200 text-zinc-500")}>
