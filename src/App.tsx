@@ -30,6 +30,20 @@ export function cn(...classes: (string | undefined | null | false)[]) {
   return classes.filter(Boolean).join(' ');
 }
 
+// --- COLOR ENGINE FOR ACTIVITY LOGS ---
+const getLogStyle = (action: string) => {
+  const a = action.toLowerCase();
+  if (a.includes('scheduled')) return { bg: 'bg-blue-50', border: 'border-blue-200', text: 'text-blue-900', tag: 'bg-blue-100 text-blue-700' };
+  if (a.includes('drainage')) return { bg: 'bg-teal-50', border: 'border-teal-200', text: 'text-teal-900', tag: 'bg-teal-100 text-teal-700' };
+  if (a.includes('check-in') || a.includes('selfie')) return { bg: 'bg-indigo-50', border: 'border-indigo-200', text: 'text-indigo-900', tag: 'bg-indigo-100 text-indigo-700' };
+  if (a.includes('whatsapp') || a.includes('document')) return { bg: 'bg-fuchsia-50', border: 'border-fuchsia-200', text: 'text-fuchsia-900', tag: 'bg-fuchsia-100 text-fuchsia-700' };
+  if (a.includes('verified') || a.includes('completed') || a.includes('signed off') || a.includes('approved')) return { bg: 'bg-emerald-50', border: 'border-emerald-200', text: 'text-emerald-900', tag: 'bg-emerald-100 text-emerald-700' };
+  if (a.includes('buffer')) return { bg: 'bg-amber-50', border: 'border-amber-200', text: 'text-amber-900', tag: 'bg-amber-100 text-amber-700' };
+  if (a.includes('reset') || a.includes('overridden') || a.includes('rejected') || a.includes('deleted')) return { bg: 'bg-rose-50', border: 'border-rose-200', text: 'text-rose-900', tag: 'bg-rose-100 text-rose-700' };
+  
+  return { bg: 'bg-white', border: 'border-zinc-200', text: 'text-zinc-900', tag: 'bg-zinc-100 text-zinc-600' };
+};
+
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
@@ -67,7 +81,14 @@ export default function App() {
     
     const fetchLogs = async () => {
       const { data } = await supabase.from('activityLogs').select('*').order('timestamp', { ascending: false }).limit(100);
-      if (data) setActivityLogs(data as ActivityLog[]);
+      if (data) {
+        // Filter out any login/logout logs to keep the feed focused on Assignments
+        const filteredLogs = (data as ActivityLog[]).filter(log => 
+          !log.action.toLowerCase().includes('logged in') && 
+          !log.action.toLowerCase().includes('logged out')
+        );
+        setActivityLogs(filteredLogs);
+      }
     };
     fetchLogs();
 
@@ -103,7 +124,8 @@ export default function App() {
       }
 
       setProfile(data as UserProfile);
-      logActivity(user, data, "Logged into the system");
+      
+      // Removed the 'Logged into the system' log activity to keep logs clean
 
     } catch (error) {
       console.error('Error fetching profile:', error);
@@ -127,7 +149,7 @@ export default function App() {
   };
 
   const signOut = async () => {
-    logActivity(user, profile, "Logged out of the system");
+    // Removed the 'Logged out' log activity to keep logs clean
     await supabase.auth.signOut();
   };
 
@@ -264,7 +286,6 @@ export default function App() {
           </div>
         </div>
 
-        {/* PERFECT LAYOUT FIX: Used pl-72 instead of ml-72 to prevent horizontal overflow */}
         <main className="flex-1 lg:pl-72 flex flex-col min-h-screen pt-16 lg:pt-0 w-full">
           
           <header className="hidden lg:flex bg-white/80 backdrop-blur-md border-b border-zinc-200 sticky top-0 z-30 px-8 py-5 items-center justify-between w-full">
@@ -299,11 +320,11 @@ export default function App() {
         {isActivityOpen && (
           <>
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsActivityOpen(false)} className="fixed inset-0 bg-black/20 backdrop-blur-sm z-50" />
-            <motion.div initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }} transition={{ type: 'spring', damping: 25, stiffness: 200 }} className="fixed top-0 right-0 w-full sm:w-[400px] h-full bg-white shadow-2xl z-50 border-l border-zinc-200 flex flex-col">
+            <motion.div initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }} transition={{ type: 'spring', damping: 25, stiffness: 200 }} className="fixed top-0 right-0 w-full sm:w-[450px] h-full bg-white shadow-2xl z-50 border-l border-zinc-200 flex flex-col">
               <div className="p-6 border-b border-zinc-100 flex items-center justify-between shrink-0 bg-zinc-50">
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 bg-black text-white rounded-xl flex items-center justify-center shadow-md"><Bell size={20} /></div>
-                  <div><h3 className="font-bold text-lg">System Activity</h3><p className="text-xs text-zinc-500">Live global logs</p></div>
+                  <div><h3 className="font-bold text-lg">System Activity</h3><p className="text-xs text-zinc-500">Live global assignment logs</p></div>
                 </div>
                 <div className="flex items-center gap-2">
                   {profile.role === 'admin' && activityLogs.length > 0 && <button onClick={clearAllLogs} className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors" title="Clear All Logs"><Trash2 size={18} /></button>}
@@ -315,23 +336,29 @@ export default function App() {
                 {activityLogs.length === 0 ? (
                   <div className="text-center py-12 text-zinc-400 flex flex-col items-center"><Bell size={32} className="mb-3 opacity-20" /><p className="font-bold">No activity yet</p><p className="text-xs mt-1">Actions performed in the system will appear here.</p></div>
                 ) : (
-                  activityLogs.map(log => (
-                    <div key={log.id} className="bg-white p-4 rounded-2xl border border-zinc-100 shadow-sm relative group">
-                      <div className="flex items-start justify-between mb-2 gap-4">
-                        <div>
-                          <p className="text-sm font-medium text-zinc-900"><span className="font-bold">{log.userName}</span> {log.action}</p>
-                          {log.details && <p className="text-xs text-zinc-500 mt-1 italic">"{log.details}"</p>}
+                  activityLogs.map(log => {
+                    const style = getLogStyle(log.action);
+                    return (
+                      <div key={log.id} className={cn("p-5 rounded-2xl border shadow-sm relative group transition-all", style.bg, style.border)}>
+                        <div className="flex items-start justify-between mb-2 gap-4">
+                          <div>
+                            <p className={cn("text-sm leading-snug", style.text)}>
+                              <span className="font-black block text-base mb-0.5">{log.action}</span>
+                              <span className="font-bold">{log.userName}</span>
+                            </p>
+                            {log.details && <p className={cn("text-xs mt-2 font-medium opacity-90", style.text)}>"{log.details}"</p>}
+                          </div>
+                          {profile.role === 'admin' && (
+                            <button onClick={() => deleteActivityLog(log.id)} className="text-zinc-400 hover:text-red-500 bg-white/50 p-1.5 rounded-lg transition-colors opacity-0 group-hover:opacity-100 shrink-0"><Trash2 size={14} /></button>
+                          )}
                         </div>
-                        {profile.role === 'admin' && (
-                          <button onClick={() => deleteActivityLog(log.id)} className="text-zinc-300 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100 shrink-0"><Trash2 size={14} /></button>
-                        )}
+                        <div className="flex items-center gap-2 mt-4 text-[10px] font-black uppercase tracking-wider">
+                          <span className={cn("px-2 py-1 rounded shadow-sm", style.tag)}>{log.userRole}</span>
+                          <span className={cn("opacity-70", style.text)}>{new Date(log.timestamp).toLocaleString()}</span>
+                        </div>
                       </div>
-                      <div className="flex items-center gap-2 mt-3 text-[10px] font-bold uppercase tracking-wider">
-                        <span className="text-blue-600 bg-blue-50 px-2 py-0.5 rounded">{log.userRole}</span>
-                        <span className="text-zinc-400">{new Date(log.timestamp).toLocaleString()}</span>
-                      </div>
-                    </div>
-                  ))
+                    );
+                  })
                 )}
               </div>
             </motion.div>

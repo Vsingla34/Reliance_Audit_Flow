@@ -1,12 +1,15 @@
 import React, { useEffect, useState } from 'react';
-import { supabase } from '../supabase';
+import { supabase, logActivity } from '../supabase';
 import { Distributor, UserProfile } from '../types';
-import { Plus, Search, Store, MapPin, Edit2, Trash2, X, Upload, Download, IndianRupee, User as UserIcon, Network, Filter, ChevronLeft, ChevronRight } from 'lucide-react';
+import { 
+  Plus, Search, Store, MapPin, Edit2, Trash2, X, Upload, Download,
+  IndianRupee, User as UserIcon, Network, Filter, ChevronLeft, ChevronRight, Mail, Send, Loader2
+} from 'lucide-react';
 import { cn, useAuth } from '../App';
 import { motion, AnimatePresence } from 'motion/react';
 
 export function DistributorsModule() {
-  const { profile } = useAuth();
+  const { profile, user } = useAuth();
   const [distributors, setDistributors] = useState<Distributor[]>([]);
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
@@ -17,12 +20,19 @@ export function DistributorsModule() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   
+  // --- BULK EMAIL STATE ---
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [isEmailModalOpen, setIsEmailModalOpen] = useState(false);
+  const [emailSubject, setEmailSubject] = useState('');
+  const [emailBody, setEmailBody] = useState('');
+  const [isSendingEmail, setIsSendingEmail] = useState(false);
+  
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 25; 
   
   const [editingDist, setEditingDist] = useState<Distributor | null>(null);
   const [formData, setFormData] = useState<Partial<Distributor>>({
-    code: '', anchorName: '', name: '', email: '', contactPerson: '', contactNumber: '', address: '', city: '', state: '', region: '', approvedValue: 0, hoId: '', dmId: '', smId: '', asmId: '', aseId: '', active: true
+    code: '', anchorName: '', name: '', approvedValue: 0, hoId: '', dmId: '', smId: '', asmId: '', aseId: '', active: true, address: '', city: '', state: '', region: ''
   });
 
   const fetchData = async () => {
@@ -39,6 +49,9 @@ export function DistributorsModule() {
         supabase.from('users').select('*')
       ]);
       
+      if (distRes.error) throw distRes.error;
+      if (usersRes.error) throw usersRes.error;
+
       if (distRes.data) setDistributors(distRes.data as Distributor[]);
       if (usersRes.data) setUsers(usersRes.data as UserProfile[]);
     } catch (error) { console.error("Error fetching data:", error); }
@@ -50,14 +63,15 @@ export function DistributorsModule() {
     return () => { supabase.removeChannel(channel); };
   }, [profile]);
 
-  useEffect(() => { setCurrentPage(1); }, [searchTerm, filterAse, filterAsm]);
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, filterAse, filterAsm]);
 
   const filteredDistributors = distributors.filter(d => {
-    const searchLower = searchTerm.toLowerCase();
-    const matchesSearch = d.name.toLowerCase().includes(searchLower) || 
-                          d.code.toLowerCase().includes(searchLower) ||
-                          (d.anchorName?.toLowerCase() || '').includes(searchLower) ||
-                          (d.city?.toLowerCase() || '').includes(searchLower);
+    const matchesSearch = d.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                          d.code.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                          (d.anchorName?.toLowerCase() || '').includes(searchTerm.toLowerCase()) ||
+                          (d.city?.toLowerCase() || '').includes(searchTerm.toLowerCase());
     const matchesAse = filterAse === 'all' || d.aseId === filterAse;
     const matchesAsm = filterAsm === 'all' || d.asmId === filterAsm;
     return matchesSearch && matchesAse && matchesAsm;
@@ -66,17 +80,87 @@ export function DistributorsModule() {
   const totalPages = Math.ceil(filteredDistributors.length / itemsPerPage);
   const paginatedDistributors = filteredDistributors.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
+  const toggleSelectAll = () => {
+    if (selectedIds.size === filteredDistributors.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(filteredDistributors.map(d => d.id)));
+    }
+  };
+
+  const toggleSelect = (id: string) => {
+    const newSet = new Set(selectedIds);
+    if (newSet.has(id)) newSet.delete(id);
+    else newSet.add(id);
+    setSelectedIds(newSet);
+  };
+
+  // --- SEND EMAIL TO ASEs LOGIC ---
+  const handleSendBulkEmail = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user || !profile) return;
+    
+    const selectedDistributors = distributors.filter(d => selectedIds.has(d.id));
+    const aseEmailSet = new Set<string>();
+
+    selectedDistributors.forEach(d => {
+      if (d.aseId) {
+        const ase = users.find(u => u.uid === d.aseId);
+        if (ase && ase.email && ase.email.trim() !== '') {
+          aseEmailSet.add(ase.email.trim());
+        }
+      }
+    });
+
+    const emails = Array.from(aseEmailSet);
+
+    if (emails.length === 0) {
+      alert("None of the selected distributors have an assigned Area Sales Executive (ASE) with a valid email address.");
+      return;
+    }
+
+    setIsSendingEmail(true);
+    try {
+      const { error } = await supabase.functions.invoke('send-email', {
+        body: { emails, subject: emailSubject, message: emailBody }
+      });
+      
+      if (error) throw error;
+      
+      logActivity(user, profile, "Bulk Email Sent", `Sent email to ${emails.length} ASE(s) regarding selected distributors. Subject: "${emailSubject}"`);
+      
+      alert(`Successfully sent email to ${emails.length} assigned ASE(s)!`);
+      setIsEmailModalOpen(false);
+      setEmailSubject('');
+      setEmailBody('');
+      setSelectedIds(new Set());
+      
+    } catch (error: any) {
+      console.error("Email error full details:", error);
+      
+      // Extract exactly what the Edge Function is complaining about
+      let realMessage = error.message;
+      if (error.context) {
+        try {
+          const contextData = await error.context.json();
+          realMessage = contextData.error || error.message;
+        } catch (e) {
+          // Fallback if parsing fails
+        }
+      }
+      
+      alert(`Failed to send emails: ${realMessage}`);
+    } finally {
+      setIsSendingEmail(false);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      // SANITIZATION: Convert empty strings to proper database nulls to prevent UUID format crashes
       const sanitizedData = { ...formData };
       const fkFields: (keyof Distributor)[] = ['hoId', 'dmId', 'smId', 'asmId', 'aseId'];
-      fkFields.forEach(field => {
-        if (sanitizedData[field] === '') {
-          sanitizedData[field] = null as any;
-        }
-      });
+      fkFields.forEach(field => { if (sanitizedData[field] === '') sanitizedData[field] = null as any; });
 
       if (editingDist) {
         const { error } = await supabase.from('distributors').update(sanitizedData).eq('id', editingDist.id);
@@ -86,18 +170,13 @@ export function DistributorsModule() {
         const newDistId = Math.random().toString(36).substring(7);
         const { error } = await supabase.from('distributors').insert([{ ...sanitizedData, id: newDistId }]);
         if (error) throw error;
-        
         const tentativeTicket = {
           id: Math.random().toString(36).substring(7), distributorId: newDistId, proposedDate: null, auditorId: null, approvedValue: sanitizedData.approvedValue, maxAllowedValue: (sanitizedData.approvedValue || 0) * 1.05, status: 'tentative', verifiedTotal: 0, dateProposals: [], comments: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
         };
         await supabase.from('auditTickets').insert([tentativeTicket]);
       }
-      setIsModalOpen(false); setEditingDist(null); resetForm();
-      fetchData(); // Refresh the UI immediately
-    } catch (error: any) { 
-      console.error("Database Error:", error);
-      alert(`Failed to save distributor: ${error.message || 'Unknown database error.'}`); 
-    }
+      setIsModalOpen(false); setEditingDist(null); resetForm(); fetchData();
+    } catch (error: any) { alert(`Failed to save distributor: ${error.message}`); }
   };
 
   const deleteDist = async (id: string) => {
@@ -110,11 +189,12 @@ export function DistributorsModule() {
           await supabase.from('auditTickets').delete().in('id', ticketIds);
         }
         await supabase.from('distributors').delete().eq('id', id);
+        setSelectedIds(prev => { const n = new Set(prev); n.delete(id); return n; });
       } catch (error) { alert("Failed to delete distributor."); }
     }
   };
 
-  const resetForm = () => { setFormData({ code: '', anchorName: '', name: '', email: '', approvedValue: 0, hoId: '', dmId: '', smId: '', asmId: '', aseId: '', active: true, address: '', city: '', state: '', region: '' }); };
+  const resetForm = () => { setFormData({ code: '', anchorName: '', name: '', approvedValue: 0, hoId: '', dmId: '', smId: '', asmId: '', aseId: '', active: true, address: '', city: '', state: '', region: '' }); };
 
   const openEditModal = (dist: Distributor) => {
     setEditingDist(dist);
@@ -156,7 +236,7 @@ export function DistributorsModule() {
           await supabase.from('distributors').insert(newDistributors);
           alert(`Successfully imported ${newDistributors.length} distributors!`);
         }
-      } catch (error: any) { alert(`Failed to import distributors.`); } 
+      } catch (error: any) { alert(`Failed to import. Make sure your CSV matches the template.`); } 
       finally { setIsImportModalOpen(false); if (e.target) e.target.value = ''; }
     };
     reader.readAsText(file);
@@ -209,6 +289,13 @@ export function DistributorsModule() {
         
         {isAdminOrHO && (
           <div className="flex flex-wrap md:flex-nowrap gap-4">
+            <AnimatePresence>
+              {selectedIds.size > 0 && (
+                <motion.button initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }} onClick={() => setIsEmailModalOpen(true)} className="flex items-center justify-center gap-2 px-6 py-4 bg-blue-600 text-white rounded-2xl font-bold hover:bg-blue-700 transition-all shadow-xl shadow-blue-600/20 active:scale-95 whitespace-nowrap">
+                  <Mail size={20} /> Email ASEs ({selectedIds.size})
+                </motion.button>
+              )}
+            </AnimatePresence>
             <button onClick={() => setIsImportModalOpen(true)} className="flex items-center justify-center gap-2 px-6 py-4 bg-zinc-100 text-zinc-900 rounded-2xl font-bold hover:bg-zinc-200 transition-all active:scale-95 whitespace-nowrap"><Upload size={20} /> Import</button>
             <button onClick={() => { resetForm(); setIsModalOpen(true); }} className="flex items-center justify-center gap-2 px-6 py-4 bg-black text-white rounded-2xl font-bold hover:bg-zinc-800 transition-all shadow-xl shadow-black/10 active:scale-95 whitespace-nowrap"><Plus size={20} /> Add Distributor</button>
           </div>
@@ -220,6 +307,16 @@ export function DistributorsModule() {
           <table className="w-full">
             <thead>
               <tr className="text-left bg-zinc-50/50 border-b border-zinc-100">
+                {isAdminOrHO && (
+                  <th className="px-6 py-5 w-10">
+                    <input 
+                      type="checkbox" 
+                      className="w-5 h-5 rounded border-zinc-300 text-black focus:ring-black cursor-pointer"
+                      checked={selectedIds.size === filteredDistributors.length && filteredDistributors.length > 0}
+                      onChange={toggleSelectAll}
+                    />
+                  </th>
+                )}
                 <th className="px-8 py-5 text-xs font-bold text-zinc-400 uppercase tracking-wider">Distributor</th>
                 <th className="px-8 py-5 text-xs font-bold text-zinc-400 uppercase tracking-wider">Region / Location</th>
                 <th className="px-8 py-5 text-xs font-bold text-zinc-400 uppercase tracking-wider">Hierarchy (ASE)</th>
@@ -229,20 +326,30 @@ export function DistributorsModule() {
             </thead>
             <tbody className="divide-y divide-zinc-100">
               {paginatedDistributors.map((dist) => (
-                <tr key={dist.id} className="hover:bg-zinc-50/50 transition-colors group">
+                <tr key={dist.id} className={cn("hover:bg-zinc-50/50 transition-colors group", selectedIds.has(dist.id) && "bg-blue-50/30")}>
+                  {isAdminOrHO && (
+                    <td className="px-6 py-5">
+                      <input 
+                        type="checkbox" 
+                        className="w-5 h-5 rounded border-zinc-300 text-black focus:ring-black cursor-pointer"
+                        checked={selectedIds.has(dist.id)}
+                        onChange={() => toggleSelect(dist.id)}
+                      />
+                    </td>
+                  )}
                   <td className="px-8 py-5">
                     <div className="flex items-center gap-4">
-                      <div className="w-12 h-12 rounded-2xl bg-zinc-100 flex items-center justify-center shrink-0">
-                        <Store size={20} className="text-zinc-500" />
+                      <div className={cn("w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 transition-colors", selectedIds.has(dist.id) ? "bg-blue-100 text-blue-600" : "bg-zinc-100 text-zinc-500")}>
+                        <Store size={20} />
                       </div>
                       <div>
                         <div className="flex items-center gap-2 mb-1">
                           <p className="font-bold text-zinc-900">{dist.name}</p>
                           {!dist.active && <span className="px-2 py-0.5 rounded-lg bg-red-100 text-red-600 text-[10px] font-bold uppercase tracking-wider">Inactive</span>}
                         </div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
                           <p className="text-xs font-mono text-zinc-500 bg-zinc-100 px-2 py-0.5 rounded inline-block">{dist.code}</p>
-                          {dist.anchorName && <p className="text-[10px] font-bold uppercase tracking-wider text-blue-600 bg-blue-50 px-2 py-0.5 rounded inline-block">Anchor: {dist.anchorName}</p>}
+                          {dist.anchorName && <p className="text-[10px] font-bold uppercase tracking-wider text-purple-600 bg-purple-50 px-2 py-0.5 rounded inline-block">Anchor: {dist.anchorName}</p>}
                         </div>
                       </div>
                     </div>
@@ -278,6 +385,13 @@ export function DistributorsModule() {
                   )}
                 </tr>
               ))}
+              {filteredDistributors.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="px-8 py-16 text-center">
+                    <div className="flex flex-col items-center justify-center text-zinc-400"><Store size={48} className="mb-4 text-zinc-200" /><p className="text-lg font-medium text-zinc-900 mb-1">No distributors found</p></div>
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
@@ -297,7 +411,48 @@ export function DistributorsModule() {
         )}
       </div>
 
-      {/* --- MODALS --- */}
+      {/* --- BULK EMAIL MODAL --- */}
+      <AnimatePresence>
+        {isEmailModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 md:p-6">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => !isSendingEmail && setIsEmailModalOpen(false)} className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
+            <motion.div initial={{ opacity: 0, scale: 0.9, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9, y: 20 }} className="relative w-full max-w-2xl bg-white rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col">
+              
+              <div className="p-6 md:p-8 border-b border-zinc-100 flex items-center justify-between shrink-0 bg-white">
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 bg-blue-50 rounded-2xl flex items-center justify-center"><Mail className="text-blue-600" size={24} /></div>
+                  <div>
+                    <h4 className="text-2xl font-bold tracking-tight">Email Area Sales Execs</h4>
+                    <p className="text-sm font-bold text-blue-600 mt-1">Notifying ASEs for {selectedIds.size} selected distributor(s)</p>
+                  </div>
+                </div>
+                <button type="button" onClick={() => !isSendingEmail && setIsEmailModalOpen(false)} className="p-2 hover:bg-zinc-100 rounded-xl transition-colors"><X size={20} /></button>
+              </div>
+              
+              <div className="p-6 md:p-8 flex-1 overflow-y-auto bg-zinc-50/50">
+                <form id="bulk-email-form" onSubmit={handleSendBulkEmail} className="space-y-6">
+                  <div>
+                    <label className="text-xs font-bold uppercase tracking-wider text-zinc-500 ml-1">Subject</label>
+                    <input required type="text" placeholder="Important Policy Update..." className="w-full mt-2 px-4 py-3 bg-white border border-zinc-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all shadow-sm font-bold text-lg" value={emailSubject} onChange={(e) => setEmailSubject(e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="text-xs font-bold uppercase tracking-wider text-zinc-500 ml-1">Message</label>
+                    <textarea required rows={8} placeholder="Dear Area Sales Executives,&#10;&#10;We are writing to inform you..." className="w-full mt-2 p-4 bg-white border border-zinc-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all shadow-sm resize-none custom-scrollbar" value={emailBody} onChange={(e) => setEmailBody(e.target.value)} />
+                  </div>
+                </form>
+              </div>
+              
+              <div className="p-6 md:p-8 border-t border-zinc-100 shrink-0 bg-white flex justify-end gap-3">
+                <button type="button" onClick={() => setIsEmailModalOpen(false)} disabled={isSendingEmail} className="px-6 py-4 text-sm font-bold text-zinc-500 hover:text-black transition-colors disabled:opacity-50">Cancel</button>
+                <button type="submit" form="bulk-email-form" disabled={isSendingEmail} className="px-10 py-4 bg-blue-600 text-white rounded-2xl font-bold hover:bg-blue-700 transition-all shadow-xl shadow-blue-600/20 active:scale-95 flex items-center gap-2">
+                  {isSendingEmail ? <><Loader2 size={18} className="animate-spin" /> Sending...</> : <><Send size={18} /> Send to ASEs</>}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       <AnimatePresence>
         {isModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 md:p-6">
@@ -307,7 +462,7 @@ export function DistributorsModule() {
               <div className="p-6 md:p-8 border-b border-zinc-100 flex items-center justify-between shrink-0 bg-white z-10">
                 <div className="flex items-center gap-4">
                   <div className="w-12 h-12 bg-zinc-100 rounded-2xl flex items-center justify-center"><Store className="text-black" size={20} /></div>
-                  <div><h4 className="text-xl md:text-2xl font-bold tracking-tight">{editingDist ? 'Edit Distributor' : 'Add New Distributor'}</h4></div>
+                  <div><h4 className="text-xl md:text-2xl font-bold tracking-tight">{editingDist ? 'Edit Distributor' : 'Add New Distributor'}</h4><p className="text-sm text-zinc-500">Configure hierarchy mapping and details.</p></div>
                 </div>
                 <button type="button" onClick={() => setIsModalOpen(false)} className="p-2 hover:bg-zinc-100 rounded-xl transition-colors"><X size={20} /></button>
               </div>
@@ -315,16 +470,18 @@ export function DistributorsModule() {
               <div className="p-6 md:p-8 overflow-y-auto custom-scrollbar">
                 <form id="distributor-form" onSubmit={handleSubmit} className="space-y-8">
                   <div>
-                    <h5 className="text-sm font-bold uppercase tracking-wider text-zinc-900 mb-4">Identification</h5>
+                    <h5 className="text-sm font-bold uppercase tracking-wider text-zinc-900 mb-4 flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-black"></span> Identification</h5>
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                      <div className="space-y-2"><label className="text-xs font-bold uppercase tracking-wider text-zinc-400">Distributor Code *</label><input required className="w-full px-4 py-3 bg-zinc-50 border-none rounded-xl focus:ring-2 focus:ring-black transition-all" value={formData.code} onChange={(e) => setFormData({ ...formData, code: e.target.value })} /></div>
-                      <div className="space-y-2"><label className="text-xs font-bold uppercase tracking-wider text-zinc-400">Anchor Name</label><input className="w-full px-4 py-3 bg-zinc-50 border-none rounded-xl focus:ring-2 focus:ring-black transition-all" value={formData.anchorName} onChange={(e) => setFormData({ ...formData, anchorName: e.target.value })} /></div>
-                      <div className="space-y-2"><label className="text-xs font-bold uppercase tracking-wider text-zinc-400">Distributor Name *</label><input required className="w-full px-4 py-3 bg-zinc-50 border-none rounded-xl focus:ring-2 focus:ring-black transition-all" value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} /></div>
+                      <div className="space-y-2"><label className="text-xs font-bold uppercase tracking-wider text-zinc-400">Distributor Code *</label><input required className="w-full px-4 py-3 bg-zinc-50 border-none rounded-xl focus:ring-2 focus:ring-black transition-all" value={formData.code} onChange={(e) => setFormData({ ...formData, code: e.target.value })} placeholder="e.g. DIST-001" /></div>
+                      <div className="space-y-2"><label className="text-xs font-bold uppercase tracking-wider text-zinc-400">Distributor Name *</label><input required className="w-full px-4 py-3 bg-zinc-50 border-none rounded-xl focus:ring-2 focus:ring-black transition-all" value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} placeholder="Company Name Ltd." /></div>
+                      <div className="space-y-2"><label className="text-xs font-bold uppercase tracking-wider text-zinc-400">Anchor Name</label><input className="w-full px-4 py-3 bg-zinc-50 border-none rounded-xl focus:ring-2 focus:ring-black transition-all" value={formData.anchorName} onChange={(e) => setFormData({ ...formData, anchorName: e.target.value })} placeholder="e.g. Reliance" /></div>
                     </div>
                   </div>
 
+                  <hr className="border-zinc-100" />
+
                   <div>
-                    <h5 className="text-sm font-bold uppercase tracking-wider text-zinc-900 mb-4">Hierarchy Mapping</h5>
+                    <h5 className="text-sm font-bold uppercase tracking-wider text-zinc-900 mb-4 flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-purple-500"></span> Management Hierarchy Mapping</h5>
                     <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4 bg-purple-50/50 p-6 rounded-3xl border border-purple-100">
                       {renderUserSelect("Head Office", "ho", "hoId")}
                       {renderUserSelect("Division Mgr (DM)", "dm", "dmId")}
@@ -334,14 +491,21 @@ export function DistributorsModule() {
                     </div>
                   </div>
 
+                  <hr className="border-zinc-100" />
+
                   <div>
-                    <h5 className="text-sm font-bold uppercase tracking-wider text-zinc-900 mb-4">Financials & Location</h5>
+                    <h5 className="text-sm font-bold uppercase tracking-wider text-zinc-900 mb-4 flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-blue-500"></span> Financials & Location</h5>
                     <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                       <div className="space-y-2"><label className="text-xs font-bold uppercase tracking-wider text-zinc-400">Budget Limit (₹) *</label><input required type="number" min="0" className="w-full px-4 py-3 bg-zinc-50 border-none rounded-xl focus:ring-2 focus:ring-blue-500 transition-all font-medium" value={formData.approvedValue} onChange={(e) => setFormData({ ...formData, approvedValue: parseFloat(e.target.value) })} /></div>
-                      <div className="space-y-2"><label className="text-xs font-bold uppercase tracking-wider text-zinc-400">Region</label><input className="w-full px-4 py-3 bg-zinc-50 border-none rounded-xl focus:ring-2 focus:ring-black transition-all" value={formData.region} onChange={(e) => setFormData({ ...formData, region: e.target.value })} /></div>
+                      <div className="space-y-2"><label className="text-xs font-bold uppercase tracking-wider text-zinc-400">Region</label><input className="w-full px-4 py-3 bg-zinc-50 border-none rounded-xl focus:ring-2 focus:ring-black transition-all" value={formData.region} onChange={(e) => setFormData({ ...formData, region: e.target.value })} placeholder="North" /></div>
                       <div className="space-y-2"><label className="text-xs font-bold uppercase tracking-wider text-zinc-400">City</label><input className="w-full px-4 py-3 bg-zinc-50 border-none rounded-xl focus:ring-2 focus:ring-black transition-all" value={formData.city} onChange={(e) => setFormData({ ...formData, city: e.target.value })} /></div>
                       <div className="space-y-2"><label className="text-xs font-bold uppercase tracking-wider text-zinc-400">State</label><input className="w-full px-4 py-3 bg-zinc-50 border-none rounded-xl focus:ring-2 focus:ring-black transition-all" value={formData.state} onChange={(e) => setFormData({ ...formData, state: e.target.value })} /></div>
                     </div>
+                  </div>
+
+                  <div className="flex items-center gap-3 bg-zinc-50 p-4 rounded-xl border border-zinc-100 w-max">
+                    <input type="checkbox" id="distActive" className="w-5 h-5 rounded border-zinc-300 text-black focus:ring-black cursor-pointer" checked={formData.active} onChange={(e) => setFormData({ ...formData, active: e.target.checked })} />
+                    <label htmlFor="distActive" className="text-sm font-bold cursor-pointer select-none">Active Distributor</label>
                   </div>
                 </form>
               </div>

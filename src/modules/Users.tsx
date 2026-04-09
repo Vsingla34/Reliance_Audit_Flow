@@ -1,29 +1,15 @@
 import React, { useEffect, useState } from 'react';
-import { supabase } from '../supabase';
+import { supabase, logActivity } from '../supabase';
 import { UserProfile } from '../types';
 import { 
-  Plus, 
-  Search, 
-  User as UserIcon, 
-  Mail, 
-  Shield, 
-  MapPin, 
-  Edit2, 
-  Trash2, 
-  X,
-  CheckCircle2,
-  Loader2,
-  Phone,
-  Upload,
-  Download,
-  ChevronLeft,
-  ChevronRight
+  Plus, Search, User as UserIcon, Mail, Shield, MapPin, Edit2, 
+  X, CheckCircle2, Loader2, Phone, Upload, Download, ChevronLeft, ChevronRight, Ban, CheckCircle
 } from 'lucide-react';
 import { cn, useAuth } from '../App';
 import { motion, AnimatePresence } from 'motion/react';
 
 export function UsersModule() {
-  const { profile } = useAuth();
+  const { profile, user } = useAuth();
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   
@@ -33,17 +19,11 @@ export function UsersModule() {
   const [isImporting, setIsImporting] = useState(false);
   const [editingUser, setEditingUser] = useState<UserProfile | null>(null);
   
-  // --- OPTIMIZATION: Pagination State ---
   const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 25; // Render 25 at a time for maximum speed
+  const itemsPerPage = 25; 
   
   const [formData, setFormData] = useState<Partial<UserProfile>>({
-    name: '',
-    email: '',
-    mobile: '', 
-    role: 'auditor',
-    region: '',
-    active: true
+    name: '', email: '', mobile: '', role: 'auditor', region: '', active: true
   });
 
   const fetchData = async () => {
@@ -64,7 +44,6 @@ export function UsersModule() {
     return () => { supabase.removeChannel(channel); };
   }, []);
 
-  // Reset to page 1 whenever they search
   useEffect(() => {
     setCurrentPage(1);
   }, [searchTerm]);
@@ -76,7 +55,6 @@ export function UsersModule() {
     (u.mobile && u.mobile.includes(searchTerm))
   );
 
-  // --- OPTIMIZATION: Slice the array to only show current page ---
   const totalPages = Math.ceil(filteredUsers.length / itemsPerPage);
   const paginatedUsers = filteredUsers.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
@@ -88,13 +66,17 @@ export function UsersModule() {
       if (editingUser) {
         const { error } = await supabase.from('users').update(formData).eq('uid', editingUser.uid);
         if (error) throw error;
+        
+        logActivity(user, profile, "User Updated", `Admin updated profile details for ${formData.name}`);
         alert(`Successfully updated user profile for ${formData.name}.`);
       } else {
         const { data, error } = await supabase.functions.invoke('invite-user', {
           body: { email: formData.email, name: formData.name, role: formData.role, region: formData.region, mobile: formData.mobile }
         });
         if (error || data.error) throw new Error(error?.message || data.error);
-        alert(`User created successfully! An invite link has been dispatched to ${formData.email} via Google SMTP.`);
+        
+        logActivity(user, profile, "User Invited", `Admin invited a new ${formData.role.toUpperCase()} (${formData.name}) to the portal`);
+        alert(`User created successfully! An invite link has been dispatched to ${formData.email}.`);
       }
       
       setIsModalOpen(false);
@@ -108,13 +90,23 @@ export function UsersModule() {
     }
   };
 
-  const deleteUser = async (uid: string) => {
-    if (window.confirm("Are you sure you want to delete this user? This will remove their access to the portal.")) {
+  // --- THE FIX: Soft Deletion (Deactivation) ---
+  const toggleUserStatus = async (targetUser: UserProfile) => {
+    const warningMsg = targetUser.active 
+      ? `Are you sure you want to DEACTIVATE ${targetUser.name}? They will be instantly locked out of the portal, but their past audits and history will be safely preserved.`
+      : `Are you sure you want to RESTORE access for ${targetUser.name}?`;
+
+    if (window.confirm(warningMsg)) {
       try {
-        const { error } = await supabase.from('users').delete().eq('uid', uid);
+        const newStatus = !targetUser.active;
+        const { error } = await supabase.from('users').update({ active: newStatus }).eq('uid', targetUser.uid);
         if (error) throw error;
-      } catch (error) {
-        console.error("Error deleting user:", error);
+
+        logActivity(user, profile, `Account ${newStatus ? 'Activated' : 'Deactivated'}`, `Admin ${newStatus ? 'restored' : 'revoked'} system access for ${targetUser.name}`);
+        
+      } catch (error: any) {
+        console.error("Error updating user status:", error);
+        alert(`Failed to update account status: ${error.message}`);
       }
     }
   };
@@ -166,6 +158,8 @@ export function UsersModule() {
             successCount++;
           } catch (err) { failCount++; }
         }
+        
+        logActivity(user, profile, "Bulk Import", `Admin bulk imported ${successCount} new users`);
         alert(`Import complete! Successfully invited ${successCount} users. ${failCount > 0 ? `Failed to add ${failCount} users.` : ''}`);
       } catch (error) {
         alert("Error parsing CSV. Please check the format.");
@@ -219,17 +213,17 @@ export function UsersModule() {
               {paginatedUsers.map((u) => {
                 const isMe = u.uid === profile?.uid;
                 return (
-                  <tr key={u.uid} className="hover:bg-zinc-50/50 transition-colors group">
+                  <tr key={u.uid} className={cn("transition-colors group", !u.active ? "bg-red-50/20 hover:bg-red-50/40" : "hover:bg-zinc-50/50")}>
                     <td className="px-8 py-5">
                       <div className="flex items-center gap-4">
-                        <div className="w-12 h-12 rounded-full bg-zinc-100 flex items-center justify-center shrink-0 text-zinc-500 font-bold">
+                        <div className={cn("w-12 h-12 rounded-full flex items-center justify-center shrink-0 font-bold", !u.active ? "bg-red-100 text-red-600" : "bg-zinc-100 text-zinc-500")}>
                           {u.name.charAt(0).toUpperCase()}
                         </div>
                         <div>
                           <div className="flex items-center gap-2 mb-1">
-                            <p className="font-bold text-zinc-900">{u.name}</p>
+                            <p className={cn("font-bold", !u.active ? "text-red-900" : "text-zinc-900")}>{u.name}</p>
                             {isMe && <span className="bg-blue-100 text-blue-700 text-[10px] font-bold px-2 py-0.5 rounded-md uppercase">You</span>}
-                            {!u.active && <span className="bg-red-100 text-red-600 text-[10px] font-bold px-2 py-0.5 rounded-md uppercase">Inactive</span>}
+                            {!u.active && <span className="bg-red-100 text-red-600 text-[10px] font-bold px-2 py-0.5 rounded-md uppercase">Deactivated</span>}
                           </div>
                           <p className="text-xs text-zinc-500 flex items-center gap-1"><Mail size={12} /> {u.email}</p>
                           {u.mobile && <p className="text-xs text-zinc-500 flex items-center gap-1 mt-1"><Phone size={12} /> {u.mobile}</p>}
@@ -237,21 +231,30 @@ export function UsersModule() {
                       </div>
                     </td>
                     <td className="px-8 py-5">
-                      <div className="flex items-center gap-2 text-sm font-bold bg-zinc-50 px-3 py-1.5 rounded-xl inline-flex border border-zinc-100 uppercase tracking-wider text-[10px] text-zinc-700">
-                        <Shield size={14} className="text-zinc-400" /> {u.role}
+                      <div className={cn("flex items-center gap-2 text-sm font-bold px-3 py-1.5 rounded-xl inline-flex border uppercase tracking-wider text-[10px]", !u.active ? "bg-red-50 border-red-100 text-red-700" : "bg-zinc-50 border-zinc-100 text-zinc-700")}>
+                        <Shield size={14} className={!u.active ? "text-red-400" : "text-zinc-400"} /> {u.role}
                       </div>
                     </td>
                     <td className="px-8 py-5">
                       {u.region ? (
-                        <div className="flex items-center gap-2 text-sm text-zinc-600 bg-zinc-50 px-3 py-1.5 rounded-xl inline-flex border border-zinc-100">
-                          <MapPin size={14} className="text-zinc-400 shrink-0" /> <span>{u.region}</span>
+                        <div className={cn("flex items-center gap-2 text-sm px-3 py-1.5 rounded-xl inline-flex border", !u.active ? "bg-red-50 border-red-100 text-red-700" : "bg-zinc-50 border-zinc-100 text-zinc-600")}>
+                          <MapPin size={14} className={!u.active ? "text-red-400" : "text-zinc-400"} shrink-0 /> <span>{u.region}</span>
                         </div>
                       ) : <span className="text-sm text-zinc-400 italic">Global</span>}
                     </td>
                     <td className="px-8 py-5 text-right">
                       <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button onClick={() => { setEditingUser(u); setFormData(u); setIsModalOpen(true); }} className="p-2 text-zinc-400 hover:text-black hover:bg-zinc-100 rounded-xl transition-all" title="Edit User"><Edit2 size={16} /></button>
-                        {!isMe && <button onClick={() => deleteUser(u.uid)} className="p-2 text-zinc-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all" title="Delete User"><Trash2 size={16} /></button>}
+                        <button onClick={() => { setEditingUser(u); setFormData(u); setIsModalOpen(true); }} className="p-2 text-zinc-400 hover:text-black hover:bg-zinc-100 rounded-xl transition-all" title="Edit Profile"><Edit2 size={16} /></button>
+                        
+                        {!isMe && (
+                          <button 
+                            onClick={() => toggleUserStatus(u)} 
+                            className={cn("p-2 rounded-xl transition-all", u.active ? "text-zinc-400 hover:text-red-600 hover:bg-red-50" : "text-red-500 hover:text-emerald-600 hover:bg-emerald-50")} 
+                            title={u.active ? "Deactivate Account" : "Restore Access"}
+                          >
+                            {u.active ? <Ban size={16} /> : <CheckCircle size={16} />}
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -271,7 +274,6 @@ export function UsersModule() {
           </table>
         </div>
 
-        {/* --- OPTIMIZATION: Pagination Footer --- */}
         {filteredUsers.length > 0 && (
           <div className="p-6 border-t border-zinc-100 bg-zinc-50 flex flex-col md:flex-row items-center justify-between gap-4">
             <span className="text-sm font-medium text-zinc-500">
@@ -299,7 +301,6 @@ export function UsersModule() {
         )}
       </div>
 
-      {/* --- MODALS --- */}
       <AnimatePresence>
         {isImportModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-6">

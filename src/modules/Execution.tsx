@@ -40,9 +40,10 @@ export function ExecutionModule() {
   const [isUploadingSignoff, setIsUploadingSignoff] = useState(false);
   const signoffFileRef = useRef<HTMLInputElement>(null);
 
-  // New states for Field Auditor Form
   const [auditorNameInput, setAuditorNameInput] = useState('');
   const [auditorPhoneInput, setAuditorPhoneInput] = useState('');
+
+  const [activeTab, setActiveTab] = useState<'active' | 'drainage' | 'signoff' | 'completed'>('active');
 
   const distMap = useMemo(() => {
     const map = new Map<string, Distributor>();
@@ -69,7 +70,7 @@ export function ExecutionModule() {
       const fetchedDistributors = (dData || []) as Distributor[];
       setDistributors(fetchedDistributors);
 
-      let tQuery = supabase.from('auditTickets').select('*').in('status', ['scheduled', 'in_progress', 'auditor_submitted', 'drainage_pending', 'submitted', 'evidence_uploaded', 'signed']);
+      let tQuery = supabase.from('auditTickets').select('*').in('status', ['scheduled', 'in_progress', 'auditor_submitted', 'drainage_pending', 'submitted', 'evidence_uploaded', 'signed', 'closed']);
       if (profile.role === 'auditor') {
         tQuery = tQuery.or(`auditorId.eq.${profile.uid},auditorIds.cs.{${profile.uid}}`);
       }
@@ -128,6 +129,23 @@ export function ExecutionModule() {
       }
     }
   }, [tickets, activeTicket]);
+
+  // --- ADMIN OVERRIDE STATUS FUNCTION ---
+  const forceUpdateStatus = async (newStatus: string) => {
+    if (!activeTicket || !user || !profile) return;
+    if (!window.confirm(`Are you sure you want to force change the status to: ${newStatus.replace('_', ' ').toUpperCase()}?`)) return;
+
+    try {
+      await supabase.from('auditTickets').update({ status: newStatus, updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
+      setActiveTicket({ ...activeTicket, status: newStatus as any });
+      
+      const dist = distMap.get(activeTicket.distributorId);
+      logActivity(user, profile, "Status Overridden", `Admin manually changed status to ${newStatus.replace('_', ' ')} for ${dist?.name}`);
+      
+    } catch (error) {
+      console.error("Failed to force update status:", error);
+    }
+  };
 
   const resetAuditTicket = async () => {
     if (!activeTicket) return;
@@ -378,14 +396,34 @@ export function ExecutionModule() {
     return (
       <div className="space-y-6 pb-12 w-full min-w-0">
 
+        {/* --- DYNAMIC HEADER WITH ADMIN FORCE STATUS DROPDOWN --- */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 w-full">
           <button onClick={() => setActiveTicket(null)} className="flex items-center gap-2 text-sm font-bold text-zinc-500 hover:text-black transition-colors w-fit">
-            <ArrowLeft size={16} /> Back to Schedule
+            <ArrowLeft size={16} /> Back to List
           </button>
           
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             {isAdminOrHO && (
-              <button onClick={resetAuditTicket} className="flex items-center gap-2 px-4 py-2 bg-red-50 text-red-600 rounded-xl text-sm font-bold hover:bg-red-100 transition-all border border-red-100"><RotateCcw size={16} /> Reset to Scheduler</button>
+              <div className="flex items-center gap-2 bg-white border border-zinc-200 px-3 py-2 rounded-xl shadow-sm">
+                <span className="text-xs font-bold text-zinc-500 uppercase tracking-wider hidden md:inline">Force Status:</span>
+                <select
+                  className="text-sm font-bold bg-transparent outline-none cursor-pointer text-black"
+                  value={activeTicket.status}
+                  onChange={(e) => forceUpdateStatus(e.target.value)}
+                >
+                  <option value="scheduled">Active (Scheduled)</option>
+                  <option value="in_progress">Active (In Progress)</option>
+                  <option value="auditor_submitted">Awaiting ASE Review</option>
+                  <option value="drainage_pending">Drainage Pending</option>
+                  <option value="submitted">Pending Sign-off</option>
+                  <option value="signed">Completed (Signed)</option>
+                  <option value="closed">Closed</option>
+                </select>
+              </div>
+            )}
+
+            {isAdminOrHO && (
+              <button onClick={resetAuditTicket} className="flex items-center gap-2 px-4 py-2 bg-red-50 text-red-600 rounded-xl text-sm font-bold hover:bg-red-100 transition-all border border-red-100"><RotateCcw size={16} /> Reset</button>
             )}
             <button onClick={() => setIsChatOpen(true)} className="flex items-center gap-2 px-4 py-2 bg-blue-50 text-blue-600 rounded-xl text-sm font-bold hover:bg-blue-100 transition-all border border-blue-100"><MessageSquare size={16} /> Discussion {activeTicket.comments?.length ? `(${activeTicket.comments.length})` : ''}</button>
           </div>
@@ -768,26 +806,64 @@ export function ExecutionModule() {
     );
   }
 
-  const activeStatuses = ['scheduled', 'in_progress', 'auditor_submitted', 'drainage_pending', 'submitted', 'signed'];
-  const relevantTickets = tickets.filter(t => activeStatuses.includes(t.status));
+  // Calculate local timezone date string safely (YYYY-MM-DD)
+  const todayDate = new Date();
+  const offset = todayDate.getTimezoneOffset();
+  const localToday = new Date(todayDate.getTime() - (offset*60*1000));
+  const todayStr = localToday.toISOString().split('T')[0];
+
+  const activeTickets = tickets.filter(t => ['scheduled', 'in_progress', 'auditor_submitted'].includes(t.status));
+  const drainageTickets = tickets.filter(t => t.status === 'drainage_pending');
+  const signoffTickets = tickets.filter(t => ['submitted', 'evidence_uploaded'].includes(t.status));
+  const completedTickets = tickets.filter(t => ['signed', 'closed'].includes(t.status) && t.updatedAt?.startsWith(todayStr));
+
+  let displayTickets: AuditTicket[] = [];
+  if (activeTab === 'active') displayTickets = activeTickets;
+  else if (activeTab === 'drainage') displayTickets = drainageTickets;
+  else if (activeTab === 'signoff') displayTickets = signoffTickets;
+  else if (activeTab === 'completed') displayTickets = completedTickets;
 
   return (
     <div className="space-y-8 pb-12 w-full min-w-0">
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 w-full">
-        {relevantTickets.map(ticket => {
-          const dist = distMap.get(ticket.distributorId);
-          return (
-            <motion.div layout key={ticket.id} onClick={() => setActiveTicket(ticket)} className="bg-white p-6 rounded-[2rem] border border-zinc-200 shadow-sm hover:shadow-md hover:border-black transition-all cursor-pointer group flex flex-col w-full">
-              <div className="flex justify-between items-start mb-4">
-                <div className="w-12 h-12 bg-zinc-100 rounded-2xl flex items-center justify-center"><Store className="text-zinc-600" size={20} /></div>
-                <span className={cn("px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider bg-zinc-100 text-zinc-600")}>{ticket.status.replace('_', ' ')}</span>
-              </div>
-              <h4 className="text-lg font-bold tracking-tight mb-1">{dist?.name || 'Loading...'}</h4>
-              <p className="text-sm text-zinc-500 flex items-center gap-2 mb-6"><MapPin size={14} /> {dist?.city}</p>
-            </motion.div>
-          );
-        })}
+      
+      <div className="flex bg-zinc-100 p-1.5 rounded-2xl overflow-x-auto w-full md:w-fit custom-scrollbar">
+        <button onClick={() => setActiveTab('active')} className={cn("px-6 py-3 rounded-xl text-sm font-bold transition-all whitespace-nowrap flex items-center gap-2", activeTab === 'active' ? "bg-white text-black shadow-sm" : "text-zinc-500 hover:text-black")}>
+          Active Audits <span className={cn("px-2 py-0.5 rounded-full text-[10px]", activeTab === 'active' ? "bg-zinc-100 text-zinc-900" : "bg-zinc-200 text-zinc-500")}>{activeTickets.length}</span>
+        </button>
+        <button onClick={() => setActiveTab('drainage')} className={cn("px-6 py-3 rounded-xl text-sm font-bold transition-all whitespace-nowrap flex items-center gap-2", activeTab === 'drainage' ? "bg-white text-black shadow-sm" : "text-zinc-500 hover:text-black")}>
+          Drainage Pending <span className={cn("px-2 py-0.5 rounded-full text-[10px]", activeTab === 'drainage' ? "bg-zinc-100 text-zinc-900" : "bg-zinc-200 text-zinc-500")}>{drainageTickets.length}</span>
+        </button>
+        <button onClick={() => setActiveTab('signoff')} className={cn("px-6 py-3 rounded-xl text-sm font-bold transition-all whitespace-nowrap flex items-center gap-2", activeTab === 'signoff' ? "bg-white text-black shadow-sm" : "text-zinc-500 hover:text-black")}>
+          Pending Sign-off <span className={cn("px-2 py-0.5 rounded-full text-[10px]", activeTab === 'signoff' ? "bg-zinc-100 text-zinc-900" : "bg-zinc-200 text-zinc-500")}>{signoffTickets.length}</span>
+        </button>
+        <button onClick={() => setActiveTab('completed')} className={cn("px-6 py-3 rounded-xl text-sm font-bold transition-all whitespace-nowrap flex items-center gap-2", activeTab === 'completed' ? "bg-white text-black shadow-sm" : "text-zinc-500 hover:text-black")}>
+          Completed Today <span className={cn("px-2 py-0.5 rounded-full text-[10px]", activeTab === 'completed' ? "bg-zinc-100 text-zinc-900" : "bg-zinc-200 text-zinc-500")}>{completedTickets.length}</span>
+        </button>
       </div>
+
+      {displayTickets.length === 0 ? (
+        <div className="p-16 text-center bg-white rounded-[2.5rem] border border-zinc-200 shadow-sm flex flex-col items-center justify-center">
+          <ClipboardCheck size={48} className="text-zinc-300 mb-4" />
+          <h3 className="text-lg font-bold text-zinc-900">No Audits Found</h3>
+          <p className="text-sm text-zinc-500 mt-1">There are currently no audits in this category.</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 w-full">
+          {displayTickets.map(ticket => {
+            const dist = distMap.get(ticket.distributorId);
+            return (
+              <motion.div layout key={ticket.id} onClick={() => setActiveTicket(ticket)} className="bg-white p-6 rounded-[2rem] border border-zinc-200 shadow-sm hover:shadow-md hover:border-black transition-all cursor-pointer group flex flex-col w-full">
+                <div className="flex justify-between items-start mb-4">
+                  <div className="w-12 h-12 bg-zinc-100 rounded-2xl flex items-center justify-center"><Store className="text-zinc-600" size={20} /></div>
+                  <span className={cn("px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider bg-zinc-100 text-zinc-600")}>{ticket.status.replace('_', ' ')}</span>
+                </div>
+                <h4 className="text-lg font-bold tracking-tight mb-1">{dist?.name || 'Loading...'}</h4>
+                <p className="text-sm text-zinc-500 flex items-center gap-2 mb-6"><MapPin size={14} /> {dist?.city}</p>
+              </motion.div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
