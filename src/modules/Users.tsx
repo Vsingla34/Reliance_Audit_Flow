@@ -67,7 +67,7 @@ export function UsersModule() {
         const { error } = await supabase.from('users').update(formData).eq('uid', editingUser.uid);
         if (error) throw error;
         
-        logActivity(user, profile, "User Updated", `Admin updated profile details for ${formData.name}`);
+        logActivity(user, profile, "User Updated", `${profile?.role.toUpperCase()} updated profile details for ${formData.name}`);
         alert(`Successfully updated user profile for ${formData.name}.`);
       } else {
         const { data, error } = await supabase.functions.invoke('invite-user', {
@@ -75,7 +75,7 @@ export function UsersModule() {
         });
         if (error || data.error) throw new Error(error?.message || data.error);
         
-        logActivity(user, profile, "User Invited", `Admin invited a new ${formData.role.toUpperCase()} (${formData.name}) to the portal`);
+        logActivity(user, profile, "User Invited", `${profile?.role.toUpperCase()} invited a new ${formData.role?.toUpperCase()} (${formData.name}) to the portal`);
         alert(`User created successfully! An invite link has been dispatched to ${formData.email}.`);
       }
       
@@ -101,7 +101,7 @@ export function UsersModule() {
         const { error } = await supabase.from('users').update({ active: newStatus }).eq('uid', targetUser.uid);
         if (error) throw error;
 
-        logActivity(user, profile, `Account ${newStatus ? 'Activated' : 'Deactivated'}`, `Admin ${newStatus ? 'restored' : 'revoked'} system access for ${targetUser.name}`);
+        logActivity(user, profile, `Account ${newStatus ? 'Activated' : 'Deactivated'}`, `${profile?.role.toUpperCase()} ${newStatus ? 'restored' : 'revoked'} system access for ${targetUser.name}`);
         
       } catch (error: any) {
         console.error("Error updating user status:", error);
@@ -158,7 +158,7 @@ export function UsersModule() {
           } catch (err) { failCount++; }
         }
         
-        logActivity(user, profile, "Bulk Import", `Admin bulk imported ${successCount} new users`);
+        logActivity(user, profile, "Bulk Import", `${profile?.role.toUpperCase()} bulk imported ${successCount} new users`);
         alert(`Import complete! Successfully invited ${successCount} users. ${failCount > 0 ? `Failed to add ${failCount} users.` : ''}`);
       } catch (error) {
         alert("Error parsing CSV. Please check the format.");
@@ -169,7 +169,8 @@ export function UsersModule() {
     reader.readAsText(file);
   };
 
-  if (!['admin', 'ho'].includes(profile?.role || '')) {
+  // ADDED SUPERADMIN TO ALLOWED ROLES
+  if (!['superadmin', 'admin', 'ho'].includes(profile?.role || '')) {
     return <div className="p-4 sm:p-8 text-center text-red-500 font-bold">Access Denied. Admin only.</div>;
   }
 
@@ -218,7 +219,7 @@ export function UsersModule() {
                   <tr key={u.uid} className={cn("transition-colors group", !u.active ? "bg-red-50/20 hover:bg-red-50/40" : "hover:bg-zinc-50/50")}>
                     <td className="px-4 sm:px-8 py-4 sm:py-5">
                       <div className="flex items-center gap-3 sm:gap-4">
-                        <div className={cn("w-10 h-10 sm:w-12 sm:h-12 rounded-full flex items-center justify-center shrink-0 font-bold", !u.active ? "bg-red-100 text-red-600" : "bg-zinc-100 text-zinc-500")}>
+                        <div className={cn("w-10 h-10 sm:w-12 sm:h-12 rounded-full flex items-center justify-center shrink-0 font-bold", !u.active ? "bg-red-100 text-red-600" : u.role === 'superadmin' ? "bg-purple-100 text-purple-700" : "bg-zinc-100 text-zinc-500")}>
                           {u.name.charAt(0).toUpperCase()}
                         </div>
                         <div>
@@ -233,8 +234,8 @@ export function UsersModule() {
                       </div>
                     </td>
                     <td className="px-4 sm:px-8 py-4 sm:py-5">
-                      <div className={cn("flex items-center gap-1.5 sm:gap-2 px-2 sm:px-3 py-1 sm:py-1.5 rounded-lg sm:rounded-xl inline-flex border font-bold uppercase tracking-wider text-[9px] sm:text-[10px]", !u.active ? "bg-red-50 border-red-100 text-red-700" : "bg-zinc-50 border-zinc-100 text-zinc-700")}>
-                        <Shield size={12} className={cn("sm:w-3.5 sm:h-3.5", !u.active ? "text-red-400" : "text-zinc-400")} /> {u.role}
+                      <div className={cn("flex items-center gap-1.5 sm:gap-2 px-2 sm:px-3 py-1 sm:py-1.5 rounded-lg sm:rounded-xl inline-flex border font-bold uppercase tracking-wider text-[9px] sm:text-[10px]", !u.active ? "bg-red-50 border-red-100 text-red-700" : u.role === 'superadmin' ? "bg-purple-50 border-purple-100 text-purple-700" : "bg-zinc-50 border-zinc-100 text-zinc-700")}>
+                        <Shield size={12} className={cn("sm:w-3.5 sm:h-3.5", !u.active ? "text-red-400" : u.role === 'superadmin' ? "text-purple-400" : "text-zinc-400")} /> {u.role}
                       </div>
                     </td>
                     <td className="px-4 sm:px-8 py-4 sm:py-5">
@@ -377,7 +378,15 @@ export function UsersModule() {
                       <div className="space-y-1.5 sm:space-y-2">
                         <label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-400">System Role *</label>
                         <select required className="w-full px-3 py-2.5 sm:px-4 sm:py-3 bg-zinc-50 border-none rounded-xl focus:ring-2 focus:ring-black transition-all text-sm sm:text-base" value={formData.role} onChange={(e) => setFormData({ ...formData, role: e.target.value as any })} disabled={isLoading}>
-                          <option value="admin">Administrator (Full Access)</option><option value="ho">Head Office (HO)</option><option value="dm">Division Manager (DM)</option><option value="sm">Sales Manager (SM)</option><option value="asm">Area Sales Manager (ASM)</option><option value="ase">Area Sales Executive (ASE)</option><option value="auditor">Field Auditor</option>
+                          {/* ADDED SUPERADMIN ROLE OPTION HERE */}
+                          <option value="superadmin">Super Administrator (Ultimate Access)</option>
+                          <option value="admin">Administrator (Full Access)</option>
+                          <option value="ho">Head Office (HO)</option>
+                          <option value="dm">Division Manager (DM)</option>
+                          <option value="sm">Sales Manager (SM)</option>
+                          <option value="asm">Area Sales Manager (ASM)</option>
+                          <option value="ase">Area Sales Executive (ASE)</option>
+                          <option value="auditor">Field Auditor</option>
                         </select>
                       </div>
                       <div className="space-y-1.5 sm:space-y-2"><label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-400">Region (Optional)</label><input className="w-full px-3 py-2.5 sm:px-4 sm:py-3 bg-zinc-50 border-none rounded-xl focus:ring-2 focus:ring-black transition-all text-sm sm:text-base" value={formData.region} onChange={(e) => setFormData({ ...formData, region: e.target.value })} placeholder="e.g. North India" disabled={isLoading} /></div>

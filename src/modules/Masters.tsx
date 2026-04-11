@@ -197,7 +197,8 @@ export function MastersModule() {
     }
   };
 
-  if (!['admin', 'ho'].includes(profile?.role || '')) return <div className="p-8 text-center text-red-500 font-bold">Access Denied. Admins & HO only.</div>;
+  // SUPERADMIN UPDATE HERE
+  if (!['superadmin', 'admin', 'ho'].includes(profile?.role || '')) return <div className="p-8 text-center text-red-500 font-bold">Access Denied. Admins & HO only.</div>;
 
   return (
     <div className="space-y-8 pb-12">

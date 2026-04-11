@@ -148,15 +148,17 @@ export default function App() {
     await supabase.auth.signOut();
   };
 
+  // EXCLUSIVE SUPERADMIN POWER: Deleting single logs
   const deleteActivityLog = async (logId: string) => {
-    if (profile?.role !== 'admin') return;
+    if (profile?.role !== 'superadmin') return;
     try {
       await supabase.from('activityLogs').delete().eq('id', logId);
     } catch (error) { console.error("Failed to delete log:", error); }
   };
 
+  // EXCLUSIVE SUPERADMIN POWER: Clearing all logs
   const clearAllLogs = async () => {
-    if (profile?.role !== 'admin') return;
+    if (profile?.role !== 'superadmin') return;
     if (window.confirm("WARNING: This will permanently delete ALL system activity logs. Continue?")) {
       try {
         await supabase.from('activityLogs').delete().neq('id', '0');
@@ -210,17 +212,22 @@ export default function App() {
      return <ForcePasswordSetup user={user} onComplete={() => setNeedsPasswordSetup(false)} />;
   }
 
+  // --- ROLE BASED NAVIGATION ---
   const navItems = [
-    { id: 'dashboard', label: 'Overview', icon: LayoutDashboard, roles: ['admin', 'ho', 'dm', 'sm', 'asm', 'ase', 'auditor'] },
-    { id: 'masters', label: 'Data Masters', icon: Database, roles: ['admin', 'ho'] },
-    { id: 'users', label: 'Team', icon: Users, roles: ['admin', 'ho'] },
-    { id: 'distributors', label: 'Distributors', icon: Store, roles: ['admin', 'ho', 'dm', 'sm', 'asm', 'ase'] },
-    { id: 'scheduler', label: 'Schedule', icon: CalendarClock, roles: ['admin', 'ho', 'dm', 'sm', 'asm', 'ase', 'auditor'] },
-    { id: 'execution', label: 'Execution', icon: PlaySquare, roles: ['admin', 'ho', 'ase', 'auditor'] },
-    { id: 'reports', label: 'Reports', icon: FileBarChart, roles: ['admin', 'ho', 'dm', 'sm', 'asm'] },
+    { id: 'dashboard', label: 'Overview', icon: LayoutDashboard, roles: ['superadmin', 'admin', 'ho', 'dm', 'sm', 'asm', 'ase', 'auditor'] },
+    { id: 'masters', label: 'Data Masters', icon: Database, roles: ['superadmin', 'admin', 'ho'] },
+    { id: 'users', label: 'Team', icon: Users, roles: ['superadmin', 'admin', 'ho'] },
+    { id: 'distributors', label: 'Distributors', icon: Store, roles: ['superadmin', 'admin', 'ho', 'dm', 'sm', 'asm', 'ase'] },
+    { id: 'scheduler', label: 'Schedule', icon: CalendarClock, roles: ['superadmin', 'admin', 'ho', 'dm', 'sm', 'asm', 'ase', 'auditor'] },
+    { id: 'execution', label: 'Execution', icon: PlaySquare, roles: ['superadmin', 'admin', 'ho', 'ase', 'auditor'] },
+    { id: 'reports', label: 'Reports', icon: FileBarChart, roles: ['superadmin', 'admin', 'ho', 'dm', 'sm', 'asm'] },
   ];
 
-  const allowedNavItems = navItems.filter(item => item.roles.includes(profile.role));
+  // --- THE BULLETPROOF CASE/SPACE FIX IS HERE ---
+  const allowedNavItems = navItems.filter(item => {
+    const userRole = (profile?.role || '').toLowerCase().trim();
+    return item.roles.includes(userRole);
+  });
 
   const renderModule = () => {
     switch (activeModule) {
@@ -264,7 +271,9 @@ export default function App() {
           <div className="p-6 border-t border-zinc-100">
             <div className="bg-zinc-50 p-4 rounded-2xl border border-zinc-200/50 mb-3">
               <p className="font-bold text-sm truncate">{profile.name}</p>
-              <p className="text-[10px] font-black uppercase tracking-wider text-blue-600 mt-0.5 bg-blue-50 w-fit px-1.5 rounded">{profile.role}</p>
+              <p className={cn("text-[10px] font-black uppercase tracking-wider mt-0.5 w-fit px-1.5 rounded", profile.role === 'superadmin' ? "bg-purple-100 text-purple-700" : "bg-blue-50 text-blue-600")}>
+                {profile.role}
+              </p>
             </div>
             <button onClick={signOut} className="w-full flex items-center gap-2 px-4 py-3 text-red-600 font-bold text-sm rounded-xl hover:bg-red-50 transition-colors"><LogOut size={16} /> Sign Out</button>
           </div>
@@ -328,7 +337,7 @@ export default function App() {
                 <div className="p-6 border-t border-zinc-100 bg-zinc-50">
                   <div className="mb-4">
                     <p className="font-bold text-sm text-zinc-900 truncate">{profile.name}</p>
-                    <p className="text-[10px] font-black uppercase tracking-wider text-blue-600 mt-1">{profile.role}</p>
+                    <p className={cn("text-[10px] font-black uppercase tracking-wider mt-1", profile.role === 'superadmin' ? "text-purple-600" : "text-blue-600")}>{profile.role}</p>
                   </div>
                   <button onClick={signOut} className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-white border border-red-100 text-red-600 font-bold text-sm rounded-xl shadow-sm active:scale-95 transition-all"><LogOut size={16} /> Sign Out</button>
                 </div>
@@ -353,7 +362,7 @@ export default function App() {
               </button>
 
               <div className="flex items-center gap-3 bg-zinc-50 pl-2 pr-4 py-2 rounded-full border border-zinc-200">
-                <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center font-bold text-sm shrink-0">{profile.name.charAt(0)}</div>
+                <div className={cn("w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm shrink-0", profile.role === 'superadmin' ? "bg-purple-100 text-purple-700" : "bg-blue-100 text-blue-700")}>{profile.name.charAt(0)}</div>
                 <div className="hidden sm:block">
                   <p className="text-sm font-bold text-zinc-900 leading-none truncate max-w-[150px]">{profile.name}</p>
                   <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider mt-1">{profile.role}</p>
@@ -362,9 +371,7 @@ export default function App() {
             </div>
           </header>
 
-          {/* Adjusted padding for mobile to account for fixed header */}
           <div className="flex-1 p-4 sm:p-6 md:p-8 max-w-7xl mx-auto w-full min-w-0">
-            {/* Mobile Module Title */}
             <div className="lg:hidden mb-6 mt-2">
               <h2 className="text-xl font-bold tracking-tight capitalize">{activeModule.replace('_', ' ')}</h2>
             </div>
@@ -374,7 +381,7 @@ export default function App() {
         </main>
       </div>
 
-      {/* ACTIVITY LOG DRAWER (Responsive) */}
+      {/* ACTIVITY LOG DRAWER */}
       <AnimatePresence>
         {isActivityOpen && (
           <>
@@ -390,7 +397,8 @@ export default function App() {
                   <div><h3 className="font-bold text-base sm:text-lg">System Activity</h3><p className="text-[10px] sm:text-xs text-zinc-500">Live global assignment logs</p></div>
                 </div>
                 <div className="flex items-center gap-2">
-                  {profile.role === 'admin' && activityLogs.length > 0 && <button onClick={clearAllLogs} className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors" title="Clear All Logs"><Trash2 size={18} /></button>}
+                  {/* EXCLUSIVE SUPERADMIN POWER: Clear all logs */}
+                  {profile.role === 'superadmin' && activityLogs.length > 0 && <button onClick={clearAllLogs} className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors" title="Clear All Logs"><Trash2 size={18} /></button>}
                   <button onClick={() => setIsActivityOpen(false)} className="p-2 hover:bg-zinc-200 rounded-xl transition-colors"><X size={20} /></button>
                 </div>
               </div>
@@ -411,7 +419,8 @@ export default function App() {
                             </p>
                             {log.details && <p className={cn("text-[10px] sm:text-xs mt-2 font-medium opacity-90 break-words", style.text)}>"{log.details}"</p>}
                           </div>
-                          {profile.role === 'admin' && (
+                          {/* EXCLUSIVE SUPERADMIN POWER: Delete individual log */}
+                          {profile.role === 'superadmin' && (
                             <button onClick={() => deleteActivityLog(log.id)} className="text-zinc-400 hover:text-red-500 bg-white/50 p-1.5 rounded-lg transition-colors opacity-100 lg:opacity-0 lg:group-hover:opacity-100 shrink-0"><Trash2 size={14} /></button>
                           )}
                         </div>

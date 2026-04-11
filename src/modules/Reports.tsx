@@ -30,7 +30,8 @@ export function ReportsModule() {
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
 
-  const isAdminOrHO = ['admin', 'ho'].includes(profile?.role || '');
+  // SUPERADMIN UPDATE HERE
+  const isAdminOrHO = ['superadmin', 'admin', 'ho'].includes(profile?.role || '');
 
   const fetchReportData = async () => {
     setLoading(true);

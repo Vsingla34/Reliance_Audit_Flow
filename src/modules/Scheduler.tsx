@@ -29,7 +29,8 @@ export function SchedulerModule() {
   const [approvalAuditorIds, setApprovalAuditorIds] = useState<string[]>([]);
   const [approvalAuditDays, setApprovalAuditDays] = useState(1);
 
-  const isAdminOrHO = ['admin', 'ho'].includes(profile?.role || '');
+  // SUPERADMIN UPDATE HERE
+  const isAdminOrHO = ['superadmin', 'admin', 'ho'].includes(profile?.role || '');
 
   const distMap = useMemo(() => {
     const map: Record<string, Distributor> = {};
@@ -170,7 +171,7 @@ export function SchedulerModule() {
         await supabase.from('auditTickets').insert([newTicket]);
       }
 
-      logActivity(user, profile, "Audit Scheduled", `Admin scheduled audit for ${dist?.name} on ${createData.proposedDate}`);
+      logActivity(user, profile, "Audit Scheduled", `${profile?.role.toUpperCase()} scheduled audit for ${dist?.name} on ${createData.proposedDate}`);
 
       setIsCreateModalOpen(false);
       setCreateData({ distributorId: '', proposedDate: '', auditorIds: [], auditDays: 1 });
@@ -194,7 +195,7 @@ export function SchedulerModule() {
       }).eq('id', editingActiveTicket.id);
 
       const dist = distMap[editingActiveTicket.distributorId];
-      logActivity(user, profile, "Audit Re-scheduled", `Admin modified the schedule/auditors for ${dist?.name}`);
+      logActivity(user, profile, "Audit Re-scheduled", `${profile?.role.toUpperCase()} modified the schedule/auditors for ${dist?.name}`);
 
       setEditingActiveTicket(null);
     } catch (error) {
@@ -254,7 +255,7 @@ export function SchedulerModule() {
       }).eq('id', negotiationTicket.id);
 
       const dist = distMap[negotiationTicket.distributorId];
-      logActivity(user, profile, "Audit Scheduled", `Admin approved date proposal and scheduled audit for ${dist?.name} on ${proposalDate}`);
+      logActivity(user, profile, "Audit Scheduled", `${profile?.role.toUpperCase()} approved date proposal and scheduled audit for ${dist?.name} on ${proposalDate}`);
 
       setNegotiationTicket(null); 
       setApprovalAuditorIds([]);

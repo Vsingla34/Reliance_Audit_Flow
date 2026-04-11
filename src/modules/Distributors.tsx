@@ -27,6 +27,9 @@ export function DistributorsModule() {
   const [emailBody, setEmailBody] = useState('');
   const [isSendingEmail, setIsSendingEmail] = useState(false);
   
+  // Changed to an array to support MULTI-SELECT
+  const [emailTargetRoles, setEmailTargetRoles] = useState<string[]>(['aseId']);
+  
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 25; 
   
@@ -95,27 +98,41 @@ export function DistributorsModule() {
     setSelectedIds(newSet);
   };
 
-  // --- SEND EMAIL TO ASEs LOGIC ---
+  const roleDisplayMap: Record<string, string> = {
+    hoId: 'HO', dmId: 'DM', smId: 'SM', asmId: 'ASM', aseId: 'ASE'
+  };
+
+  // --- DYNAMIC MULTI-SELECT SEND EMAIL LOGIC ---
   const handleSendBulkEmail = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user || !profile) return;
+
+    if (emailTargetRoles.length === 0) {
+      alert("Please select at least one target role.");
+      return;
+    }
     
     const selectedDistributors = distributors.filter(d => selectedIds.has(d.id));
-    const aseEmailSet = new Set<string>();
+    const targetEmailSet = new Set<string>();
 
+    // Loop through every distributor, and inside, loop through every selected role
     selectedDistributors.forEach(d => {
-      if (d.aseId) {
-        const ase = users.find(u => u.uid === d.aseId);
-        if (ase && ase.email && ase.email.trim() !== '') {
-          aseEmailSet.add(ase.email.trim());
+      emailTargetRoles.forEach(roleKey => {
+        const targetId = d[roleKey as keyof Distributor] as string;
+        if (targetId) {
+          const targetUser = users.find(u => u.uid === targetId);
+          if (targetUser && targetUser.email && targetUser.email.trim() !== '') {
+            targetEmailSet.add(targetUser.email.trim());
+          }
         }
-      }
+      });
     });
 
-    const emails = Array.from(aseEmailSet);
+    const emails = Array.from(targetEmailSet);
+    const roleNames = emailTargetRoles.map(r => roleDisplayMap[r]).join(', ');
 
     if (emails.length === 0) {
-      alert("None of the selected distributors have an assigned Area Sales Executive (ASE) with a valid email address.");
+      alert(`None of the selected distributors have assigned users in the roles: ${roleNames} with valid email addresses.`);
       return;
     }
 
@@ -127,18 +144,17 @@ export function DistributorsModule() {
       
       if (error) throw error;
       
-      logActivity(user, profile, "Bulk Email Sent", `Sent email to ${emails.length} ASE(s) regarding selected distributors. Subject: "${emailSubject}"`);
+      logActivity(user, profile, "Bulk Email Sent", `Sent email to ${emails.length} user(s) (${roleNames}) regarding selected distributors. Subject: "${emailSubject}"`);
       
-      alert(`Successfully sent email to ${emails.length} assigned ASE(s)!`);
+      alert(`Successfully sent email to ${emails.length} user(s) in roles: ${roleNames}!`);
       setIsEmailModalOpen(false);
       setEmailSubject('');
       setEmailBody('');
       setSelectedIds(new Set());
+      setEmailTargetRoles(['aseId']); // Reset to default
       
     } catch (error: any) {
       console.error("Email error full details:", error);
-      
-      // Extract exactly what the Edge Function is complaining about
       let realMessage = error.message;
       if (error.context) {
         try {
@@ -148,7 +164,6 @@ export function DistributorsModule() {
           // Fallback if parsing fails
         }
       }
-      
       alert(`Failed to send emails: ${realMessage}`);
     } finally {
       setIsSendingEmail(false);
@@ -242,7 +257,7 @@ export function DistributorsModule() {
     reader.readAsText(file);
   };
 
-  const isAdminOrHO = ['admin', 'ho'].includes(profile?.role || '');
+  const isAdminOrHO = ['superadmin', 'admin', 'ho'].includes(profile?.role || '');
   const ases = users.filter(u => u.role === 'ase');
   const asms = users.filter(u => u.role === 'asm');
 
@@ -269,7 +284,7 @@ export function DistributorsModule() {
 
           {profile?.role !== 'ase' && (
             <div className="flex items-center gap-4">
-              {['admin', 'ho', 'dm', 'sm'].includes(profile?.role || '') && (
+              {['superadmin', 'admin', 'ho', 'dm', 'sm'].includes(profile?.role || '') && (
                 <div className="relative group">
                   <Filter className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-400 pointer-events-none" size={16} />
                   <select className="w-full md:w-auto min-w-[160px] pl-12 pr-4 py-4 bg-white border border-zinc-200 rounded-2xl focus:ring-2 focus:ring-black outline-none shadow-sm cursor-pointer appearance-none font-medium" value={filterAsm} onChange={(e) => setFilterAsm(e.target.value)}>
@@ -292,7 +307,7 @@ export function DistributorsModule() {
             <AnimatePresence>
               {selectedIds.size > 0 && (
                 <motion.button initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }} onClick={() => setIsEmailModalOpen(true)} className="flex items-center justify-center gap-2 px-6 py-4 bg-blue-600 text-white rounded-2xl font-bold hover:bg-blue-700 transition-all shadow-xl shadow-blue-600/20 active:scale-95 whitespace-nowrap">
-                  <Mail size={20} /> Email ASEs ({selectedIds.size})
+                  <Mail size={20} /> Email Team ({selectedIds.size})
                 </motion.button>
               )}
             </AnimatePresence>
@@ -411,33 +426,71 @@ export function DistributorsModule() {
         )}
       </div>
 
-      {/* --- BULK EMAIL MODAL --- */}
+      {/* --- BULK EMAIL MODAL WITH MULTI-SELECT --- */}
       <AnimatePresence>
         {isEmailModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 md:p-6">
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => !isSendingEmail && setIsEmailModalOpen(false)} className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
-            <motion.div initial={{ opacity: 0, scale: 0.9, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9, y: 20 }} className="relative w-full max-w-2xl bg-white rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col">
+            <motion.div initial={{ opacity: 0, scale: 0.9, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9, y: 20 }} className="relative w-full max-w-2xl bg-white rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col max-h-[95vh]">
               
               <div className="p-6 md:p-8 border-b border-zinc-100 flex items-center justify-between shrink-0 bg-white">
                 <div className="flex items-center gap-4">
                   <div className="w-12 h-12 bg-blue-50 rounded-2xl flex items-center justify-center"><Mail className="text-blue-600" size={24} /></div>
                   <div>
-                    <h4 className="text-2xl font-bold tracking-tight">Email Area Sales Execs</h4>
-                    <p className="text-sm font-bold text-blue-600 mt-1">Notifying ASEs for {selectedIds.size} selected distributor(s)</p>
+                    <h4 className="text-2xl font-bold tracking-tight">Email Distributor Team</h4>
+                    <p className="text-sm font-bold text-blue-600 mt-1">Notifying selected roles for {selectedIds.size} distributor(s)</p>
                   </div>
                 </div>
                 <button type="button" onClick={() => !isSendingEmail && setIsEmailModalOpen(false)} className="p-2 hover:bg-zinc-100 rounded-xl transition-colors"><X size={20} /></button>
               </div>
               
-              <div className="p-6 md:p-8 flex-1 overflow-y-auto bg-zinc-50/50">
+              {/* Added flex-1 min-h-0 here for scrolling */}
+              <div className="p-6 md:p-8 flex-1 min-h-0 overflow-y-auto bg-zinc-50/50 custom-scrollbar">
                 <form id="bulk-email-form" onSubmit={handleSendBulkEmail} className="space-y-6">
+                  
+                  {/* --- MULTI-SELECT TARGET ROLES --- */}
+                  <div>
+                    <label className="text-xs font-bold uppercase tracking-wider text-zinc-500 ml-1">Select Target Roles (Multi-Select)</label>
+                    <div className="flex flex-wrap gap-2 mt-2">
+                      {[
+                        { id: 'hoId', label: 'Head Office (HO)' },
+                        { id: 'dmId', label: 'Division Manager (DM)' },
+                        { id: 'smId', label: 'Sales Manager (SM)' },
+                        { id: 'asmId', label: 'Area Sales Mgr (ASM)' },
+                        { id: 'aseId', label: 'Area Sales Exec (ASE)' }
+                      ].map(role => (
+                        <button
+                          key={role.id}
+                          type="button"
+                          onClick={() => {
+                            if (emailTargetRoles.includes(role.id)) {
+                              if (emailTargetRoles.length > 1) {
+                                setEmailTargetRoles(emailTargetRoles.filter(r => r !== role.id));
+                              }
+                            } else {
+                              setEmailTargetRoles([...emailTargetRoles, role.id]);
+                            }
+                          }}
+                          className={cn(
+                            "px-4 py-2 text-sm font-bold rounded-xl border transition-all active:scale-95",
+                            emailTargetRoles.includes(role.id)
+                              ? "bg-blue-50 border-blue-200 text-blue-700 shadow-sm"
+                              : "bg-white border-zinc-200 text-zinc-600 hover:bg-zinc-50"
+                          )}
+                        >
+                          {role.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
                   <div>
                     <label className="text-xs font-bold uppercase tracking-wider text-zinc-500 ml-1">Subject</label>
                     <input required type="text" placeholder="Important Policy Update..." className="w-full mt-2 px-4 py-3 bg-white border border-zinc-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all shadow-sm font-bold text-lg" value={emailSubject} onChange={(e) => setEmailSubject(e.target.value)} />
                   </div>
                   <div>
                     <label className="text-xs font-bold uppercase tracking-wider text-zinc-500 ml-1">Message</label>
-                    <textarea required rows={8} placeholder="Dear Area Sales Executives,&#10;&#10;We are writing to inform you..." className="w-full mt-2 p-4 bg-white border border-zinc-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all shadow-sm resize-none custom-scrollbar" value={emailBody} onChange={(e) => setEmailBody(e.target.value)} />
+                    <textarea required rows={6} placeholder={`Dear Team,\n\nWe are writing to inform you...`} className="w-full mt-2 p-4 bg-white border border-zinc-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all shadow-sm resize-none custom-scrollbar" value={emailBody} onChange={(e) => setEmailBody(e.target.value)} />
                   </div>
                 </form>
               </div>
@@ -445,7 +498,7 @@ export function DistributorsModule() {
               <div className="p-6 md:p-8 border-t border-zinc-100 shrink-0 bg-white flex justify-end gap-3">
                 <button type="button" onClick={() => setIsEmailModalOpen(false)} disabled={isSendingEmail} className="px-6 py-4 text-sm font-bold text-zinc-500 hover:text-black transition-colors disabled:opacity-50">Cancel</button>
                 <button type="submit" form="bulk-email-form" disabled={isSendingEmail} className="px-10 py-4 bg-blue-600 text-white rounded-2xl font-bold hover:bg-blue-700 transition-all shadow-xl shadow-blue-600/20 active:scale-95 flex items-center gap-2">
-                  {isSendingEmail ? <><Loader2 size={18} className="animate-spin" /> Sending...</> : <><Send size={18} /> Send to ASEs</>}
+                  {isSendingEmail ? <><Loader2 size={18} className="animate-spin" /> Sending...</> : <><Send size={18} /> Send</>}
                 </button>
               </div>
             </motion.div>
@@ -467,7 +520,8 @@ export function DistributorsModule() {
                 <button type="button" onClick={() => setIsModalOpen(false)} className="p-2 hover:bg-zinc-100 rounded-xl transition-colors"><X size={20} /></button>
               </div>
               
-              <div className="p-6 md:p-8 overflow-y-auto custom-scrollbar">
+              {/* Added flex-1 min-h-0 here for scrolling */}
+              <div className="p-6 md:p-8 flex-1 min-h-0 overflow-y-auto custom-scrollbar">
                 <form id="distributor-form" onSubmit={handleSubmit} className="space-y-8">
                   <div>
                     <h5 className="text-sm font-bold uppercase tracking-wider text-zinc-900 mb-4 flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-black"></span> Identification</h5>

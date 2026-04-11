@@ -357,7 +357,13 @@ export function ExecutionModule() {
 
   const signOff = async (roleRequired: 'auditor' | 'ase' | 'distributor') => {
     if (!activeTicket || !user || !profile) return;
-    if (profile.role !== roleRequired && !['admin', 'ho'].includes(profile.role)) { alert(`Action Denied: Must be an ${roleRequired.toUpperCase()} to sign.`); return; }
+    
+    // SUPERADMIN UPDATE HERE
+    if (profile.role !== roleRequired && !['superadmin', 'admin', 'ho'].includes(profile.role)) { 
+      alert(`Action Denied: Must be an ${roleRequired.toUpperCase()} to sign.`); 
+      return; 
+    }
+    
     const signOffData: SignOff = { userId: user.id, name: profile.name, timestamp: new Date().toISOString() };
     const signOffs = { ...(activeTicket.signOffs || {}), [roleRequired]: signOffData };
     const allSigned = signOffs.auditor && signOffs.ase && signOffs.distributor;
@@ -369,7 +375,10 @@ export function ExecutionModule() {
 
   if (activeTicket) {
     const dist = distMap.get(activeTicket.distributorId);
-    const isAdminOrHO = ['admin', 'ho'].includes(profile?.role || '');
+    
+    // SUPERADMIN UPDATE HERE
+    const isAdminOrHO = ['superadmin', 'admin', 'ho'].includes(profile?.role || '');
+    
     const isAuditor = profile?.role === 'auditor';
     const isASE = profile?.role === 'ase';
     const isSubmitted = ['submitted', 'signed', 'evidence_uploaded', 'closed'].includes(activeTicket.status);
@@ -753,7 +762,7 @@ export function ExecutionModule() {
                   <div className="space-y-2 sm:space-y-3">
                     {['auditor', 'ase', 'distributor'].map((role) => {
                       const signedData = activeTicket.signOffs?.[role as keyof SignOff];
-                      const isMyRole = profile?.role === role || ['admin', 'ho'].includes(profile?.role || '');
+                      const isMyRole = profile?.role === role || ['superadmin', 'admin', 'ho'].includes(profile?.role || '');
                       return (
                         <div key={role} className="flex items-center justify-between p-3 sm:p-4 bg-zinc-50 rounded-xl sm:rounded-2xl border border-zinc-100">
                           <div><span className="text-xs sm:text-sm font-bold uppercase tracking-wider text-zinc-600">{role}</span></div>
