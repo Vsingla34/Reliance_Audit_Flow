@@ -98,6 +98,36 @@ export default function App() {
     return () => { supabase.removeChannel(channel); };
   }, [user]);
 
+  // ==========================================
+  // NAVIGATION LOGIC & HOOK
+  // ==========================================
+  const navItems = [
+    // DASHBOARD restricted to ONLY superadmin, admin, and ho
+    { id: 'dashboard', label: 'Overview', icon: LayoutDashboard, roles: ['superadmin', 'admin', 'ho'] },
+    { id: 'masters', label: 'Data Masters', icon: Database, roles: ['superadmin', 'admin', 'ho'] },
+    // TEAM restricted to ONLY superadmin and admin
+    { id: 'users', label: 'Team', icon: Users, roles: ['superadmin', 'admin'] },
+    { id: 'distributors', label: 'Distributors', icon: Store, roles: ['superadmin', 'admin', 'ho', 'dm', 'sm', 'asm', 'ase'] },
+    { id: 'scheduler', label: 'Schedule', icon: CalendarClock, roles: ['superadmin', 'admin', 'ho', 'dm', 'sm', 'asm', 'ase', 'auditor'] },
+    { id: 'execution', label: 'Execution', icon: PlaySquare, roles: ['superadmin', 'admin', 'ho', 'ase', 'auditor'] },
+    { id: 'reports', label: 'Reports', icon: FileBarChart, roles: ['superadmin', 'admin', 'ho', 'dm', 'sm', 'asm'] },
+  ];
+
+  const allowedNavItems = navItems.filter(item => {
+    const userRole = (profile?.role || '').toLowerCase().trim();
+    return item.roles.includes(userRole);
+  });
+
+  useEffect(() => {
+    if (profile && allowedNavItems.length > 0) {
+      const isAllowed = allowedNavItems.some(item => item.id === activeModule);
+      if (!isAllowed) {
+        setActiveModule(allowedNavItems[0].id);
+      }
+    }
+  }, [profile, activeModule]); 
+  // ==========================================
+
   const fetchProfile = async (userId: string) => {
     try {
       const { data, error } = await supabase.from('users').select('*').eq('uid', userId).single();
@@ -148,7 +178,6 @@ export default function App() {
     await supabase.auth.signOut();
   };
 
-  // EXCLUSIVE SUPERADMIN POWER: Deleting single logs
   const deleteActivityLog = async (logId: string) => {
     if (profile?.role !== 'superadmin') return;
     try {
@@ -156,7 +185,6 @@ export default function App() {
     } catch (error) { console.error("Failed to delete log:", error); }
   };
 
-  // EXCLUSIVE SUPERADMIN POWER: Clearing all logs
   const clearAllLogs = async () => {
     if (profile?.role !== 'superadmin') return;
     if (window.confirm("WARNING: This will permanently delete ALL system activity logs. Continue?")) {
@@ -211,23 +239,6 @@ export default function App() {
   if (needsPasswordSetup) {
      return <ForcePasswordSetup user={user} onComplete={() => setNeedsPasswordSetup(false)} />;
   }
-
-  // --- ROLE BASED NAVIGATION ---
-  const navItems = [
-    { id: 'dashboard', label: 'Overview', icon: LayoutDashboard, roles: ['superadmin', 'admin', 'ho', 'dm', 'sm', 'asm', 'ase', 'auditor'] },
-    { id: 'masters', label: 'Data Masters', icon: Database, roles: ['superadmin', 'admin', 'ho'] },
-    { id: 'users', label: 'Team', icon: Users, roles: ['superadmin', 'admin', 'ho'] },
-    { id: 'distributors', label: 'Distributors', icon: Store, roles: ['superadmin', 'admin', 'ho', 'dm', 'sm', 'asm', 'ase'] },
-    { id: 'scheduler', label: 'Schedule', icon: CalendarClock, roles: ['superadmin', 'admin', 'ho', 'dm', 'sm', 'asm', 'ase', 'auditor'] },
-    { id: 'execution', label: 'Execution', icon: PlaySquare, roles: ['superadmin', 'admin', 'ho', 'ase', 'auditor'] },
-    { id: 'reports', label: 'Reports', icon: FileBarChart, roles: ['superadmin', 'admin', 'ho', 'dm', 'sm', 'asm'] },
-  ];
-
-  // --- THE BULLETPROOF CASE/SPACE FIX IS HERE ---
-  const allowedNavItems = navItems.filter(item => {
-    const userRole = (profile?.role || '').toLowerCase().trim();
-    return item.roles.includes(userRole);
-  });
 
   const renderModule = () => {
     switch (activeModule) {

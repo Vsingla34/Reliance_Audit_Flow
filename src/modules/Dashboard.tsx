@@ -4,7 +4,7 @@ import { useAuth, cn } from '../App';
 import { AuditTicket, Distributor } from '../types';
 import { 
   TrendingUp, Store, ClipboardCheck, AlertCircle, 
-  Clock, CheckCircle2, IndianRupee, Activity, PlaySquare 
+  Clock, CheckCircle2, IndianRupee, Activity, PlaySquare, ShieldAlert
 } from 'lucide-react';
 import { motion } from 'motion/react';
 
@@ -81,6 +81,20 @@ export function DashboardModule() {
     return (
       <div className="flex items-center justify-center h-64">
         <div className="animate-spin rounded-full h-12 w-12 border-4 border-zinc-200 border-t-black"></div>
+      </div>
+    );
+  }
+
+  // --- STRICT SECURITY CHECK ---
+  // If a user forces their way to this component but isn't an authorized role, block them completely.
+  if (!['superadmin', 'admin', 'ho'].includes(profile?.role || '')) {
+    return (
+      <div className="flex items-center justify-center min-h-[60vh] w-full p-4">
+        <div className="bg-red-50 border border-red-100 p-8 rounded-[2rem] max-w-md w-full text-center shadow-sm">
+          <ShieldAlert className="text-red-500 w-16 h-16 mx-auto mb-4" />
+          <h2 className="text-xl font-bold text-red-900 mb-2">Access Restricted</h2>
+          <p className="text-sm text-red-700 font-medium">The Executive Overview Dashboard is restricted to Administrators and Head Office personnel.</p>
+        </div>
       </div>
     );
   }

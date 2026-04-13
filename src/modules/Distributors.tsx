@@ -102,10 +102,20 @@ export function DistributorsModule() {
     hoId: 'HO', dmId: 'DM', smId: 'SM', asmId: 'ASM', aseId: 'ASE'
   };
 
+  // --- HARD SECURITY CHECK UTILITY ---
+  const hasWriteAccess = () => {
+    if (!['superadmin', 'admin', 'ho'].includes(profile?.role || '')) {
+      alert("Action Denied: You do not have permission to modify distributor data.");
+      return false;
+    }
+    return true;
+  };
+
   // --- DYNAMIC MULTI-SELECT SEND EMAIL LOGIC ---
   const handleSendBulkEmail = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user || !profile) return;
+    if (!hasWriteAccess()) return; // SECURITY CHECK
 
     if (emailTargetRoles.length === 0) {
       alert("Please select at least one target role.");
@@ -115,7 +125,6 @@ export function DistributorsModule() {
     const selectedDistributors = distributors.filter(d => selectedIds.has(d.id));
     const targetEmailSet = new Set<string>();
 
-    // Loop through every distributor, and inside, loop through every selected role
     selectedDistributors.forEach(d => {
       emailTargetRoles.forEach(roleKey => {
         const targetId = d[roleKey as keyof Distributor] as string;
@@ -172,6 +181,8 @@ export function DistributorsModule() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!hasWriteAccess()) return; // SECURITY CHECK
+
     try {
       const sanitizedData = { ...formData };
       const fkFields: (keyof Distributor)[] = ['hoId', 'dmId', 'smId', 'asmId', 'aseId'];
@@ -181,6 +192,7 @@ export function DistributorsModule() {
         const { error } = await supabase.from('distributors').update(sanitizedData).eq('id', editingDist.id);
         if (error) throw error;
         await supabase.from('auditTickets').update({ approvedValue: sanitizedData.approvedValue, maxAllowedValue: (sanitizedData.approvedValue || 0) * 1.05 }).eq('distributorId', editingDist.id).in('status', ['tentative', 'scheduled', 'in_progress']);
+        logActivity(user!, profile!, "Distributor Updated", `Updated details for ${formData.name}`);
       } else {
         const newDistId = Math.random().toString(36).substring(7);
         const { error } = await supabase.from('distributors').insert([{ ...sanitizedData, id: newDistId }]);
@@ -189,14 +201,19 @@ export function DistributorsModule() {
           id: Math.random().toString(36).substring(7), distributorId: newDistId, proposedDate: null, auditorId: null, approvedValue: sanitizedData.approvedValue, maxAllowedValue: (sanitizedData.approvedValue || 0) * 1.05, status: 'tentative', verifiedTotal: 0, dateProposals: [], comments: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
         };
         await supabase.from('auditTickets').insert([tentativeTicket]);
+        logActivity(user!, profile!, "Distributor Added", `Created new distributor: ${formData.name}`);
       }
       setIsModalOpen(false); setEditingDist(null); resetForm(); fetchData();
     } catch (error: any) { alert(`Failed to save distributor: ${error.message}`); }
   };
 
   const deleteDist = async (id: string) => {
-    if (window.confirm("Are you sure you want to delete this distributor?")) {
+    if (!hasWriteAccess()) return; // SECURITY CHECK
+
+    if (window.confirm("Are you sure you want to delete this distributor? All associated audits will also be removed.")) {
       try {
+        const distName = distributors.find(d => d.id === id)?.name || 'Unknown';
+        
         const { data: tickets } = await supabase.from('auditTickets').select('id').eq('distributorId', id);
         if (tickets && tickets.length > 0) {
           const ticketIds = tickets.map(t => t.id);
@@ -204,6 +221,8 @@ export function DistributorsModule() {
           await supabase.from('auditTickets').delete().in('id', ticketIds);
         }
         await supabase.from('distributors').delete().eq('id', id);
+        
+        logActivity(user!, profile!, "Distributor Deleted", `Deleted distributor and associated audits: ${distName}`);
         setSelectedIds(prev => { const n = new Set(prev); n.delete(id); return n; });
       } catch (error) { alert("Failed to delete distributor."); }
     }
@@ -224,6 +243,8 @@ export function DistributorsModule() {
   };
 
   const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!hasWriteAccess()) return; // SECURITY CHECK
+    
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -249,6 +270,7 @@ export function DistributorsModule() {
 
         if (newDistributors.length > 0) {
           await supabase.from('distributors').insert(newDistributors);
+          logActivity(user!, profile!, "Distributors Imported", `Bulk imported ${newDistributors.length} distributors via CSV`);
           alert(`Successfully imported ${newDistributors.length} distributors!`);
         }
       } catch (error: any) { alert(`Failed to import. Make sure your CSV matches the template.`); } 

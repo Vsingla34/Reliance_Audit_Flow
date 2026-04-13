@@ -430,7 +430,8 @@ export function ExecutionModule() {
             )}
 
             <div className="flex w-full sm:w-auto gap-2 sm:gap-3">
-              {isAdminOrHO && (
+              {/* RESTRICTED RESET BUTTON: ONLY SUPERADMIN CAN RESET TICKETS */}
+              {profile?.role === 'superadmin' && (
                 <button onClick={resetAuditTicket} className="flex-1 sm:flex-none flex justify-center items-center gap-2 px-3 sm:px-4 py-2 bg-red-50 text-red-600 rounded-xl text-xs sm:text-sm font-bold hover:bg-red-100 transition-all border border-red-100"><RotateCcw size={16} /> <span className="hidden sm:inline">Reset</span></button>
               )}
               <button onClick={() => setIsChatOpen(true)} className="flex-1 sm:flex-none flex justify-center items-center gap-2 px-3 sm:px-4 py-2 bg-blue-50 text-blue-600 rounded-xl text-xs sm:text-sm font-bold hover:bg-blue-100 transition-all border border-blue-100"><MessageSquare size={16} /> Discussion {activeTicket.comments?.length ? `(${activeTicket.comments.length})` : ''}</button>

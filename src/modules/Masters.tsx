@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import { supabase } from '../supabase';
+import { supabase, logActivity } from '../supabase';
 import { 
   Database, 
   Upload, 
@@ -8,13 +8,13 @@ import {
   Trash2, 
   Loader2,
 } from 'lucide-react';
-import { useAuth } from '../App';
+import { useAuth, cn } from '../App';
 import { motion } from 'motion/react';
 
 const BATCH_SIZE = 2000; 
 
 export function MastersModule() {
-  const { profile } = useAuth();
+  const { profile, user } = useAuth(); // Added user for logging
   
   const [isUploadingItem, setIsUploadingItem] = useState(false);
   const [itemProgress, setItemProgress] = useState({ current: 0, total: 0 });
@@ -98,7 +98,11 @@ export function MastersModule() {
           if (error) throw error;
           processed += batch.length; setItemProgress({ current: processed, total: items.length });
         }
+        
+        // LOG ACTIVITY
+        logActivity(user, profile, "Master Data Uploaded", `${profile?.role.toUpperCase()} uploaded ${items.length} items to the Item Master`);
         alert(`Success! ${items.length} items uploaded to the Master.`);
+        
       } catch (error: any) { alert(`Upload failed: ${error.message || 'Invalid CSV format'}`); } 
       finally { setIsUploadingItem(false); setItemProgress({ current: 0, total: 0 }); if (itemFileRef.current) itemFileRef.current.value = ''; }
     };
@@ -168,7 +172,11 @@ export function MastersModule() {
           if (error) throw error;
           processed += batch.length; setSalesProgress({ current: processed, total: dumpItems.length });
         }
+        
+        // LOG ACTIVITY
+        logActivity(user, profile, "Sales Dump Uploaded", `${profile?.role.toUpperCase()} appended ${dumpItems.length} records to the Sales Dump`);
         alert(`Success! ${dumpItems.length} records appended to the Sales Dump.`);
+        
       } catch (error: any) { alert(`Upload failed: ${error.message || 'Invalid CSV format'}`); } 
       finally { setIsUploadingSales(false); setSalesProgress({ current: 0, total: 0 }); if (salesFileRef.current) salesFileRef.current.value = ''; }
     };
@@ -176,28 +184,42 @@ export function MastersModule() {
   };
 
   const clearSalesDump = async () => {
+    // HARD SECURITY CHECK: Only SuperAdmin can execute
+    if (profile?.role !== 'superadmin') return alert("Action Denied: Only SuperAdmins can delete database contents.");
+    
     if (window.confirm("WARNING: This will permanently delete ALL data in the Sales Dump. Do you want to continue?")) {
       setIsClearingSales(true);
       try {
         const { error } = await supabase.from('salesDump').delete().neq('id', '0');
-        if (error) throw error; alert("Sales Dump has been completely cleared.");
+        if (error) throw error; 
+        
+        // LOG ACTIVITY
+        logActivity(user, profile, "Sales Dump Cleared", `SUPERADMIN permanently wiped the Sales Dump database`);
+        alert("Sales Dump has been completely cleared.");
       } catch (error) { alert("Failed to clear Sales Dump."); } 
       finally { setIsClearingSales(false); }
     }
   };
 
   const clearItemMaster = async () => {
+    // HARD SECURITY CHECK: Only SuperAdmin can execute
+    if (profile?.role !== 'superadmin') return alert("Action Denied: Only SuperAdmins can delete database contents.");
+    
     if (window.confirm("WARNING: This will permanently delete ALL products in the Item Master. Do you want to continue?")) {
       setIsClearingItems(true);
       try {
         const { error } = await supabase.from('itemMaster').delete().neq('id', '0');
-        if (error) throw error; alert("Item Master has been completely cleared.");
+        if (error) throw error; 
+        
+        // LOG ACTIVITY
+        logActivity(user, profile, "Item Master Cleared", `SUPERADMIN permanently wiped the Item Master database`);
+        alert("Item Master has been completely cleared.");
       } catch (error) { alert("Failed to clear Item Master."); } 
       finally { setIsClearingItems(false); }
     }
   };
 
-  // SUPERADMIN UPDATE HERE
+  // RESTRICT PAGE ACCESS
   if (!['superadmin', 'admin', 'ho'].includes(profile?.role || '')) return <div className="p-8 text-center text-red-500 font-bold">Access Denied. Admins & HO only.</div>;
 
   return (
@@ -220,9 +242,12 @@ export function MastersModule() {
             <div className="p-4 bg-zinc-50 rounded-xl border border-zinc-100"><p className="font-bold text-zinc-900 mb-2 text-xs uppercase">Required Columns:</p><code className="text-xs text-blue-600">ItemCode, ItemName, GST, Category, ApproxShelfLife, StandardPack</code></div>
           </div>
           <div className="space-y-3 mt-auto">
-            <div className="grid grid-cols-2 gap-3">
+            {/* Dynamic Grid based on role */}
+            <div className={cn("grid gap-3", profile?.role === 'superadmin' ? "grid-cols-2" : "grid-cols-1")}>
               <button onClick={downloadItemTemplate} disabled={isUploadingItem} className="w-full py-3 bg-zinc-100 hover:bg-zinc-200 text-zinc-900 rounded-xl font-bold text-sm transition-colors flex items-center justify-center gap-2 disabled:opacity-50"><Download size={16} /> Template</button>
-              <button onClick={clearItemMaster} disabled={isClearingItems || isUploadingItem} className="w-full py-3 bg-red-50 hover:bg-red-100 text-red-700 rounded-xl font-bold text-sm transition-colors flex items-center justify-center gap-2 disabled:opacity-50">{isClearingItems ? <Loader2 className="animate-spin" size={16} /> : <Trash2 size={16} />} Clear Master</button>
+              {profile?.role === 'superadmin' && (
+                <button onClick={clearItemMaster} disabled={isClearingItems || isUploadingItem} className="w-full py-3 bg-red-50 hover:bg-red-100 text-red-700 rounded-xl font-bold text-sm transition-colors flex items-center justify-center gap-2 disabled:opacity-50">{isClearingItems ? <Loader2 className="animate-spin" size={16} /> : <Trash2 size={16} />} Clear Master</button>
+              )}
             </div>
             <input type="file" accept=".csv" ref={itemFileRef} onChange={handleItemMasterUpload} className="hidden" />
             <button onClick={() => itemFileRef.current?.click()} disabled={isUploadingItem} className="w-full py-4 bg-black text-white rounded-xl font-bold hover:bg-zinc-800 transition-all shadow-lg shadow-black/10 flex items-center justify-center gap-2 disabled:opacity-90 relative overflow-hidden">
@@ -248,9 +273,12 @@ export function MastersModule() {
             </div>
           </div>
           <div className="space-y-3 mt-auto">
-            <div className="grid grid-cols-2 gap-3">
+            {/* Dynamic Grid based on role */}
+            <div className={cn("grid gap-3", profile?.role === 'superadmin' ? "grid-cols-2" : "grid-cols-1")}>
               <button onClick={downloadSalesTemplate} disabled={isUploadingSales} className="w-full py-3 bg-zinc-100 hover:bg-zinc-200 text-zinc-900 rounded-xl font-bold text-sm transition-colors flex items-center justify-center gap-2 disabled:opacity-50"><Download size={16} /> Template</button>
-              <button onClick={clearSalesDump} disabled={isClearingSales || isUploadingSales} className="w-full py-3 bg-red-50 hover:bg-red-100 text-red-700 rounded-xl font-bold text-sm transition-colors flex items-center justify-center gap-2 disabled:opacity-50">{isClearingSales ? <Loader2 className="animate-spin" size={16} /> : <Trash2 size={16} />} Clear Dump</button>
+              {profile?.role === 'superadmin' && (
+                <button onClick={clearSalesDump} disabled={isClearingSales || isUploadingSales} className="w-full py-3 bg-red-50 hover:bg-red-100 text-red-700 rounded-xl font-bold text-sm transition-colors flex items-center justify-center gap-2 disabled:opacity-50">{isClearingSales ? <Loader2 className="animate-spin" size={16} /> : <Trash2 size={16} />} Clear Dump</button>
+              )}
             </div>
             <input type="file" accept=".csv" ref={salesFileRef} onChange={handleSalesDumpUpload} className="hidden" />
             <button onClick={() => salesFileRef.current?.click()} disabled={isUploadingSales} className="w-full py-4 bg-black text-white rounded-xl font-bold hover:bg-zinc-800 transition-all shadow-lg shadow-black/10 flex items-center justify-center gap-2 disabled:opacity-90 relative overflow-hidden">
