@@ -53,7 +53,33 @@ export default function App() {
   const [authError, setAuthError] = useState('');
   const [isLoggingIn, setIsLoggingIn] = useState(false);
 
-  const [activeModule, setActiveModule] = useState('dashboard');
+  // ==========================================
+  // CUSTOM URL ROUTING SYSTEM
+  // ==========================================
+  const getInitialModule = () => {
+    const path = window.location.pathname.replace('/', '');
+    return path || 'dashboard'; // Default to dashboard if root '/' is hit
+  };
+
+  const [activeModuleState, setActiveModuleState] = useState(getInitialModule);
+
+  // Wrapper function to update both the UI state AND the browser URL
+  const setActiveModule = (moduleId: string) => {
+    setActiveModuleState(moduleId);
+    window.history.pushState({}, '', `/${moduleId}`);
+  };
+
+  // Listen for the Browser's Back/Forward buttons
+  useEffect(() => {
+    const handlePopState = () => {
+      const path = window.location.pathname.replace('/', '');
+      setActiveModuleState(path || 'dashboard');
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+  // ==========================================
+
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [needsPasswordSetup, setNeedsPasswordSetup] = useState(false);
 
@@ -99,13 +125,11 @@ export default function App() {
   }, [user]);
 
   // ==========================================
-  // NAVIGATION LOGIC & HOOK
+  // ROLE-BASED NAVIGATION & SMART REDIRECT
   // ==========================================
   const navItems = [
-    // DASHBOARD restricted to ONLY superadmin, admin, and ho
     { id: 'dashboard', label: 'Overview', icon: LayoutDashboard, roles: ['superadmin', 'admin', 'ho'] },
     { id: 'masters', label: 'Data Masters', icon: Database, roles: ['superadmin', 'admin', 'ho'] },
-    // TEAM restricted to ONLY superadmin and admin
     { id: 'users', label: 'Team', icon: Users, roles: ['superadmin', 'admin'] },
     { id: 'distributors', label: 'Distributors', icon: Store, roles: ['superadmin', 'admin', 'ho', 'dm', 'sm', 'asm', 'ase'] },
     { id: 'scheduler', label: 'Schedule', icon: CalendarClock, roles: ['superadmin', 'admin', 'ho', 'dm', 'sm', 'asm', 'ase', 'auditor'] },
@@ -120,12 +144,19 @@ export default function App() {
 
   useEffect(() => {
     if (profile && allowedNavItems.length > 0) {
-      const isAllowed = allowedNavItems.some(item => item.id === activeModule);
+      const isAllowed = allowedNavItems.some(item => item.id === activeModuleState);
+      
       if (!isAllowed) {
-        setActiveModule(allowedNavItems[0].id);
+        // If they forcefully try to access a URL they aren't allowed to see, redirect and replace history
+        const fallbackId = allowedNavItems[0].id;
+        setActiveModuleState(fallbackId);
+        window.history.replaceState({}, '', `/${fallbackId}`);
+      } else if (window.location.pathname === '/' || window.location.pathname !== `/${activeModuleState}`) {
+        // Ensure the URL perfectly syncs with the loaded component (e.g. if they just typed localhost:5173/)
+        window.history.replaceState({}, '', `/${activeModuleState}`);
       }
     }
-  }, [profile, activeModule]); 
+  }, [profile, activeModuleState]); 
   // ==========================================
 
   const fetchProfile = async (userId: string) => {
@@ -241,7 +272,7 @@ export default function App() {
   }
 
   const renderModule = () => {
-    switch (activeModule) {
+    switch (activeModuleState) {
       case 'dashboard': return <DashboardModule />;
       case 'users': return <UsersModule />;
       case 'distributors': return <DistributorsModule />;
@@ -268,7 +299,7 @@ export default function App() {
             <div className="px-4 mb-2 text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Main Menu</div>
             {allowedNavItems.map(item => {
               const Icon = item.icon;
-              const isActive = activeModule === item.id;
+              const isActive = activeModuleState === item.id;
               return (
                 <button key={item.id} onClick={() => setActiveModule(item.id)} className={cn("w-full flex items-center gap-3 px-4 py-3.5 rounded-2xl font-bold text-sm transition-all group relative overflow-hidden", isActive ? "bg-black text-white shadow-md" : "text-zinc-500 hover:bg-zinc-100 hover:text-black")}>
                   {isActive && <motion.div layoutId="active-nav" className="absolute inset-0 bg-black -z-10" />}
@@ -331,7 +362,7 @@ export default function App() {
                 <nav className="flex-1 px-4 py-6 space-y-2 overflow-y-auto custom-scrollbar">
                   {allowedNavItems.map(item => {
                     const Icon = item.icon;
-                    const isActive = activeModule === item.id;
+                    const isActive = activeModuleState === item.id;
                     return (
                       <button 
                         key={item.id} 
@@ -362,7 +393,7 @@ export default function App() {
           
           <header className="hidden lg:flex bg-white/80 backdrop-blur-md border-b border-zinc-200 sticky top-0 z-30 px-8 py-5 items-center justify-between w-full">
             <div>
-              <h2 className="text-2xl font-bold tracking-tight capitalize">{activeModule.replace('_', ' ')}</h2>
+              <h2 className="text-2xl font-bold tracking-tight capitalize">{activeModuleState.replace('_', ' ')}</h2>
               <p className="text-sm text-zinc-500 mt-0.5">Manage your audit execution and tracking.</p>
             </div>
             <div className="flex items-center gap-4">
@@ -384,7 +415,7 @@ export default function App() {
 
           <div className="flex-1 p-4 sm:p-6 md:p-8 max-w-7xl mx-auto w-full min-w-0">
             <div className="lg:hidden mb-6 mt-2">
-              <h2 className="text-xl font-bold tracking-tight capitalize">{activeModule.replace('_', ' ')}</h2>
+              <h2 className="text-xl font-bold tracking-tight capitalize">{activeModuleState.replace('_', ' ')}</h2>
             </div>
             
             {renderModule()}
@@ -408,7 +439,6 @@ export default function App() {
                   <div><h3 className="font-bold text-base sm:text-lg">System Activity</h3><p className="text-[10px] sm:text-xs text-zinc-500">Live global assignment logs</p></div>
                 </div>
                 <div className="flex items-center gap-2">
-                  {/* EXCLUSIVE SUPERADMIN POWER: Clear all logs */}
                   {profile.role === 'superadmin' && activityLogs.length > 0 && <button onClick={clearAllLogs} className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors" title="Clear All Logs"><Trash2 size={18} /></button>}
                   <button onClick={() => setIsActivityOpen(false)} className="p-2 hover:bg-zinc-200 rounded-xl transition-colors"><X size={20} /></button>
                 </div>
@@ -430,7 +460,6 @@ export default function App() {
                             </p>
                             {log.details && <p className={cn("text-[10px] sm:text-xs mt-2 font-medium opacity-90 break-words", style.text)}>"{log.details}"</p>}
                           </div>
-                          {/* EXCLUSIVE SUPERADMIN POWER: Delete individual log */}
                           {profile.role === 'superadmin' && (
                             <button onClick={() => deleteActivityLog(log.id)} className="text-zinc-400 hover:text-red-500 bg-white/50 p-1.5 rounded-lg transition-colors opacity-100 lg:opacity-0 lg:group-hover:opacity-100 shrink-0"><Trash2 size={14} /></button>
                           )}

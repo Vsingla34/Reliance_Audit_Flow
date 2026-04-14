@@ -14,7 +14,7 @@ import { motion } from 'motion/react';
 const BATCH_SIZE = 2000; 
 
 export function MastersModule() {
-  const { profile, user } = useAuth(); // Added user for logging
+  const { profile, user } = useAuth(); // Brought in 'user' for the activity log
   
   const [isUploadingItem, setIsUploadingItem] = useState(false);
   const [itemProgress, setItemProgress] = useState({ current: 0, total: 0 });
@@ -53,7 +53,7 @@ export function MastersModule() {
 
   const handleItemMasterUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) return;
+    if (!file || !user || !profile) return;
 
     setIsUploadingItem(true); setItemProgress({ current: 0, total: 0 });
     const reader = new FileReader();
@@ -99,10 +99,10 @@ export function MastersModule() {
           processed += batch.length; setItemProgress({ current: processed, total: items.length });
         }
         
-        // LOG ACTIVITY
-        logActivity(user, profile, "Master Data Uploaded", `${profile?.role.toUpperCase()} uploaded ${items.length} items to the Item Master`);
-        alert(`Success! ${items.length} items uploaded to the Master.`);
+        // --- ACTIVITY LOG TRIGGER ---
+        logActivity(user, profile, "Master Data Uploaded", `Uploaded/Updated ${items.length} items in the Item Master.`);
         
+        alert(`Success! ${items.length} items uploaded to the Master.`);
       } catch (error: any) { alert(`Upload failed: ${error.message || 'Invalid CSV format'}`); } 
       finally { setIsUploadingItem(false); setItemProgress({ current: 0, total: 0 }); if (itemFileRef.current) itemFileRef.current.value = ''; }
     };
@@ -111,7 +111,7 @@ export function MastersModule() {
 
   const handleSalesDumpUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) return;
+    if (!file || !user || !profile) return;
 
     setIsUploadingSales(true); setSalesProgress({ current: 0, total: 0 });
     const reader = new FileReader();
@@ -173,10 +173,10 @@ export function MastersModule() {
           processed += batch.length; setSalesProgress({ current: processed, total: dumpItems.length });
         }
         
-        // LOG ACTIVITY
-        logActivity(user, profile, "Sales Dump Uploaded", `${profile?.role.toUpperCase()} appended ${dumpItems.length} records to the Sales Dump`);
-        alert(`Success! ${dumpItems.length} records appended to the Sales Dump.`);
+        // --- ACTIVITY LOG TRIGGER ---
+        logActivity(user, profile, "Sales Dump Uploaded", `Appended ${dumpItems.length} records to the global Sales Dump.`);
         
+        alert(`Success! ${dumpItems.length} records appended to the Sales Dump.`);
       } catch (error: any) { alert(`Upload failed: ${error.message || 'Invalid CSV format'}`); } 
       finally { setIsUploadingSales(false); setSalesProgress({ current: 0, total: 0 }); if (salesFileRef.current) salesFileRef.current.value = ''; }
     };
@@ -184,8 +184,10 @@ export function MastersModule() {
   };
 
   const clearSalesDump = async () => {
+    if (!user || !profile) return;
+    
     // HARD SECURITY CHECK: Only SuperAdmin can execute
-    if (profile?.role !== 'superadmin') return alert("Action Denied: Only SuperAdmins can delete database contents.");
+    if (profile.role !== 'superadmin') return alert("Action Denied: Only SuperAdmins can delete database contents.");
     
     if (window.confirm("WARNING: This will permanently delete ALL data in the Sales Dump. Do you want to continue?")) {
       setIsClearingSales(true);
@@ -193,8 +195,9 @@ export function MastersModule() {
         const { error } = await supabase.from('salesDump').delete().neq('id', '0');
         if (error) throw error; 
         
-        // LOG ACTIVITY
-        logActivity(user, profile, "Sales Dump Cleared", `SUPERADMIN permanently wiped the Sales Dump database`);
+        // --- ACTIVITY LOG TRIGGER ---
+        logActivity(user, profile, "Sales Dump Cleared", `WARNING: Action executed. Entire Sales Dump database was wiped.`);
+        
         alert("Sales Dump has been completely cleared.");
       } catch (error) { alert("Failed to clear Sales Dump."); } 
       finally { setIsClearingSales(false); }
@@ -202,8 +205,10 @@ export function MastersModule() {
   };
 
   const clearItemMaster = async () => {
+    if (!user || !profile) return;
+
     // HARD SECURITY CHECK: Only SuperAdmin can execute
-    if (profile?.role !== 'superadmin') return alert("Action Denied: Only SuperAdmins can delete database contents.");
+    if (profile.role !== 'superadmin') return alert("Action Denied: Only SuperAdmins can delete database contents.");
     
     if (window.confirm("WARNING: This will permanently delete ALL products in the Item Master. Do you want to continue?")) {
       setIsClearingItems(true);
@@ -211,8 +216,9 @@ export function MastersModule() {
         const { error } = await supabase.from('itemMaster').delete().neq('id', '0');
         if (error) throw error; 
         
-        // LOG ACTIVITY
-        logActivity(user, profile, "Item Master Cleared", `SUPERADMIN permanently wiped the Item Master database`);
+        // --- ACTIVITY LOG TRIGGER ---
+        logActivity(user, profile, "Item Master Cleared", `WARNING: Action executed. Entire Item Master database was wiped.`);
+        
         alert("Item Master has been completely cleared.");
       } catch (error) { alert("Failed to clear Item Master."); } 
       finally { setIsClearingItems(false); }

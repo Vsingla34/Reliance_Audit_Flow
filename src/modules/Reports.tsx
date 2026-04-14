@@ -11,7 +11,8 @@ import {
   IndianRupee,
   RefreshCw,
   Upload,
-  X
+  X,
+  ShieldAlert
 } from 'lucide-react';
 import { cn, useAuth } from '../App';
 import { motion, AnimatePresence } from 'motion/react';
@@ -30,10 +31,17 @@ export function ReportsModule() {
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
 
-  // SUPERADMIN UPDATE HERE
+  // --- STRICT SECURITY CHECK ---
+  // Blocks field users (ASE, Auditor) from forcing their browser to /reports
+  const allowedRoles = ['superadmin', 'admin', 'ho', 'dm', 'sm', 'asm'];
+  const hasAccess = allowedRoles.includes(profile?.role || '');
+
+  // Only Admin, SuperAdmin, and HO can upload the Master Dump from the reports page
   const isAdminOrHO = ['superadmin', 'admin', 'ho'].includes(profile?.role || '');
 
   const fetchReportData = async () => {
+    if (!hasAccess) return;
+    
     setLoading(true);
     try {
       const [tRes, dRes, sRes] = await Promise.all([
@@ -58,7 +66,7 @@ export function ReportsModule() {
 
   useEffect(() => {
     fetchReportData();
-  }, []);
+  }, [hasAccess]);
 
   const generateReport = async () => {
     setLoading(true);
@@ -79,6 +87,13 @@ export function ReportsModule() {
             const ticket = tickets.find(t => t.id === item.ticketId);
             const dist = distributors.find(d => d.id === ticket?.distributorId);
             
+            // If the user is a manager (DM, SM, ASM), only show data for their specific distributors
+            if (!isAdminOrHO) {
+              if (profile?.role === 'dm' && dist?.dmId !== profile?.uid) return;
+              if (profile?.role === 'sm' && dist?.smId !== profile?.uid) return;
+              if (profile?.role === 'asm' && dist?.asmId !== profile?.uid) return;
+            }
+
             let matchedArticle = salesDump.find(s => s.articleNumber === item.articleNumber);
             let matchType = 'Exact';
             
@@ -133,10 +148,8 @@ export function ReportsModule() {
       try {
         const text = event.target?.result as string;
         const lines = text.split('\n').filter(line => line.trim() !== ''); // Skip empty lines
-        const headers = lines[0].split(','); // Skip header row
         
         const newDumpItems = lines.slice(1).map(line => {
-          // Expected CSV format: ArticleNumber, Description, Category, Rate
           const [articleNumber, description, category, rate] = line.split(',');
           if (!articleNumber || !rate) return null;
           
@@ -159,7 +172,6 @@ export function ReportsModule() {
           
           alert(`Successfully uploaded ${newDumpItems.length} articles to the master dump!`);
           
-          // Refresh the data to recalculate the reports
           fetchReportData(); 
         }
       } catch (error) {
@@ -205,10 +217,22 @@ export function ReportsModule() {
   const totalRequested = reportData.reduce((acc, row) => acc + (row.requestedValue || 0), 0);
   const totalCN = reportData.reduce((acc, row) => acc + (row.creditNoteValue || 0), 0);
 
+  if (!hasAccess) {
+    return (
+      <div className="flex items-center justify-center min-h-[60vh] w-full p-4">
+        <div className="bg-red-50 border border-red-100 p-8 rounded-[2rem] max-w-md w-full text-center shadow-sm">
+          <ShieldAlert className="text-red-500 w-16 h-16 mx-auto mb-4" />
+          <h2 className="text-xl font-bold text-red-900 mb-2">Access Restricted</h2>
+          <p className="text-sm text-red-700 font-medium">Financial Reports are restricted to Management and Admin personnel.</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-8 pb-12">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
-        <div className="flex bg-zinc-100 p-1.5 rounded-2xl overflow-x-auto">
+        <div className="flex bg-zinc-100 p-1.5 rounded-2xl overflow-x-auto custom-scrollbar">
           <button 
             onClick={() => setActiveReport('consolidated')}
             className={cn(
@@ -233,7 +257,7 @@ export function ReportsModule() {
           <button 
             onClick={fetchReportData}
             disabled={loading}
-            className="flex items-center gap-2 px-4 py-3 bg-zinc-100 text-zinc-900 rounded-xl font-bold hover:bg-zinc-200 transition-all disabled:opacity-50"
+            className="flex items-center justify-center gap-2 px-4 py-3 bg-zinc-100 text-zinc-900 rounded-xl font-bold hover:bg-zinc-200 transition-all disabled:opacity-50"
             title="Refresh Report Data"
           >
             <RefreshCw size={18} className={cn(loading && "animate-spin")} />
@@ -242,18 +266,18 @@ export function ReportsModule() {
           {isAdminOrHO && (
             <button 
               onClick={() => setIsUploadModalOpen(true)}
-              className="flex items-center gap-2 px-4 py-3 bg-zinc-100 text-zinc-900 rounded-xl font-bold hover:bg-zinc-200 transition-all active:scale-95"
+              className="flex items-center justify-center gap-2 px-4 py-3 bg-zinc-100 text-zinc-900 rounded-xl font-bold hover:bg-zinc-200 transition-all active:scale-95 whitespace-nowrap"
             >
-              <Upload size={18} /> Master Dump
+              <Upload size={18} /> <span className="hidden sm:inline">Master Dump</span>
             </button>
           )}
 
           <button 
             onClick={downloadCSV}
             disabled={reportData.length === 0}
-            className="flex items-center gap-2 px-6 py-3 bg-black text-white rounded-xl font-bold hover:bg-zinc-800 transition-all shadow-xl shadow-black/10 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="flex items-center justify-center gap-2 px-6 py-3 bg-black text-white rounded-xl font-bold hover:bg-zinc-800 transition-all shadow-xl shadow-black/10 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
           >
-            <Download size={18} /> Export CSV
+            <Download size={18} /> <span className="hidden sm:inline">Export CSV</span>
           </button>
         </div>
       </div>
@@ -263,69 +287,69 @@ export function ReportsModule() {
           <div className="w-14 h-14 bg-zinc-100 rounded-2xl flex items-center justify-center shrink-0">
             <FileText className="text-zinc-600" size={24} />
           </div>
-          <div>
-            <p className="text-sm font-bold text-zinc-400 uppercase tracking-wider">Total Line Items</p>
-            <p className="text-2xl font-black text-zinc-900">{reportData.length}</p>
+          <div className="min-w-0">
+            <p className="text-sm font-bold text-zinc-400 uppercase tracking-wider truncate">Total Line Items</p>
+            <p className="text-2xl font-black text-zinc-900 truncate">{reportData.length}</p>
           </div>
         </div>
         <div className="bg-white p-6 rounded-[2rem] border border-zinc-200 shadow-sm flex items-center gap-4">
           <div className="w-14 h-14 bg-blue-50 rounded-2xl flex items-center justify-center shrink-0">
             <IndianRupee className="text-blue-600" size={24} />
           </div>
-          <div>
-            <p className="text-sm font-bold text-blue-400 uppercase tracking-wider">Requested Value</p>
-            <p className="text-2xl font-black text-zinc-900">₹{totalRequested.toLocaleString()}</p>
+          <div className="min-w-0">
+            <p className="text-sm font-bold text-blue-400 uppercase tracking-wider truncate">Requested Value</p>
+            <p className="text-2xl font-black text-zinc-900 truncate">₹{totalRequested.toLocaleString()}</p>
           </div>
         </div>
         <div className="bg-white p-6 rounded-[2rem] border border-zinc-200 shadow-sm flex items-center gap-4">
           <div className="w-14 h-14 bg-emerald-50 rounded-2xl flex items-center justify-center shrink-0">
             <IndianRupee className="text-emerald-600" size={24} />
           </div>
-          <div>
-            <p className="text-sm font-bold text-emerald-500 uppercase tracking-wider">Credit Note Value</p>
-            <p className="text-2xl font-black text-zinc-900">₹{totalCN.toLocaleString()}</p>
+          <div className="min-w-0">
+            <p className="text-sm font-bold text-emerald-500 uppercase tracking-wider truncate">Credit Note Value</p>
+            <p className="text-2xl font-black text-zinc-900 truncate">₹{totalCN.toLocaleString()}</p>
           </div>
         </div>
       </div>
 
       <div className="bg-white rounded-[2.5rem] border border-zinc-200 shadow-sm overflow-hidden">
         {activeReport === 'consolidated' ? (
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto custom-scrollbar">
             <table className="w-full text-sm">
               <thead className="bg-zinc-50 border-b border-zinc-200">
                 <tr>
-                  <th className="px-6 py-4 text-left font-bold text-zinc-500 uppercase tracking-wider text-xs">Distributor</th>
-                  <th className="px-6 py-4 text-left font-bold text-zinc-500 uppercase tracking-wider text-xs">Article</th>
-                  <th className="px-6 py-4 text-left font-bold text-zinc-500 uppercase tracking-wider text-xs">Reason</th>
-                  <th className="px-6 py-4 text-right font-bold text-zinc-500 uppercase tracking-wider text-xs">Qty</th>
-                  <th className="px-6 py-4 text-right font-bold text-zinc-500 uppercase tracking-wider text-xs">Rate</th>
-                  <th className="px-6 py-4 text-right font-bold text-zinc-500 uppercase tracking-wider text-xs">Requested Value</th>
-                  <th className="px-6 py-4 text-center font-bold text-zinc-500 uppercase tracking-wider text-xs">Status</th>
+                  <th className="px-6 py-4 text-left font-bold text-zinc-500 uppercase tracking-wider text-xs whitespace-nowrap">Distributor</th>
+                  <th className="px-6 py-4 text-left font-bold text-zinc-500 uppercase tracking-wider text-xs whitespace-nowrap">Article</th>
+                  <th className="px-6 py-4 text-left font-bold text-zinc-500 uppercase tracking-wider text-xs whitespace-nowrap">Reason</th>
+                  <th className="px-6 py-4 text-right font-bold text-zinc-500 uppercase tracking-wider text-xs whitespace-nowrap">Qty</th>
+                  <th className="px-6 py-4 text-right font-bold text-zinc-500 uppercase tracking-wider text-xs whitespace-nowrap">Rate</th>
+                  <th className="px-6 py-4 text-right font-bold text-zinc-500 uppercase tracking-wider text-xs whitespace-nowrap">Requested Value</th>
+                  <th className="px-6 py-4 text-center font-bold text-zinc-500 uppercase tracking-wider text-xs whitespace-nowrap">Status</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-100">
                 {reportData.map((row, idx) => (
                   <tr key={idx} className="hover:bg-zinc-50 transition-colors">
-                    <td className="px-6 py-4">
-                      <p className="font-bold">{row.distributorName}</p>
-                      <p className="text-xs text-zinc-400">{row.distributorCode}</p>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <p className="font-bold text-zinc-900">{row.distributorName}</p>
+                      <p className="text-xs text-zinc-400 font-mono">{row.distributorCode}</p>
                     </td>
                     <td className="px-6 py-4">
-                      <p className="font-medium">{row.articleNumber}</p>
-                      <p className="text-xs text-zinc-400 truncate max-w-[200px]">{row.description}</p>
+                      <p className="font-medium text-zinc-900">{row.articleNumber}</p>
+                      <p className="text-xs text-zinc-400 line-clamp-1 min-w-[150px]">{row.description}</p>
                     </td>
-                    <td className="px-6 py-4">
-                      <span className="bg-zinc-100 px-2 py-1 rounded text-xs font-medium text-zinc-600">
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <span className="bg-zinc-100 px-2.5 py-1 rounded-md text-[10px] font-black uppercase tracking-wider text-zinc-600">
                         {row.reasonCode}
                       </span>
                     </td>
-                    <td className="px-6 py-4 text-right font-medium">{row.quantity}</td>
+                    <td className="px-6 py-4 text-right font-black text-zinc-900">{row.quantity}</td>
                     <td className="px-6 py-4 text-right text-zinc-500">₹{row.unitValue}</td>
-                    <td className="px-6 py-4 text-right font-bold text-zinc-900">₹{row.requestedValue.toLocaleString()}</td>
-                    <td className="px-6 py-4 text-center">
+                    <td className="px-6 py-4 text-right font-black text-zinc-900">₹{row.requestedValue.toLocaleString()}</td>
+                    <td className="px-6 py-4 text-center whitespace-nowrap">
                       <span className={cn(
-                        "px-2 py-1 rounded text-xs font-bold uppercase tracking-wider",
-                        row.status === 'closed' ? "bg-emerald-50 text-emerald-600" : "bg-purple-50 text-purple-600"
+                        "px-2.5 py-1 rounded-md text-[10px] font-black uppercase tracking-wider",
+                        row.status === 'closed' ? "bg-emerald-50 text-emerald-600 border border-emerald-100" : "bg-purple-50 text-purple-600 border border-purple-100"
                       )}>
                         {row.status.replace('_', ' ')}
                       </span>
@@ -336,41 +360,41 @@ export function ReportsModule() {
             </table>
           </div>
         ) : (
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto custom-scrollbar">
             <table className="w-full text-sm">
               <thead className="bg-zinc-50 border-b border-zinc-200">
                 <tr>
-                  <th className="px-6 py-4 text-left font-bold text-zinc-500 uppercase tracking-wider text-xs">Distributor</th>
-                  <th className="px-6 py-4 text-left font-bold text-zinc-500 uppercase tracking-wider text-xs">Article</th>
-                  <th className="px-6 py-4 text-center font-bold text-zinc-500 uppercase tracking-wider text-xs">Match Status</th>
-                  <th className="px-6 py-4 text-right font-bold text-zinc-500 uppercase tracking-wider text-xs">Qty</th>
-                  <th className="px-6 py-4 text-right font-bold text-zinc-500 uppercase tracking-wider text-xs">Dump Rate</th>
-                  <th className="px-6 py-4 text-right font-bold text-zinc-500 uppercase tracking-wider text-xs">Final CN Value</th>
-                  <th className="px-6 py-4 text-right font-bold text-zinc-500 uppercase tracking-wider text-xs">Variance</th>
+                  <th className="px-6 py-4 text-left font-bold text-zinc-500 uppercase tracking-wider text-xs whitespace-nowrap">Distributor</th>
+                  <th className="px-6 py-4 text-left font-bold text-zinc-500 uppercase tracking-wider text-xs whitespace-nowrap">Article</th>
+                  <th className="px-6 py-4 text-center font-bold text-zinc-500 uppercase tracking-wider text-xs whitespace-nowrap">Match Status</th>
+                  <th className="px-6 py-4 text-right font-bold text-zinc-500 uppercase tracking-wider text-xs whitespace-nowrap">Qty</th>
+                  <th className="px-6 py-4 text-right font-bold text-zinc-500 uppercase tracking-wider text-xs whitespace-nowrap">Dump Rate</th>
+                  <th className="px-6 py-4 text-right font-bold text-zinc-500 uppercase tracking-wider text-xs whitespace-nowrap">Final CN Value</th>
+                  <th className="px-6 py-4 text-right font-bold text-zinc-500 uppercase tracking-wider text-xs whitespace-nowrap">Variance</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-100">
                 {reportData.map((row, idx) => (
                   <tr key={idx} className="hover:bg-zinc-50 transition-colors">
-                    <td className="px-6 py-4">
-                      <p className="font-bold">{row.distributorName}</p>
-                      <p className="text-xs text-zinc-400">{row.distributorCode}</p>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <p className="font-bold text-zinc-900">{row.distributorName}</p>
+                      <p className="text-xs text-zinc-400 font-mono">{row.distributorCode}</p>
                     </td>
                     <td className="px-6 py-4">
-                      <p className="font-medium">{row.articleNumber}</p>
-                      {row.matchType !== 'Exact' && <p className="text-xs text-amber-500">Matched to: {row.matchedArticle}</p>}
+                      <p className="font-medium text-zinc-900">{row.articleNumber}</p>
+                      {row.matchType !== 'Exact' && <p className="text-[10px] font-bold text-amber-600 mt-0.5">Matched: {row.matchedArticle}</p>}
                     </td>
-                    <td className="px-6 py-4 text-center">
+                    <td className="px-6 py-4 text-center whitespace-nowrap">
                       <span className={cn(
-                        "flex items-center justify-center gap-1 px-2 py-1 rounded text-xs font-bold",
-                        row.matchType === 'Exact' ? "text-emerald-600 bg-emerald-50" : 
-                        row.matchType === 'Unmatched' ? "text-red-600 bg-red-50" : "text-amber-600 bg-amber-50"
+                        "inline-flex items-center justify-center gap-1.5 px-2.5 py-1 rounded-md text-[10px] font-black uppercase tracking-wider border",
+                        row.matchType === 'Exact' ? "text-emerald-700 bg-emerald-50 border-emerald-100" : 
+                        row.matchType === 'Unmatched' ? "text-red-700 bg-red-50 border-red-100" : "text-amber-700 bg-amber-50 border-amber-100"
                       )}>
                         {row.matchType === 'Exact' ? <CheckCircle2 size={12}/> : row.matchType === 'Unmatched' ? <AlertCircle size={12}/> : <Info size={12}/>}
                         {row.matchType}
                       </span>
                     </td>
-                    <td className="px-6 py-4 text-right font-medium">{row.quantity}</td>
+                    <td className="px-6 py-4 text-right font-black text-zinc-900">{row.quantity}</td>
                     <td className="px-6 py-4 text-right text-zinc-500">
                       {row.creditNoteRate ? `₹${row.creditNoteRate}` : '-'}
                     </td>
@@ -379,8 +403,8 @@ export function ReportsModule() {
                     </td>
                     <td className="px-6 py-4 text-right">
                       <span className={cn(
-                        "font-bold",
-                        row.variance > 0 ? "text-emerald-500" : row.variance < 0 ? "text-red-500" : "text-zinc-400"
+                        "font-bold text-sm",
+                        row.variance > 0 ? "text-emerald-600" : row.variance < 0 ? "text-red-600" : "text-zinc-400"
                       )}>
                         {row.variance > 0 ? '+' : ''}₹{row.variance.toLocaleString()}
                       </span>
@@ -395,8 +419,8 @@ export function ReportsModule() {
         {reportData.length === 0 && !loading && (
           <div className="p-16 text-center text-zinc-500">
             <BarChart3 size={48} className="mx-auto mb-4 text-zinc-300" />
-            <p className="font-medium text-lg text-zinc-900">No report data available</p>
-            <p className="text-sm mt-1">There are no signed or closed audits to generate a report from yet.</p>
+            <p className="font-bold text-lg text-zinc-900">No report data available</p>
+            <p className="text-sm mt-1">There are no signed or closed audits in your purview to generate a report from.</p>
           </div>
         )}
       </div>
