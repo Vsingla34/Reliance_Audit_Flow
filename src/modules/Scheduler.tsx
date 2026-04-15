@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { supabase, logActivity } from '../supabase';
 import { AuditTicket, Distributor, UserProfile, DateProposal } from '../types';
-import { Calendar as CalendarIcon, Plus, Store, MapPin, CheckCircle2, X, Send, AlertCircle, MessageSquare, Filter, Trash2, CalendarCheck, ChevronLeft, ChevronRight, Clock, Edit2 } from 'lucide-react';
+import { Calendar as CalendarIcon, Plus, Store, MapPin, CheckCircle2, X, Send, AlertCircle, MessageSquare, Filter, Trash2, CalendarCheck, ChevronLeft, ChevronRight, Clock, Edit2, Search } from 'lucide-react';
 import { cn, useAuth } from '../App';
 import { motion, AnimatePresence } from 'motion/react';
 import { format, startOfMonth, endOfMonth, eachDayOfInterval, addMonths, subMonths, isToday } from 'date-fns';
@@ -29,6 +29,9 @@ export function SchedulerModule() {
   const [approvalAuditorIds, setApprovalAuditorIds] = useState<string[]>([]);
   const [approvalAuditDays, setApprovalAuditDays] = useState(1);
 
+  // Search state for Auditor Lists
+  const [auditorSearch, setAuditorSearch] = useState('');
+
   // SUPERADMIN UPDATE HERE
   const isAdminOrHO = ['superadmin', 'admin', 'ho'].includes(profile?.role || '');
 
@@ -55,6 +58,12 @@ export function SchedulerModule() {
     });
     return map;
   }, [tickets]);
+
+  // Filter auditors based on search term
+  const displayedAuditors = useMemo(() => {
+    if (!auditorSearch.trim()) return auditors;
+    return auditors.filter(a => a.name.toLowerCase().includes(auditorSearch.toLowerCase()));
+  }, [auditors, auditorSearch]);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -124,6 +133,7 @@ export function SchedulerModule() {
         await supabase.from('auditTickets').delete().eq('id', ticketId);
         setNegotiationTicket(null);
         setEditingActiveTicket(null);
+        setAuditorSearch('');
       } catch (error) {
         console.error("Error deleting ticket:", error);
       }
@@ -175,6 +185,7 @@ export function SchedulerModule() {
 
       setIsCreateModalOpen(false);
       setCreateData({ distributorId: '', proposedDate: '', auditorIds: [], auditDays: 1 });
+      setAuditorSearch('');
     } catch (error) {
       console.error("Error creating audit ticket:", error);
     }
@@ -198,6 +209,7 @@ export function SchedulerModule() {
       logActivity(user, profile, "Audit Re-scheduled", `${profile?.role.toUpperCase()} modified the schedule/auditors for ${dist?.name}`);
 
       setEditingActiveTicket(null);
+      setAuditorSearch('');
     } catch (error) {
       console.error("Error updating ticket:", error);
     }
@@ -260,6 +272,7 @@ export function SchedulerModule() {
       setNegotiationTicket(null); 
       setApprovalAuditorIds([]);
       setApprovalAuditDays(1);
+      setAuditorSearch('');
     } catch (error) {
       console.error("Error approving schedule:", error);
     }
@@ -379,7 +392,7 @@ export function SchedulerModule() {
       {/* --- RESPONSIVE CALENDAR VIEW --- */}
       <div className="bg-white rounded-[1.5rem] sm:rounded-[2.5rem] p-4 sm:p-8 border border-zinc-200 shadow-sm overflow-hidden w-full">
         <div className="overflow-x-auto w-full custom-scrollbar pb-4 sm:pb-0">
-          <div className="min-w-[768px]"> {/* Prevents the calendar from squishing on mobile */}
+          <div className="min-w-[768px]">
             <div className="grid grid-cols-7 gap-2 sm:gap-4 mb-2 sm:mb-4">
               {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
                 <div key={day} className="text-center text-[10px] sm:text-xs font-bold text-zinc-400 uppercase tracking-wider py-1 sm:py-2">{day}</div>
@@ -453,58 +466,71 @@ export function SchedulerModule() {
       <AnimatePresence>
         {editingActiveTicket && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6">
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setEditingActiveTicket(null)} className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
-            <motion.div initial={{ opacity: 0, scale: 0.9, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9, y: 20 }} className="relative w-full max-w-md bg-white rounded-[1.5rem] sm:rounded-[2.5rem] shadow-2xl overflow-hidden p-5 sm:p-8">
-              <div className="flex justify-between items-start sm:items-center mb-5 sm:mb-6">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => { setEditingActiveTicket(null); setAuditorSearch(''); }} className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
+            <motion.div initial={{ opacity: 0, scale: 0.9, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9, y: 20 }} className="relative w-full max-w-md bg-white rounded-[1.5rem] sm:rounded-[2.5rem] shadow-2xl overflow-hidden p-5 sm:p-8 flex flex-col max-h-[90vh]">
+              <div className="flex justify-between items-start sm:items-center mb-5 sm:mb-6 shrink-0">
                 <div>
                   <h3 className="text-lg sm:text-xl font-bold flex items-center gap-2"><Edit2 size={18} className="text-blue-600 sm:w-5 sm:h-5" /> Edit Assignment</h3>
                   <p className="text-xs sm:text-sm text-zinc-500 mt-1">{distMap[editingActiveTicket.distributorId]?.name}</p>
                 </div>
-                <button onClick={() => setEditingActiveTicket(null)} className="p-1.5 sm:p-2 hover:bg-zinc-100 rounded-lg sm:rounded-xl shrink-0"><X size={18} className="sm:w-5 sm:h-5"/></button>
+                <button onClick={() => { setEditingActiveTicket(null); setAuditorSearch(''); }} className="p-1.5 sm:p-2 hover:bg-zinc-100 rounded-lg sm:rounded-xl shrink-0"><X size={18} className="sm:w-5 sm:h-5"/></button>
               </div>
-              <form onSubmit={handleEditActiveTicketSubmit} className="space-y-4">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-                  <div>
-                    <label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-400">Start Date</label>
-                    <input required type="date" className="w-full mt-1 px-3 sm:px-4 py-2.5 sm:py-3 bg-zinc-50 border border-zinc-200 sm:border-none rounded-xl focus:ring-2 focus:ring-black transition-all cursor-pointer text-sm" value={editTicketData.scheduledDate} onChange={e => setEditTicketData({...editTicketData, scheduledDate: e.target.value})} />
+              <div className="overflow-y-auto custom-scrollbar flex-1 pr-2">
+                <form id="edit-ticket-form" onSubmit={handleEditActiveTicketSubmit} className="space-y-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+                    <div>
+                      <label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-400">Start Date</label>
+                      <input required type="date" className="w-full mt-1 px-3 sm:px-4 py-2.5 sm:py-3 bg-zinc-50 border border-zinc-200 sm:border-none rounded-xl focus:ring-2 focus:ring-black transition-all cursor-pointer text-sm" value={editTicketData.scheduledDate} onChange={e => setEditTicketData({...editTicketData, scheduledDate: e.target.value})} />
+                    </div>
+                    <div>
+                      <label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-400">Duration</label>
+                      <select required className="w-full mt-1 px-3 sm:px-4 py-2.5 sm:py-3 bg-zinc-50 border border-zinc-200 sm:border-none rounded-xl focus:ring-2 focus:ring-black transition-all cursor-pointer text-sm" value={editTicketData.auditDays} onChange={e => setEditTicketData({...editTicketData, auditDays: parseInt(e.target.value)})}>
+                        {[1,2,3,4,5].map(n => <option key={n} value={n}>{n} Day{n>1?'s':''}</option>)}
+                      </select>
+                    </div>
                   </div>
-                  <div>
-                    <label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-400">Duration</label>
-                    <select required className="w-full mt-1 px-3 sm:px-4 py-2.5 sm:py-3 bg-zinc-50 border border-zinc-200 sm:border-none rounded-xl focus:ring-2 focus:ring-black transition-all cursor-pointer text-sm" value={editTicketData.auditDays} onChange={e => setEditTicketData({...editTicketData, auditDays: parseInt(e.target.value)})}>
-                      {[1,2,3,4,5].map(n => <option key={n} value={n}>{n} Day{n>1?'s':''}</option>)}
-                    </select>
-                  </div>
-                </div>
 
-                <div>
-                  <label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-400 mb-1.5 sm:mb-2 block">Assign Auditors</label>
-                  <div className="max-h-40 overflow-y-auto border border-zinc-200 rounded-xl p-2 sm:p-3 bg-zinc-50 grid grid-cols-1 sm:grid-cols-2 gap-1 sm:gap-2">
-                    {auditors.map(a => (
-                      <label key={a.uid} className="flex items-center gap-2 cursor-pointer p-1.5 hover:bg-zinc-100 rounded-lg">
-                        <input 
-                          type="checkbox" 
-                          checked={editTicketData.auditorIds.includes(a.uid)}
-                          onChange={(e) => {
-                            const newIds = e.target.checked ? [...editTicketData.auditorIds, a.uid] : editTicketData.auditorIds.filter(id => id !== a.uid);
-                            setEditTicketData({ ...editTicketData, auditorIds: newIds });
-                          }}
-                          className="w-3.5 h-3.5 sm:w-4 sm:h-4 rounded border-zinc-300 text-black focus:ring-black"
-                        />
-                        <span className="text-xs sm:text-sm font-medium text-zinc-700 truncate">{a.name}</span>
-                      </label>
-                    ))}
+                  <div>
+                    <label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-400 mb-1 block">Assign Auditors</label>
+                    <div className="mb-2 relative">
+                      <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-400" size={14} />
+                      <input 
+                        type="text" 
+                        placeholder="Search auditors by name..." 
+                        className="w-full pl-8 pr-3 py-2 bg-white border border-zinc-200 rounded-lg text-xs focus:ring-2 focus:ring-black outline-none transition-all"
+                        value={auditorSearch}
+                        onChange={(e) => setAuditorSearch(e.target.value)}
+                      />
+                    </div>
+                    <div className="max-h-40 overflow-y-auto border border-zinc-200 rounded-xl p-2 sm:p-3 bg-zinc-50 grid grid-cols-1 sm:grid-cols-2 gap-1 sm:gap-2 custom-scrollbar">
+                      {displayedAuditors.length > 0 ? displayedAuditors.map(a => (
+                        <label key={a.uid} className="flex items-center gap-2 cursor-pointer p-1.5 hover:bg-zinc-100 rounded-lg">
+                          <input 
+                            type="checkbox" 
+                            checked={editTicketData.auditorIds.includes(a.uid)}
+                            onChange={(e) => {
+                              const newIds = e.target.checked ? [...editTicketData.auditorIds, a.uid] : editTicketData.auditorIds.filter(id => id !== a.uid);
+                              setEditTicketData({ ...editTicketData, auditorIds: newIds });
+                            }}
+                            className="w-3.5 h-3.5 sm:w-4 sm:h-4 rounded border-zinc-300 text-black focus:ring-black"
+                          />
+                          <span className="text-xs sm:text-sm font-medium text-zinc-700 truncate">{a.name}</span>
+                        </label>
+                      )) : (
+                        <div className="col-span-full text-center py-4 text-xs font-medium text-zinc-400">No auditors found.</div>
+                      )}
+                    </div>
                   </div>
-                </div>
-                
-                <div className="flex flex-col sm:flex-row items-center gap-2 sm:gap-3 pt-2 sm:pt-4">
-                  <button type="button" onClick={() => deleteTicket(editingActiveTicket.id)} className="w-full sm:w-auto px-4 py-3 sm:py-4 bg-red-50 text-red-600 rounded-xl sm:rounded-2xl font-bold hover:bg-red-100 transition-colors flex justify-center items-center gap-2" title="Delete Ticket">
-                    <Trash2 size={18} className="sm:w-5 sm:h-5" /> <span className="sm:hidden">Delete Ticket</span>
-                  </button>
-                  <button type="submit" className="w-full sm:flex-1 py-3 sm:py-4 bg-black text-white rounded-xl sm:rounded-2xl font-bold hover:bg-zinc-800 transition-all shadow-md sm:shadow-xl sm:shadow-black/10 active:scale-95 text-sm sm:text-base">
-                    Save Changes
-                  </button>
-                </div>
-              </form>
+                </form>
+              </div>
+              <div className="flex flex-col sm:flex-row items-center gap-2 sm:gap-3 pt-4 border-t border-zinc-100 shrink-0 mt-4">
+                <button type="button" onClick={() => deleteTicket(editingActiveTicket.id)} className="w-full sm:w-auto px-4 py-3 sm:py-4 bg-red-50 text-red-600 rounded-xl sm:rounded-2xl font-bold hover:bg-red-100 transition-colors flex justify-center items-center gap-2" title="Delete Ticket">
+                  <Trash2 size={18} className="sm:w-5 sm:h-5" /> <span className="sm:hidden">Delete Ticket</span>
+                </button>
+                <button type="submit" form="edit-ticket-form" className="w-full sm:flex-1 py-3 sm:py-4 bg-black text-white rounded-xl sm:rounded-2xl font-bold hover:bg-zinc-800 transition-all shadow-md sm:shadow-xl sm:shadow-black/10 active:scale-95 text-sm sm:text-base">
+                  Save Changes
+                </button>
+              </div>
             </motion.div>
           </div>
         )}
@@ -514,7 +540,7 @@ export function SchedulerModule() {
       <AnimatePresence>
         {negotiationTicket && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6">
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setNegotiationTicket(null)} className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => { setNegotiationTicket(null); setAuditorSearch(''); }} className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
             
             <motion.div initial={{ opacity: 0, scale: 0.9, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9, y: 20 }} className="relative w-full max-w-2xl bg-white rounded-[1.5rem] sm:rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
               
@@ -525,11 +551,11 @@ export function SchedulerModule() {
                 </div>
                 <div className="flex items-center gap-1 sm:gap-2">
                   {isAdminOrHO && <button onClick={() => deleteTicket(negotiationTicket.id)} className="p-1.5 sm:p-2 text-zinc-400 hover:text-red-600 hover:bg-red-50 rounded-lg sm:rounded-xl transition-colors" title="Delete this ticket"><Trash2 size={18} className="sm:w-5 sm:h-5" /></button>}
-                  <button onClick={() => setNegotiationTicket(null)} className="p-1.5 sm:p-2 hover:bg-zinc-100 rounded-lg sm:rounded-xl transition-colors"><X size={18} className="sm:w-5 sm:h-5" /></button>
+                  <button onClick={() => { setNegotiationTicket(null); setAuditorSearch(''); }} className="p-1.5 sm:p-2 hover:bg-zinc-100 rounded-lg sm:rounded-xl transition-colors"><X size={18} className="sm:w-5 sm:h-5" /></button>
                 </div>
               </div>
               
-              <div className="p-4 sm:p-6 md:p-8 overflow-y-auto bg-zinc-50/50 flex-1 space-y-4 sm:space-y-6 custom-scrollbar">
+              <div className="p-4 sm:p-6 md:p-8 overflow-y-auto bg-zinc-50/50 flex-1 space-y-4 sm:space-y-6 custom-scrollbar min-h-0">
                 {(!negotiationTicket.dateProposals || negotiationTicket.dateProposals.length === 0) ? (
                   <div className="text-center py-6 sm:py-8 text-zinc-400"><MessageSquare size={28} className="mx-auto mb-2 sm:mb-3 opacity-50 sm:w-8 sm:h-8" /><p className="text-xs sm:text-sm font-medium">No messages yet.</p></div>
                 ) : (
@@ -550,8 +576,20 @@ export function SchedulerModule() {
                         {isAdminOrHO && prop.date && (
                           <div className="pt-3 sm:pt-4 mt-2 sm:mt-3 border-t border-zinc-100 flex flex-col gap-2 sm:gap-3">
                             <label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-500">Assign Auditors for Approval</label>
-                            <div className="max-h-24 sm:max-h-32 overflow-y-auto border border-zinc-200 rounded-lg sm:rounded-xl p-2 sm:p-3 bg-zinc-50 grid grid-cols-1 sm:grid-cols-2 gap-1 sm:gap-2">
-                              {auditors.map(a => (
+                            
+                            <div className="mb-1 relative">
+                              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-400" size={14} />
+                              <input 
+                                type="text" 
+                                placeholder="Search auditors..." 
+                                className="w-full pl-8 pr-3 py-1.5 bg-white border border-zinc-200 rounded-lg text-xs focus:ring-2 focus:ring-black outline-none transition-all"
+                                value={auditorSearch}
+                                onChange={(e) => setAuditorSearch(e.target.value)}
+                              />
+                            </div>
+
+                            <div className="max-h-24 sm:max-h-32 overflow-y-auto border border-zinc-200 rounded-lg sm:rounded-xl p-2 sm:p-3 bg-zinc-50 grid grid-cols-1 sm:grid-cols-2 gap-1 sm:gap-2 custom-scrollbar">
+                              {displayedAuditors.length > 0 ? displayedAuditors.map(a => (
                                 <label key={a.uid} className="flex items-center gap-2 cursor-pointer p-1 sm:p-1.5 hover:bg-zinc-100 rounded-md sm:rounded-lg">
                                   <input 
                                     type="checkbox" 
@@ -564,7 +602,9 @@ export function SchedulerModule() {
                                   />
                                   <span className="text-xs sm:text-sm font-medium text-zinc-700 truncate">{a.name}</span>
                                 </label>
-                              ))}
+                              )) : (
+                                <div className="col-span-full text-center py-2 text-[10px] sm:text-xs text-zinc-400">No auditors found.</div>
+                              )}
                             </div>
 
                             <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
@@ -605,14 +645,26 @@ export function SchedulerModule() {
 
                     {isAdminOrHO && (
                       <div className="p-3 sm:p-4 border border-zinc-200 rounded-xl bg-zinc-50 mt-1 sm:mt-2">
-                        <div className="flex justify-between items-center mb-2">
-                          <label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-500">Assign Auditors</label>
-                          <select className="w-24 sm:w-32 text-[10px] sm:text-xs p-1 sm:p-1.5 rounded-lg bg-white border border-zinc-200 focus:ring-2 focus:ring-black cursor-pointer" value={approvalAuditDays} onChange={(e) => setApprovalAuditDays(parseInt(e.target.value))}>
-                            {[1,2,3,4,5].map(n => <option key={n} value={n}>{n} Day{n>1?'s':''}</option>)}
-                          </select>
+                        <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center mb-2 gap-2">
+                          <label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-500 shrink-0">Assign Auditors</label>
+                          <div className="flex items-center gap-2 w-full sm:w-auto">
+                            <div className="relative flex-1 sm:w-40">
+                              <Search className="absolute left-2 top-1/2 -translate-y-1/2 text-zinc-400" size={12} />
+                              <input 
+                                type="text" 
+                                placeholder="Search..." 
+                                className="w-full pl-6 pr-2 py-1.5 bg-white border border-zinc-200 rounded-md text-[10px] sm:text-xs focus:ring-1 focus:ring-black outline-none"
+                                value={auditorSearch}
+                                onChange={(e) => setAuditorSearch(e.target.value)}
+                              />
+                            </div>
+                            <select className="w-24 sm:w-28 text-[10px] sm:text-xs p-1 sm:p-1.5 rounded-lg bg-white border border-zinc-200 focus:ring-2 focus:ring-black cursor-pointer shrink-0" value={approvalAuditDays} onChange={(e) => setApprovalAuditDays(parseInt(e.target.value))}>
+                              {[1,2,3,4,5].map(n => <option key={n} value={n}>{n} Day{n>1?'s':''}</option>)}
+                            </select>
+                          </div>
                         </div>
                         <div className="max-h-20 sm:max-h-24 overflow-y-auto grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-1 sm:gap-2 custom-scrollbar">
-                          {auditors.map(a => (
+                          {displayedAuditors.length > 0 ? displayedAuditors.map(a => (
                             <label key={a.uid} className="flex items-center gap-1.5 sm:gap-2 cursor-pointer p-1 hover:bg-zinc-100 rounded-md">
                               <input 
                                 type="checkbox" 
@@ -625,7 +677,9 @@ export function SchedulerModule() {
                               />
                               <span className="text-[10px] sm:text-xs font-medium text-zinc-700 truncate">{a.name}</span>
                             </label>
-                          ))}
+                          )) : (
+                            <div className="col-span-full text-center py-2 text-[10px] sm:text-xs text-zinc-400">No auditors found.</div>
+                          )}
                         </div>
                       </div>
                     )}
@@ -641,59 +695,79 @@ export function SchedulerModule() {
       <AnimatePresence>
         {isCreateModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6">
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsCreateModalOpen(false)} className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
-            <motion.div initial={{ opacity: 0, scale: 0.9, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9, y: 20 }} className="relative w-full max-w-md bg-white rounded-[1.5rem] sm:rounded-[2.5rem] shadow-2xl overflow-hidden p-5 sm:p-8">
-              <div className="flex justify-between items-center mb-5 sm:mb-6">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => { setIsCreateModalOpen(false); setAuditorSearch(''); }} className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
+            <motion.div initial={{ opacity: 0, scale: 0.9, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9, y: 20 }} className="relative w-full max-w-md bg-white rounded-[1.5rem] sm:rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+              
+              <div className="flex justify-between items-center p-5 sm:p-6 border-b border-zinc-100 shrink-0">
                 <h3 className="text-lg sm:text-xl font-bold">Force Schedule Audit</h3>
-                <button onClick={() => setIsCreateModalOpen(false)} className="p-1.5 sm:p-2 hover:bg-zinc-100 rounded-lg sm:rounded-xl"><X size={18} className="sm:w-5 sm:h-5"/></button>
+                <button onClick={() => { setIsCreateModalOpen(false); setAuditorSearch(''); }} className="p-1.5 sm:p-2 hover:bg-zinc-100 rounded-lg sm:rounded-xl"><X size={18} className="sm:w-5 sm:h-5"/></button>
               </div>
-              <form onSubmit={handleCreateSubmit} className="space-y-3 sm:space-y-4">
-                <div>
-                  <label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-400">Select Distributor</label>
-                  <select required className="w-full mt-1 px-3 sm:px-4 py-2.5 sm:py-3 bg-zinc-50 border border-zinc-200 sm:border-none rounded-xl focus:ring-2 focus:ring-black transition-all cursor-pointer text-sm" value={createData.distributorId} onChange={e => setCreateData({...createData, distributorId: e.target.value})}>
-                    <option value="">Choose a distributor...</option>
-                    {distributors.filter(d => d.active).map(d => (
-                      <option key={d.id} value={d.id}>{d.name} ({d.code})</option>
-                    ))}
-                  </select>
-                </div>
-                
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+
+              <div className="p-5 sm:p-6 overflow-y-auto custom-scrollbar flex-1 min-h-0">
+                <form id="force-schedule-form" onSubmit={handleCreateSubmit} className="space-y-3 sm:space-y-4">
                   <div>
-                    <label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-400">Start Date</label>
-                    <input required type="date" min={new Date().toISOString().split('T')[0]} className="w-full mt-1 px-3 sm:px-4 py-2.5 sm:py-3 bg-zinc-50 border border-zinc-200 sm:border-none rounded-xl focus:ring-2 focus:ring-black transition-all cursor-pointer text-sm" value={createData.proposedDate} onChange={e => setCreateData({...createData, proposedDate: e.target.value})} />
-                  </div>
-                  <div>
-                    <label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-400">Duration</label>
-                    <select required className="w-full mt-1 px-3 sm:px-4 py-2.5 sm:py-3 bg-zinc-50 border border-zinc-200 sm:border-none rounded-xl focus:ring-2 focus:ring-black transition-all cursor-pointer text-sm" value={createData.auditDays} onChange={e => setCreateData({...createData, auditDays: parseInt(e.target.value)})}>
-                      {[1,2,3,4,5].map(n => <option key={n} value={n}>{n} Day{n>1?'s':''}</option>)}
+                    <label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-400">Select Distributor</label>
+                    <select required className="w-full mt-1 px-3 sm:px-4 py-2.5 sm:py-3 bg-zinc-50 border border-zinc-200 sm:border-none rounded-xl focus:ring-2 focus:ring-black transition-all cursor-pointer text-sm" value={createData.distributorId} onChange={e => setCreateData({...createData, distributorId: e.target.value})}>
+                      <option value="">Choose a distributor...</option>
+                      {distributors.filter(d => d.active).map(d => (
+                        <option key={d.id} value={d.id}>{d.name} ({d.code})</option>
+                      ))}
                     </select>
                   </div>
-                </div>
-
-                <div>
-                  <label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-400 mb-1.5 sm:mb-2 block">Assign Auditors</label>
-                  <div className="max-h-32 sm:max-h-40 overflow-y-auto border border-zinc-200 rounded-xl p-2 sm:p-3 bg-zinc-50 grid grid-cols-1 sm:grid-cols-2 gap-1 sm:gap-2">
-                    {auditors.map(a => (
-                      <label key={a.uid} className="flex items-center gap-2 cursor-pointer p-1 sm:p-1.5 hover:bg-zinc-100 rounded-lg">
-                        <input 
-                          type="checkbox" 
-                          checked={createData.auditorIds.includes(a.uid)}
-                          onChange={(e) => {
-                            const newIds = e.target.checked 
-                              ? [...createData.auditorIds, a.uid] 
-                              : createData.auditorIds.filter(id => id !== a.uid);
-                            setCreateData({ ...createData, auditorIds: newIds });
-                          }}
-                          className="w-3.5 h-3.5 sm:w-4 sm:h-4 rounded border-zinc-300 text-black focus:ring-black"
-                        />
-                        <span className="text-xs sm:text-sm font-medium text-zinc-700 truncate">{a.name}</span>
-                      </label>
-                    ))}
+                  
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+                    <div>
+                      <label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-400">Start Date</label>
+                      <input required type="date" min={new Date().toISOString().split('T')[0]} className="w-full mt-1 px-3 sm:px-4 py-2.5 sm:py-3 bg-zinc-50 border border-zinc-200 sm:border-none rounded-xl focus:ring-2 focus:ring-black transition-all cursor-pointer text-sm" value={createData.proposedDate} onChange={e => setCreateData({...createData, proposedDate: e.target.value})} />
+                    </div>
+                    <div>
+                      <label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-400">Duration</label>
+                      <select required className="w-full mt-1 px-3 sm:px-4 py-2.5 sm:py-3 bg-zinc-50 border border-zinc-200 sm:border-none rounded-xl focus:ring-2 focus:ring-black transition-all cursor-pointer text-sm" value={createData.auditDays} onChange={e => setCreateData({...createData, auditDays: parseInt(e.target.value)})}>
+                        {[1,2,3,4,5].map(n => <option key={n} value={n}>{n} Day{n>1?'s':''}</option>)}
+                      </select>
+                    </div>
                   </div>
-                </div>
-                <button type="submit" className="w-full mt-2 sm:mt-4 py-3 sm:py-4 bg-black text-white rounded-xl sm:rounded-2xl font-bold hover:bg-zinc-800 transition-all shadow-md sm:shadow-xl sm:shadow-black/10 active:scale-95 text-sm sm:text-base">Schedule Audit</button>
-              </form>
+
+                  <div>
+                    <label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-400 mb-1 block">Assign Auditors</label>
+                    <div className="mb-2 relative">
+                      <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-400" size={14} />
+                      <input 
+                        type="text" 
+                        placeholder="Search auditors by name..." 
+                        className="w-full pl-8 pr-3 py-2 bg-white border border-zinc-200 rounded-lg text-xs focus:ring-2 focus:ring-black outline-none transition-all"
+                        value={auditorSearch}
+                        onChange={(e) => setAuditorSearch(e.target.value)}
+                      />
+                    </div>
+                    <div className="max-h-32 sm:max-h-40 overflow-y-auto border border-zinc-200 rounded-xl p-2 sm:p-3 bg-zinc-50 grid grid-cols-1 sm:grid-cols-2 gap-1 sm:gap-2 custom-scrollbar">
+                      {displayedAuditors.length > 0 ? displayedAuditors.map(a => (
+                        <label key={a.uid} className="flex items-center gap-2 cursor-pointer p-1 sm:p-1.5 hover:bg-zinc-100 rounded-lg">
+                          <input 
+                            type="checkbox" 
+                            checked={createData.auditorIds.includes(a.uid)}
+                            onChange={(e) => {
+                              const newIds = e.target.checked 
+                                ? [...createData.auditorIds, a.uid] 
+                                : createData.auditorIds.filter(id => id !== a.uid);
+                              setCreateData({ ...createData, auditorIds: newIds });
+                            }}
+                            className="w-3.5 h-3.5 sm:w-4 sm:h-4 rounded border-zinc-300 text-black focus:ring-black"
+                          />
+                          <span className="text-xs sm:text-sm font-medium text-zinc-700 truncate">{a.name}</span>
+                        </label>
+                      )) : (
+                        <div className="col-span-full text-center py-4 text-xs font-medium text-zinc-400">No auditors found.</div>
+                      )}
+                    </div>
+                  </div>
+                </form>
+              </div>
+
+              <div className="p-5 sm:p-6 border-t border-zinc-100 shrink-0">
+                <button type="submit" form="force-schedule-form" className="w-full py-3 sm:py-4 bg-black text-white rounded-xl sm:rounded-2xl font-bold hover:bg-zinc-800 transition-all shadow-md sm:shadow-xl sm:shadow-black/10 active:scale-95 text-sm sm:text-base">Schedule Audit</button>
+              </div>
+
             </motion.div>
           </div>
         )}

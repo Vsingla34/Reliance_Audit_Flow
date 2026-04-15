@@ -10,12 +10,9 @@ import {
   AlertCircle,
   IndianRupee,
   RefreshCw,
-  Upload,
-  X,
   ShieldAlert
 } from 'lucide-react';
 import { cn, useAuth } from '../App';
-import { motion, AnimatePresence } from 'motion/react';
 
 export function ReportsModule() {
   const { profile } = useAuth();
@@ -27,16 +24,10 @@ export function ReportsModule() {
   const [loading, setLoading] = useState(false);
   const [activeReport, setActiveReport] = useState<'consolidated' | 'credit_note'>('consolidated');
 
-  // Upload Modal State
-  const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
-  const [isUploading, setIsUploading] = useState(false);
-
   // --- STRICT SECURITY CHECK ---
   // Blocks field users (ASE, Auditor) from forcing their browser to /reports
   const allowedRoles = ['superadmin', 'admin', 'ho', 'dm', 'sm', 'asm'];
   const hasAccess = allowedRoles.includes(profile?.role || '');
-
-  // Only Admin, SuperAdmin, and HO can upload the Master Dump from the reports page
   const isAdminOrHO = ['superadmin', 'admin', 'ho'].includes(profile?.role || '');
 
   const fetchReportData = async () => {
@@ -136,55 +127,6 @@ export function ReportsModule() {
     }
   }, [tickets, distributors, salesDump]);
 
-  // --- Sales Dump Upload Logic ---
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    setIsUploading(true);
-    const reader = new FileReader();
-    
-    reader.onload = async (event) => {
-      try {
-        const text = event.target?.result as string;
-        const lines = text.split('\n').filter(line => line.trim() !== ''); // Skip empty lines
-        
-        const newDumpItems = lines.slice(1).map(line => {
-          const [articleNumber, description, category, rate] = line.split(',');
-          if (!articleNumber || !rate) return null;
-          
-          return {
-            id: Math.random().toString(36).substring(7),
-            articleNumber: articleNumber.trim(),
-            description: description?.trim() || 'No Description',
-            category: category?.trim() || 'Uncategorized',
-            rate: parseFloat(rate) || 0
-          };
-        }).filter(Boolean);
-
-        if (newDumpItems.length > 0) {
-          // 1. Wipe the old sales dump to keep it fresh
-          await supabase.from('salesDump').delete().not('id', 'is', null);
-          
-          // 2. Insert the new master rates
-          const { error } = await supabase.from('salesDump').insert(newDumpItems);
-          if (error) throw error;
-          
-          alert(`Successfully uploaded ${newDumpItems.length} articles to the master dump!`);
-          
-          fetchReportData(); 
-        }
-      } catch (error) {
-        console.error("Error uploading sales dump:", error);
-        alert("Failed to upload sales dump. Please ensure it is a valid CSV.");
-      } finally {
-        setIsUploading(false);
-        setIsUploadModalOpen(false);
-      }
-    };
-    reader.readAsText(file);
-  };
-
   const downloadCSV = () => {
     if (reportData.length === 0) return;
 
@@ -262,15 +204,6 @@ export function ReportsModule() {
           >
             <RefreshCw size={18} className={cn(loading && "animate-spin")} />
           </button>
-
-          {isAdminOrHO && (
-            <button 
-              onClick={() => setIsUploadModalOpen(true)}
-              className="flex items-center justify-center gap-2 px-4 py-3 bg-zinc-100 text-zinc-900 rounded-xl font-bold hover:bg-zinc-200 transition-all active:scale-95 whitespace-nowrap"
-            >
-              <Upload size={18} /> <span className="hidden sm:inline">Master Dump</span>
-            </button>
-          )}
 
           <button 
             onClick={downloadCSV}
@@ -424,71 +357,6 @@ export function ReportsModule() {
           </div>
         )}
       </div>
-
-      {/* Upload Master Dump Modal */}
-      <AnimatePresence>
-        {isUploadModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-6">
-            <motion.div 
-              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} 
-              onClick={() => !isUploading && setIsUploadModalOpen(false)} 
-              className="absolute inset-0 bg-black/40 backdrop-blur-sm" 
-            />
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.9, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9, y: 20 }} 
-              className="relative w-full max-w-md bg-white rounded-[2.5rem] shadow-2xl overflow-hidden p-8 text-center"
-            >
-              <div className="w-16 h-16 bg-blue-50 rounded-2xl flex items-center justify-center mx-auto mb-6">
-                <Upload className="text-blue-600" size={24} />
-              </div>
-              <h4 className="text-2xl font-bold tracking-tight mb-2">Update Master Sales Dump</h4>
-              <p className="text-sm text-zinc-500 mb-6">
-                Uploading a new CSV will <strong className="text-red-500">overwrite</strong> the existing master rates.
-              </p>
-
-              <div className="text-left bg-zinc-50 p-4 rounded-2xl mb-6">
-                <p className="text-xs font-bold text-zinc-900 uppercase tracking-wider mb-2">Required CSV Format:</p>
-                <code className="text-[11px] text-zinc-600 block bg-white p-2 border border-zinc-200 rounded-lg">
-                  ArticleNumber, Description, Category, Rate<br/>
-                  1001, Sample Item A, Electronics, 250.50<br/>
-                  1002, Sample Item B, FMCG, 45.00
-                </code>
-              </div>
-              
-              <div className="relative">
-                <input 
-                  type="file" 
-                  accept=".csv" 
-                  onChange={handleFileUpload}
-                  disabled={isUploading}
-                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-wait"
-                />
-                <div className={cn(
-                  "w-full py-4 border-2 border-dashed rounded-2xl flex flex-col items-center justify-center gap-2 transition-colors",
-                  isUploading ? "border-blue-200 bg-blue-50" : "border-zinc-200 hover:border-black hover:bg-zinc-50"
-                )}>
-                  {isUploading ? (
-                    <RefreshCw className="text-blue-500 animate-spin" size={24} />
-                  ) : (
-                    <>
-                      <span className="font-bold text-zinc-900">Click to browse or drag CSV file</span>
-                      <span className="text-xs text-zinc-400">CSV format only</span>
-                    </>
-                  )}
-                </div>
-              </div>
-              
-              <button 
-                onClick={() => setIsUploadModalOpen(false)} 
-                disabled={isUploading}
-                className="mt-6 text-sm font-bold text-zinc-400 hover:text-black transition-colors disabled:opacity-50"
-              >
-                Cancel
-              </button>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
     </div>
   );
 }

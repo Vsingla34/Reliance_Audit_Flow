@@ -10,7 +10,7 @@ import { motion, AnimatePresence } from 'motion/react';
 
 export function DistributorsModule() {
   const { profile, user } = useAuth();
-  const [distributors, setDistributors] = useState<Distributor[]>([]);
+  const [distributors, setDistributors] = useState<any[]>([]); 
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   
@@ -20,32 +20,34 @@ export function DistributorsModule() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   
-  // --- BULK EMAIL STATE ---
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [isEmailModalOpen, setIsEmailModalOpen] = useState(false);
   const [emailSubject, setEmailSubject] = useState('');
   const [emailBody, setEmailBody] = useState('');
   const [isSendingEmail, setIsSendingEmail] = useState(false);
   
-  // Changed to an array to support MULTI-SELECT
-  const [emailTargetRoles, setEmailTargetRoles] = useState<string[]>(['aseId']);
+  const [emailTargetRoles, setEmailTargetRoles] = useState<string[]>(['aseIds']);
   
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 25; 
   
-  const [editingDist, setEditingDist] = useState<Distributor | null>(null);
-  const [formData, setFormData] = useState<Partial<Distributor>>({
-    code: '', anchorName: '', name: '', approvedValue: 0, hoId: '', dmId: '', smId: '', asmId: '', aseId: '', active: true, address: '', city: '', state: '', region: ''
+  const [editingDist, setEditingDist] = useState<any | null>(null);
+  
+  const [formData, setFormData] = useState<any>({
+    code: '', anchorName: '', name: '', approvedValue: 0, 
+    hoIds: [], dmIds: [], smIds: [], asmIds: [], aseIds: [], 
+    active: true, address: '', city: '', state: '', region: ''
   });
 
   const fetchData = async () => {
     if (!profile) return;
     try {
       let distQuery = supabase.from('distributors').select('*');
-      if (profile.role === 'ase') distQuery = distQuery.eq('aseId', profile.uid);
-      if (profile.role === 'asm') distQuery = distQuery.eq('asmId', profile.uid);
-      if (profile.role === 'sm') distQuery = distQuery.eq('smId', profile.uid);
-      if (profile.role === 'dm') distQuery = distQuery.eq('dmId', profile.uid);
+      
+      if (profile.role === 'ase') distQuery = distQuery.contains('aseIds', [profile.uid]);
+      if (profile.role === 'asm') distQuery = distQuery.contains('asmIds', [profile.uid]);
+      if (profile.role === 'sm') distQuery = distQuery.contains('smIds', [profile.uid]);
+      if (profile.role === 'dm') distQuery = distQuery.contains('dmIds', [profile.uid]);
 
       const [distRes, usersRes] = await Promise.all([
         distQuery.order('name', { ascending: true }),
@@ -55,7 +57,7 @@ export function DistributorsModule() {
       if (distRes.error) throw distRes.error;
       if (usersRes.error) throw usersRes.error;
 
-      if (distRes.data) setDistributors(distRes.data as Distributor[]);
+      if (distRes.data) setDistributors(distRes.data);
       if (usersRes.data) setUsers(usersRes.data as UserProfile[]);
     } catch (error) { console.error("Error fetching data:", error); }
   };
@@ -75,8 +77,10 @@ export function DistributorsModule() {
                           d.code.toLowerCase().includes(searchTerm.toLowerCase()) ||
                           (d.anchorName?.toLowerCase() || '').includes(searchTerm.toLowerCase()) ||
                           (d.city?.toLowerCase() || '').includes(searchTerm.toLowerCase());
-    const matchesAse = filterAse === 'all' || d.aseId === filterAse;
-    const matchesAsm = filterAsm === 'all' || d.asmId === filterAsm;
+                          
+    const matchesAse = filterAse === 'all' || (d.aseIds && d.aseIds.includes(filterAse));
+    const matchesAsm = filterAsm === 'all' || (d.asmIds && d.asmIds.includes(filterAsm));
+    
     return matchesSearch && matchesAse && matchesAsm;
   });
 
@@ -99,23 +103,21 @@ export function DistributorsModule() {
   };
 
   const roleDisplayMap: Record<string, string> = {
-    hoId: 'HO', dmId: 'DM', smId: 'SM', asmId: 'ASM', aseId: 'ASE'
+    hoIds: 'HO', dmIds: 'DM', smIds: 'SM', asmIds: 'ASM', aseIds: 'ASE'
   };
 
-  // --- HARD SECURITY CHECK UTILITY ---
   const hasWriteAccess = () => {
-    if (!['superadmin', 'admin', 'ho'].includes(profile?.role || '')) {
+    if (!['superadmin', 'admin'].includes(profile?.role || '')) {
       alert("Action Denied: You do not have permission to modify distributor data.");
       return false;
     }
     return true;
   };
 
-  // --- DYNAMIC MULTI-SELECT SEND EMAIL LOGIC ---
   const handleSendBulkEmail = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user || !profile) return;
-    if (!hasWriteAccess()) return; // SECURITY CHECK
+    if (!hasWriteAccess()) return;
 
     if (emailTargetRoles.length === 0) {
       alert("Please select at least one target role.");
@@ -127,12 +129,14 @@ export function DistributorsModule() {
 
     selectedDistributors.forEach(d => {
       emailTargetRoles.forEach(roleKey => {
-        const targetId = d[roleKey as keyof Distributor] as string;
-        if (targetId) {
-          const targetUser = users.find(u => u.uid === targetId);
-          if (targetUser && targetUser.email && targetUser.email.trim() !== '') {
-            targetEmailSet.add(targetUser.email.trim());
-          }
+        const targetIds = d[roleKey] as string[];
+        if (targetIds && Array.isArray(targetIds)) {
+          targetIds.forEach(targetId => {
+            const targetUser = users.find(u => u.uid === targetId);
+            if (targetUser && targetUser.email && targetUser.email.trim() !== '') {
+              targetEmailSet.add(targetUser.email.trim());
+            }
+          });
         }
       });
     });
@@ -160,20 +164,10 @@ export function DistributorsModule() {
       setEmailSubject('');
       setEmailBody('');
       setSelectedIds(new Set());
-      setEmailTargetRoles(['aseId']); // Reset to default
+      setEmailTargetRoles(['aseIds']); 
       
     } catch (error: any) {
-      console.error("Email error full details:", error);
-      let realMessage = error.message;
-      if (error.context) {
-        try {
-          const contextData = await error.context.json();
-          realMessage = contextData.error || error.message;
-        } catch (e) {
-          // Fallback if parsing fails
-        }
-      }
-      alert(`Failed to send emails: ${realMessage}`);
+      alert(`Failed to send emails.`);
     } finally {
       setIsSendingEmail(false);
     }
@@ -181,22 +175,29 @@ export function DistributorsModule() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!hasWriteAccess()) return; // SECURITY CHECK
+    if (!hasWriteAccess()) return;
 
     try {
       const sanitizedData = { ...formData };
-      const fkFields: (keyof Distributor)[] = ['hoId', 'dmId', 'smId', 'asmId', 'aseId'];
-      fkFields.forEach(field => { if (sanitizedData[field] === '') sanitizedData[field] = null as any; });
+      
+      const arrayFields = ['hoIds', 'dmIds', 'smIds', 'asmIds', 'aseIds'];
+      arrayFields.forEach(field => { 
+        if (!sanitizedData[field] || !Array.isArray(sanitizedData[field])) {
+          sanitizedData[field] = []; 
+        }
+      });
 
       if (editingDist) {
         const { error } = await supabase.from('distributors').update(sanitizedData).eq('id', editingDist.id);
         if (error) throw error;
+        
         await supabase.from('auditTickets').update({ approvedValue: sanitizedData.approvedValue, maxAllowedValue: (sanitizedData.approvedValue || 0) * 1.05 }).eq('distributorId', editingDist.id).in('status', ['tentative', 'scheduled', 'in_progress']);
         logActivity(user!, profile!, "Distributor Updated", `Updated details for ${formData.name}`);
       } else {
         const newDistId = Math.random().toString(36).substring(7);
         const { error } = await supabase.from('distributors').insert([{ ...sanitizedData, id: newDistId }]);
         if (error) throw error;
+        
         const tentativeTicket = {
           id: Math.random().toString(36).substring(7), distributorId: newDistId, proposedDate: null, auditorId: null, approvedValue: sanitizedData.approvedValue, maxAllowedValue: (sanitizedData.approvedValue || 0) * 1.05, status: 'tentative', verifiedTotal: 0, dateProposals: [], comments: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
         };
@@ -208,7 +209,7 @@ export function DistributorsModule() {
   };
 
   const deleteDist = async (id: string) => {
-    if (!hasWriteAccess()) return; // SECURITY CHECK
+    if (!hasWriteAccess()) return;
 
     if (window.confirm("Are you sure you want to delete this distributor? All associated audits will also be removed.")) {
       try {
@@ -228,22 +229,37 @@ export function DistributorsModule() {
     }
   };
 
-  const resetForm = () => { setFormData({ code: '', anchorName: '', name: '', approvedValue: 0, hoId: '', dmId: '', smId: '', asmId: '', aseId: '', active: true, address: '', city: '', state: '', region: '' }); };
+  const resetForm = () => { 
+    setFormData({ 
+      code: '', anchorName: '', name: '', approvedValue: 0, 
+      hoIds: [], dmIds: [], smIds: [], asmIds: [], aseIds: [], 
+      active: true, address: '', city: '', state: '', region: '' 
+    }); 
+  };
 
-  const openEditModal = (dist: Distributor) => {
+  const openEditModal = (dist: any) => {
     setEditingDist(dist);
-    setFormData({ ...dist, hoId: dist.hoId || '', dmId: dist.dmId || '', smId: dist.smId || '', asmId: dist.asmId || '', aseId: dist.aseId || '', anchorName: dist.anchorName || '', region: dist.region || '' });
+    setFormData({ 
+      ...dist, 
+      hoIds: dist.hoIds || [], 
+      dmIds: dist.dmIds || [], 
+      smIds: dist.smIds || [], 
+      asmIds: dist.asmIds || [], 
+      aseIds: dist.aseIds || [], 
+      anchorName: dist.anchorName || '', 
+      region: dist.region || '' 
+    });
     setIsModalOpen(true);
   };
 
   const downloadTemplate = () => {
-    const csvContent = "Code,AnchorName,Name,ApprovedValue,HO_Email,DM_Email,SM_Email,ASM_Email,ASE_Email,Region,City,State\nDIST-001,Reliance,Reliance Smart Point,500000,,,,asm@comp.com,ase@comp.com,North,Delhi,Delhi";
+    const csvContent = "Code,AnchorName,Name,ApprovedValue,HO_Emails,DM_Emails,SM_Emails,ASM_Emails,ASE_Emails,Region,City,State\nDIST-001,Reliance,Reliance Smart Point,500000,ho@comp.com,,sm1@comp.com;sm2@comp.com,asm@comp.com,ase1@comp.com;ase2@comp.com,North,Delhi,Delhi";
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = "Distributor_Import_Template.csv"; link.click();
   };
 
   const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!hasWriteAccess()) return; // SECURITY CHECK
+    if (!hasWriteAccess()) return;
     
     const file = e.target.files?.[0];
     if (!file) return;
@@ -252,48 +268,113 @@ export function DistributorsModule() {
     reader.onload = async (event) => {
       try {
         const text = event.target?.result as string;
-        const lines = text.split('\n').filter(line => line.trim() !== '');
         
-        const findUserId = (emailStr: string, role: string) => {
-          if (!emailStr || !emailStr.trim()) return null;
-          const u = users.find(user => user.email.toLowerCase() === emailStr.trim().toLowerCase() && user.role === role);
-          return u ? u.uid : null;
+        // 1. Split by newlines, handling both Windows (\r\n) and Mac/Linux (\n)
+        const lines = text.split(/\r?\n/).filter(line => line.trim() !== '');
+        
+        // 2. Robust CSV Row Parser (Handles Excel's invisible quote wrapping)
+        const parseCSVRow = (str: string) => {
+          const result = [];
+          let cur = '';
+          let inQuote = false;
+          for (let i = 0; i < str.length; i++) {
+            if (str[i] === '"') inQuote = !inQuote;
+            else if (str[i] === ',' && !inQuote) { result.push(cur.trim()); cur = ''; }
+            else cur += str[i];
+          }
+          result.push(cur.trim());
+          return result.map(s => s.replace(/^"|"$/g, '').trim()); // Strip wrapping quotes
+        };
+
+        const findUserIds = (emailStr: string, role: string) => {
+          if (!emailStr || !emailStr.trim()) return [];
+          const emails = emailStr.split(/[;|,]/).map(e => e.trim().toLowerCase()).filter(Boolean);
+          const matchedUsers = users.filter(u => emails.includes(u.email.toLowerCase()) && u.role === role);
+          return matchedUsers.map(u => u.uid);
         };
 
         const newDistributors = lines.slice(1).map(line => {
-          const [code, anchorName, name, approvedValue, hoEmail, dmEmail, smEmail, asmEmail, aseEmail, region, city, state] = line.split(',');
+          const cols = parseCSVRow(line);
+          
+          // Ensure we have enough columns before destructuring
+          if (cols.length < 4) return null; 
+
+          const [code, anchorName, name, approvedValue, hoEmails, dmEmails, smEmails, asmEmails, aseEmails, region, city, state] = cols;
           if (!code || !name) return null;
+          
           return {
-            id: Math.random().toString(36).substring(7), code: code.trim(), anchorName: anchorName?.trim() || '', name: name.trim(), approvedValue: parseFloat(approvedValue) || 0, hoId: findUserId(hoEmail, 'ho'), dmId: findUserId(dmEmail, 'dm'), smId: findUserId(smEmail, 'sm'), asmId: findUserId(asmEmail, 'asm'), aseId: findUserId(aseEmail, 'ase'), region: region?.trim() || '', city: city?.trim() || '', state: state?.trim() || '', active: true
+            id: Math.random().toString(36).substring(7), 
+            code: code, 
+            anchorName: anchorName || '', 
+            name: name, 
+            approvedValue: parseFloat(approvedValue) || 0, 
+            hoIds: findUserIds(hoEmails, 'ho'), 
+            dmIds: findUserIds(dmEmails, 'dm'), 
+            smIds: findUserIds(smEmails, 'sm'), 
+            asmIds: findUserIds(asmEmails, 'asm'), 
+            aseIds: findUserIds(aseEmails, 'ase'), 
+            region: region || '', 
+            city: city || '', 
+            state: state || '', 
+            active: true
           };
         }).filter(Boolean);
 
         if (newDistributors.length > 0) {
-          await supabase.from('distributors').insert(newDistributors);
+          const { error } = await supabase.from('distributors').insert(newDistributors);
+          if (error) throw error; // Catch DB errors (like missing array columns)
+          
           logActivity(user!, profile!, "Distributors Imported", `Bulk imported ${newDistributors.length} distributors via CSV`);
           alert(`Successfully imported ${newDistributors.length} distributors!`);
+          fetchData();
+        } else {
+          alert("No valid distributor rows found in the CSV.");
         }
-      } catch (error: any) { alert(`Failed to import. Make sure your CSV matches the template.`); } 
-      finally { setIsImportModalOpen(false); if (e.target) e.target.value = ''; }
+      } catch (error: any) { 
+        console.error(error);
+        alert(`Failed to import.\n\nError: ${error.message}\n\nDid you update your Supabase Database columns (e.g., aseIds) to be Text Arrays (text[])?`); 
+      } finally { 
+        setIsImportModalOpen(false); 
+        if (e.target) e.target.value = ''; 
+      }
     };
     reader.readAsText(file);
   };
 
-  const isAdminOrHO = ['superadmin', 'admin', 'ho'].includes(profile?.role || '');
+  const canManage = ['superadmin', 'admin'].includes(profile?.role || '');
+  
   const ases = users.filter(u => u.role === 'ase');
   const asms = users.filter(u => u.role === 'asm');
 
-  const renderUserSelect = (label: string, roleFilter: string, fieldName: keyof Distributor) => (
-    <div className="space-y-2">
-      <label className="text-xs font-bold uppercase tracking-wider text-zinc-400">{label}</label>
-      <select className="w-full px-4 py-3 bg-zinc-50 border-none rounded-xl focus:ring-2 focus:ring-black transition-all" value={(formData[fieldName] as string) || ''} onChange={(e) => setFormData({ ...formData, [fieldName]: e.target.value })}>
-        <option value="">Unassigned...</option>
-        {users.filter(u => u.role === roleFilter && u.active).map(u => (
-          <option key={u.uid} value={u.uid}>{u.name} {u.region ? `(${u.region})` : ''}</option>
-        ))}
-      </select>
-    </div>
-  );
+  const renderMultiUserSelect = (label: string, roleFilter: string, fieldName: string) => {
+    const roleUsers = users.filter(u => u.role === roleFilter && u.active);
+    return (
+      <div className="space-y-2">
+        <label className="text-xs font-bold uppercase tracking-wider text-zinc-400">{label}</label>
+        <div className="h-32 overflow-y-auto bg-white border border-zinc-200 rounded-xl p-2 custom-scrollbar space-y-1">
+          {roleUsers.length > 0 ? roleUsers.map(u => (
+            <label key={u.uid} className="flex items-center gap-2 cursor-pointer p-1.5 hover:bg-zinc-50 rounded-lg transition-colors">
+              <input 
+                type="checkbox" 
+                checked={(formData[fieldName] || []).includes(u.uid)}
+                onChange={(e) => {
+                  const currentList = formData[fieldName] || [];
+                  const newList = e.target.checked 
+                    ? [...currentList, u.uid] 
+                    : currentList.filter((id: string) => id !== u.uid);
+                  setFormData({ ...formData, [fieldName]: newList });
+                }}
+                className="w-3.5 h-3.5 rounded border-zinc-300 text-blue-600 focus:ring-blue-600"
+              />
+              <span className="text-xs font-medium text-zinc-700 truncate">{u.name} {u.region ? `(${u.region})` : ''}</span>
+            </label>
+          )) : (
+            <div className="text-[10px] text-zinc-400 p-2 text-center">No active users</div>
+          )}
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div className="space-y-8 pb-12">
@@ -324,7 +405,7 @@ export function DistributorsModule() {
           )}
         </div>
         
-        {isAdminOrHO && (
+        {canManage && (
           <div className="flex flex-wrap md:flex-nowrap gap-4">
             <AnimatePresence>
               {selectedIds.size > 0 && (
@@ -333,8 +414,9 @@ export function DistributorsModule() {
                 </motion.button>
               )}
             </AnimatePresence>
+            <button onClick={downloadTemplate} className="flex items-center justify-center gap-2 px-4 py-4 bg-white border border-zinc-200 text-zinc-900 rounded-2xl font-bold hover:bg-zinc-50 transition-all active:scale-95 whitespace-nowrap" title="Download Template"><Download size={18} /></button>
             <button onClick={() => setIsImportModalOpen(true)} className="flex items-center justify-center gap-2 px-6 py-4 bg-zinc-100 text-zinc-900 rounded-2xl font-bold hover:bg-zinc-200 transition-all active:scale-95 whitespace-nowrap"><Upload size={20} /> Import</button>
-            <button onClick={() => { resetForm(); setIsModalOpen(true); }} className="flex items-center justify-center gap-2 px-6 py-4 bg-black text-white rounded-2xl font-bold hover:bg-zinc-800 transition-all shadow-xl shadow-black/10 active:scale-95 whitespace-nowrap"><Plus size={20} /> Add Distributor</button>
+            <button onClick={() => { resetForm(); setIsModalOpen(true); }} className="flex items-center justify-center gap-2 px-6 py-4 bg-black text-white rounded-2xl font-bold hover:bg-zinc-800 transition-all shadow-xl shadow-black/10 active:scale-95 whitespace-nowrap"><Plus size={20} /> Add</button>
           </div>
         )}
       </div>
@@ -344,7 +426,7 @@ export function DistributorsModule() {
           <table className="w-full">
             <thead>
               <tr className="text-left bg-zinc-50/50 border-b border-zinc-100">
-                {isAdminOrHO && (
+                {canManage && (
                   <th className="px-6 py-5 w-10">
                     <input 
                       type="checkbox" 
@@ -356,15 +438,15 @@ export function DistributorsModule() {
                 )}
                 <th className="px-8 py-5 text-xs font-bold text-zinc-400 uppercase tracking-wider">Distributor</th>
                 <th className="px-8 py-5 text-xs font-bold text-zinc-400 uppercase tracking-wider">Region / Location</th>
-                <th className="px-8 py-5 text-xs font-bold text-zinc-400 uppercase tracking-wider">Hierarchy (ASE)</th>
+                <th className="px-8 py-5 text-xs font-bold text-zinc-400 uppercase tracking-wider">Hierarchy (ASEs)</th>
                 <th className="px-8 py-5 text-xs font-bold text-zinc-400 uppercase tracking-wider">Approved Limit</th>
-                {isAdminOrHO && <th className="px-8 py-5 text-xs font-bold text-zinc-400 uppercase tracking-wider text-right">Actions</th>}
+                {canManage && <th className="px-8 py-5 text-xs font-bold text-zinc-400 uppercase tracking-wider text-right">Actions</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-100">
               {paginatedDistributors.map((dist) => (
                 <tr key={dist.id} className={cn("hover:bg-zinc-50/50 transition-colors group", selectedIds.has(dist.id) && "bg-blue-50/30")}>
-                  {isAdminOrHO && (
+                  {canManage && (
                     <td className="px-6 py-5">
                       <input 
                         type="checkbox" 
@@ -403,7 +485,11 @@ export function DistributorsModule() {
                   <td className="px-8 py-5">
                     <div className="flex items-center gap-2 bg-zinc-50 px-3 py-1.5 rounded-xl inline-flex border border-zinc-100">
                       <Network size={14} className="text-zinc-400 shrink-0" />
-                      <span className="text-sm font-medium text-zinc-700 truncate max-w-[120px]">{users.find(u => u.uid === dist.aseId)?.name || 'No ASE Assigned'}</span>
+                      <span className="text-sm font-medium text-zinc-700 truncate max-w-[150px]">
+                        {dist.aseIds && dist.aseIds.length > 0 
+                          ? dist.aseIds.map((id: string) => users.find(u => u.uid === id)?.name.split(' ')[0]).filter(Boolean).join(', ') 
+                          : 'No ASE Assigned'}
+                      </span>
                     </div>
                   </td>
                   <td className="px-8 py-5">
@@ -412,7 +498,7 @@ export function DistributorsModule() {
                     </div>
                   </td>
                   
-                  {isAdminOrHO && (
+                  {canManage && (
                     <td className="px-8 py-5 text-right">
                       <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                         <button onClick={() => openEditModal(dist)} className="p-2 text-zinc-400 hover:text-black hover:bg-zinc-100 rounded-xl transition-all" title="Edit Distributor"><Edit2 size={16} /></button>
@@ -466,7 +552,6 @@ export function DistributorsModule() {
                 <button type="button" onClick={() => !isSendingEmail && setIsEmailModalOpen(false)} className="p-2 hover:bg-zinc-100 rounded-xl transition-colors"><X size={20} /></button>
               </div>
               
-              {/* Added flex-1 min-h-0 here for scrolling */}
               <div className="p-6 md:p-8 flex-1 min-h-0 overflow-y-auto bg-zinc-50/50 custom-scrollbar">
                 <form id="bulk-email-form" onSubmit={handleSendBulkEmail} className="space-y-6">
                   
@@ -475,11 +560,11 @@ export function DistributorsModule() {
                     <label className="text-xs font-bold uppercase tracking-wider text-zinc-500 ml-1">Select Target Roles (Multi-Select)</label>
                     <div className="flex flex-wrap gap-2 mt-2">
                       {[
-                        { id: 'hoId', label: 'Head Office (HO)' },
-                        { id: 'dmId', label: 'Division Manager (DM)' },
-                        { id: 'smId', label: 'Sales Manager (SM)' },
-                        { id: 'asmId', label: 'Area Sales Mgr (ASM)' },
-                        { id: 'aseId', label: 'Area Sales Exec (ASE)' }
+                        { id: 'hoIds', label: 'Head Office (HO)' },
+                        { id: 'dmIds', label: 'Division Manager (DM)' },
+                        { id: 'smIds', label: 'Sales Manager (SM)' },
+                        { id: 'asmIds', label: 'Area Sales Mgr (ASM)' },
+                        { id: 'aseIds', label: 'Area Sales Exec (ASE)' }
                       ].map(role => (
                         <button
                           key={role.id}
@@ -532,7 +617,7 @@ export function DistributorsModule() {
         {isModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 md:p-6">
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsModalOpen(false)} className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
-            <motion.div initial={{ opacity: 0, scale: 0.9, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9, y: 20 }} className="relative w-full max-w-4xl bg-white rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col max-h-[95vh]">
+            <motion.div initial={{ opacity: 0, scale: 0.9, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9, y: 20 }} className="relative w-full max-w-5xl bg-white rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col max-h-[95vh]">
               
               <div className="p-6 md:p-8 border-b border-zinc-100 flex items-center justify-between shrink-0 bg-white z-10">
                 <div className="flex items-center gap-4">
@@ -542,46 +627,41 @@ export function DistributorsModule() {
                 <button type="button" onClick={() => setIsModalOpen(false)} className="p-2 hover:bg-zinc-100 rounded-xl transition-colors"><X size={20} /></button>
               </div>
               
-              {/* Added flex-1 min-h-0 here for scrolling */}
-              <div className="p-6 md:p-8 flex-1 min-h-0 overflow-y-auto custom-scrollbar">
+              <div className="p-6 md:p-8 flex-1 min-h-0 overflow-y-auto custom-scrollbar bg-zinc-50/50">
                 <form id="distributor-form" onSubmit={handleSubmit} className="space-y-8">
-                  <div>
+                  <div className="bg-white p-6 rounded-[2rem] border border-zinc-100 shadow-sm">
                     <h5 className="text-sm font-bold uppercase tracking-wider text-zinc-900 mb-4 flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-black"></span> Identification</h5>
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                      <div className="space-y-2"><label className="text-xs font-bold uppercase tracking-wider text-zinc-400">Distributor Code *</label><input required className="w-full px-4 py-3 bg-zinc-50 border-none rounded-xl focus:ring-2 focus:ring-black transition-all" value={formData.code} onChange={(e) => setFormData({ ...formData, code: e.target.value })} placeholder="e.g. DIST-001" /></div>
-                      <div className="space-y-2"><label className="text-xs font-bold uppercase tracking-wider text-zinc-400">Distributor Name *</label><input required className="w-full px-4 py-3 bg-zinc-50 border-none rounded-xl focus:ring-2 focus:ring-black transition-all" value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} placeholder="Company Name Ltd." /></div>
-                      <div className="space-y-2"><label className="text-xs font-bold uppercase tracking-wider text-zinc-400">Anchor Name</label><input className="w-full px-4 py-3 bg-zinc-50 border-none rounded-xl focus:ring-2 focus:ring-black transition-all" value={formData.anchorName} onChange={(e) => setFormData({ ...formData, anchorName: e.target.value })} placeholder="e.g. Reliance" /></div>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+                      <div className="space-y-2"><label className="text-xs font-bold uppercase tracking-wider text-zinc-400 ml-1">Distributor Code *</label><input required className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black transition-all" value={formData.code} onChange={(e) => setFormData({ ...formData, code: e.target.value })} placeholder="e.g. DIST-001" /></div>
+                      <div className="space-y-2"><label className="text-xs font-bold uppercase tracking-wider text-zinc-400 ml-1">Distributor Name *</label><input required className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black transition-all" value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} placeholder="Company Name Ltd." /></div>
+                      <div className="space-y-2"><label className="text-xs font-bold uppercase tracking-wider text-zinc-400 ml-1">Anchor Name</label><input className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black transition-all" value={formData.anchorName} onChange={(e) => setFormData({ ...formData, anchorName: e.target.value })} placeholder="e.g. Reliance" /></div>
                     </div>
                   </div>
 
-                  <hr className="border-zinc-100" />
-
-                  <div>
-                    <h5 className="text-sm font-bold uppercase tracking-wider text-zinc-900 mb-4 flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-purple-500"></span> Management Hierarchy Mapping</h5>
-                    <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4 bg-purple-50/50 p-6 rounded-3xl border border-purple-100">
-                      {renderUserSelect("Head Office", "ho", "hoId")}
-                      {renderUserSelect("Division Mgr (DM)", "dm", "dmId")}
-                      {renderUserSelect("Sales Mgr (SM)", "sm", "smId")}
-                      {renderUserSelect("Area Sales Mgr", "asm", "asmId")}
-                      {renderUserSelect("Area Sales Exec", "ase", "aseId")}
+                  <div className="bg-purple-50/50 p-6 rounded-[2rem] border border-purple-100">
+                    <h5 className="text-sm font-bold uppercase tracking-wider text-purple-900 mb-4 flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-purple-500"></span> Management Hierarchy Mapping</h5>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+                      {renderMultiUserSelect("Head Office", "ho", "hoIds")}
+                      {renderMultiUserSelect("Division Mgr (DM)", "dm", "dmIds")}
+                      {renderMultiUserSelect("Sales Mgr (SM)", "sm", "smIds")}
+                      {renderMultiUserSelect("Area Sales Mgr", "asm", "asmIds")}
+                      {renderMultiUserSelect("Area Sales Exec", "ase", "aseIds")}
                     </div>
                   </div>
 
-                  <hr className="border-zinc-100" />
-
-                  <div>
+                  <div className="bg-white p-6 rounded-[2rem] border border-zinc-100 shadow-sm">
                     <h5 className="text-sm font-bold uppercase tracking-wider text-zinc-900 mb-4 flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-blue-500"></span> Financials & Location</h5>
-                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                      <div className="space-y-2"><label className="text-xs font-bold uppercase tracking-wider text-zinc-400">Budget Limit (₹) *</label><input required type="number" min="0" className="w-full px-4 py-3 bg-zinc-50 border-none rounded-xl focus:ring-2 focus:ring-blue-500 transition-all font-medium" value={formData.approvedValue} onChange={(e) => setFormData({ ...formData, approvedValue: parseFloat(e.target.value) })} /></div>
-                      <div className="space-y-2"><label className="text-xs font-bold uppercase tracking-wider text-zinc-400">Region</label><input className="w-full px-4 py-3 bg-zinc-50 border-none rounded-xl focus:ring-2 focus:ring-black transition-all" value={formData.region} onChange={(e) => setFormData({ ...formData, region: e.target.value })} placeholder="North" /></div>
-                      <div className="space-y-2"><label className="text-xs font-bold uppercase tracking-wider text-zinc-400">City</label><input className="w-full px-4 py-3 bg-zinc-50 border-none rounded-xl focus:ring-2 focus:ring-black transition-all" value={formData.city} onChange={(e) => setFormData({ ...formData, city: e.target.value })} /></div>
-                      <div className="space-y-2"><label className="text-xs font-bold uppercase tracking-wider text-zinc-400">State</label><input className="w-full px-4 py-3 bg-zinc-50 border-none rounded-xl focus:ring-2 focus:ring-black transition-all" value={formData.state} onChange={(e) => setFormData({ ...formData, state: e.target.value })} /></div>
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-5">
+                      <div className="space-y-2"><label className="text-xs font-bold uppercase tracking-wider text-zinc-400 ml-1">Budget Limit (₹) *</label><input required type="number" min="0" className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-blue-500 transition-all font-medium" value={formData.approvedValue} onChange={(e) => setFormData({ ...formData, approvedValue: parseFloat(e.target.value) })} /></div>
+                      <div className="space-y-2"><label className="text-xs font-bold uppercase tracking-wider text-zinc-400 ml-1">Region</label><input className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black transition-all" value={formData.region} onChange={(e) => setFormData({ ...formData, region: e.target.value })} placeholder="North" /></div>
+                      <div className="space-y-2"><label className="text-xs font-bold uppercase tracking-wider text-zinc-400 ml-1">City</label><input className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black transition-all" value={formData.city} onChange={(e) => setFormData({ ...formData, city: e.target.value })} /></div>
+                      <div className="space-y-2"><label className="text-xs font-bold uppercase tracking-wider text-zinc-400 ml-1">State</label><input className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black transition-all" value={formData.state} onChange={(e) => setFormData({ ...formData, state: e.target.value })} /></div>
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-3 bg-zinc-50 p-4 rounded-xl border border-zinc-100 w-max">
-                    <input type="checkbox" id="distActive" className="w-5 h-5 rounded border-zinc-300 text-black focus:ring-black cursor-pointer" checked={formData.active} onChange={(e) => setFormData({ ...formData, active: e.target.checked })} />
-                    <label htmlFor="distActive" className="text-sm font-bold cursor-pointer select-none">Active Distributor</label>
+                  <div className="flex items-center gap-3 bg-white p-4 rounded-xl border border-zinc-200 shadow-sm w-max">
+                    <input type="checkbox" id="distActive" className="w-5 h-5 rounded border-zinc-300 text-blue-600 focus:ring-blue-600 cursor-pointer" checked={formData.active} onChange={(e) => setFormData({ ...formData, active: e.target.checked })} />
+                    <label htmlFor="distActive" className="text-sm font-bold text-zinc-900 cursor-pointer select-none">Active Distributor Account</label>
                   </div>
                 </form>
               </div>
