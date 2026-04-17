@@ -8,7 +8,7 @@ import {
 } from 'lucide-react';
 import { motion } from 'motion/react';
 
-// MOVED OUTSIDE: This prevents React from destroying and recreating the cards, stopping the blinking!
+
 const StatCard = ({ title, value, subtitle, icon: Icon, colorClass, delay }: any) => (
   <motion.div 
     initial={{ opacity: 0, y: 20 }} 
@@ -39,7 +39,7 @@ export function DashboardModule() {
     const fetchDashboardData = async () => {
       if (!profile) return;
       try {
-        // Fetch Distributors based on role
+
         let dQuery = supabase.from('distributors').select('*');
         if (profile.role === 'ase') dQuery = dQuery.eq('aseId', profile.uid);
         else if (profile.role === 'asm') dQuery = dQuery.eq('asmId', profile.uid);

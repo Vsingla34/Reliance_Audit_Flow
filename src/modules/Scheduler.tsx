@@ -9,34 +9,40 @@ import { format, startOfMonth, endOfMonth, eachDayOfInterval, addMonths, subMont
 export function SchedulerModule() {
   const { user, profile } = useAuth();
   const [tickets, setTickets] = useState<AuditTicket[]>([]);
-  const [distributors, setDistributors] = useState<Distributor[]>([]);
+  const [distributors, setDistributors] = useState<any[]>([]); 
   const [auditors, setAuditors] = useState<UserProfile[]>([]);
   const [allUsers, setAllUsers] = useState<UserProfile[]>([]); 
   
   const [currentMonth, setCurrentMonth] = useState(new Date());
   
-  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
-  const [negotiationTicket, setNegotiationTicket] = useState<AuditTicket | null>(null);
+  // --- UNIFIED NEGOTIATION STATE ---
+  const [isNegotiationModalOpen, setIsNegotiationModalOpen] = useState(false);
+  const [negDistId, setNegDistId] = useState('');
+  const [replyDistId, setReplyDistId] = useState(''); // State for counter-proposing a different distributor
+  const [proposalData, setProposalData] = useState({ date: '', remarks: '' });
   
+  // --- HEADER SEARCHABLE DROPDOWN STATE ---
+  const [headerSearchTerm, setHeaderSearchTerm] = useState('');
+  const [isHeaderSearchOpen, setIsHeaderSearchOpen] = useState(false);
+
   const [editingActiveTicket, setEditingActiveTicket] = useState<AuditTicket | null>(null);
   const [editTicketData, setEditTicketData] = useState({ scheduledDate: '', auditorIds: [] as string[], auditDays: 1 });
 
   const [pendingTab, setPendingTab] = useState<'approval' | 'waiting'>('approval');
   const [pendingFilterAse, setPendingFilterAse] = useState<string>('all');
 
-  const [createData, setCreateData] = useState({ distributorId: '', proposedDate: '', auditorIds: [] as string[], auditDays: 1 });
-  const [proposalData, setProposalData] = useState({ date: '', remarks: '' });
-  const [approvalAuditorIds, setApprovalAuditorIds] = useState<string[]>([]);
+  // --- FORCE SCHEDULE STATE ---
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [createAseId, setCreateAseId] = useState('');
+  const [createData, setCreateData] = useState({ distributorId: '', proposedDate: '', auditDays: 1 });
+  
   const [approvalAuditDays, setApprovalAuditDays] = useState(1);
-
-  // Search state for Auditor Lists
   const [auditorSearch, setAuditorSearch] = useState('');
 
-  // SUPERADMIN UPDATE HERE
   const isAdminOrHO = ['superadmin', 'admin', 'ho'].includes(profile?.role || '');
 
   const distMap = useMemo(() => {
-    const map: Record<string, Distributor> = {};
+    const map: Record<string, any> = {};
     distributors.forEach(d => { map[d.id] = d; });
     return map;
   }, [distributors]);
@@ -59,19 +65,39 @@ export function SchedulerModule() {
     return map;
   }, [tickets]);
 
-  // Filter auditors based on search term
   const displayedAuditors = useMemo(() => {
     if (!auditorSearch.trim()) return auditors;
     return auditors.filter(a => a.name.toLowerCase().includes(auditorSearch.toLowerCase()));
   }, [auditors, auditorSearch]);
+
+  const currentNegTicket = useMemo(() => {
+    if (!negDistId) return null;
+    return tickets.find(t => t.distributorId === negDistId && t.status === 'tentative') || null;
+  }, [negDistId, tickets]);
+
+  const headerFilteredDistributors = useMemo(() => {
+    if (!headerSearchTerm.trim()) return distributors;
+    return distributors.filter(d => 
+      d.name.toLowerCase().includes(headerSearchTerm.toLowerCase()) || 
+      d.code.toLowerCase().includes(headerSearchTerm.toLowerCase())
+    );
+  }, [distributors, headerSearchTerm]);
+
+  useEffect(() => {
+    // Keep the reply dropdown in sync with the actively viewed distributor
+    setReplyDistId(negDistId);
+  }, [negDistId]);
 
   useEffect(() => {
     const fetchData = async () => {
       if (!profile) return;
       try {
         let dQuery = supabase.from('distributors').select('*');
-        if (profile.role === 'ase') dQuery = dQuery.eq('aseId', profile.uid);
-        else if (profile.role === 'distributor') dQuery = dQuery.eq('email', profile.email);
+        
+        if (profile.role === 'ase') dQuery = dQuery.contains('aseIds', [profile.uid]);
+        if (profile.role === 'asm') dQuery = dQuery.contains('asmIds', [profile.uid]);
+        if (profile.role === 'sm') dQuery = dQuery.contains('smIds', [profile.uid]);
+        if (profile.role === 'dm') dQuery = dQuery.contains('dmIds', [profile.uid]);
         
         const [dRes, uRes] = await Promise.all([
           dQuery,
@@ -79,7 +105,7 @@ export function SchedulerModule() {
         ]);
 
         if (dRes.error) throw dRes.error;
-        const fetchedDistributors = (dRes.data || []) as Distributor[];
+        const fetchedDistributors = (dRes.data || []) as any[];
         setDistributors(fetchedDistributors);
         
         if (uRes.data) {
@@ -91,7 +117,7 @@ export function SchedulerModule() {
         let tQuery = supabase.from('auditTickets').select('*');
         if (profile.role === 'auditor') {
           tQuery = tQuery.or(`auditorId.eq.${profile.uid},auditorIds.cs.{${profile.uid}}`);
-        } else if (['ase', 'distributor'].includes(profile.role)) {
+        } else if (['ase', 'asm', 'sm', 'dm'].includes(profile.role)) {
           const distIds = fetchedDistributors.map(d => d.id);
           if (distIds.length > 0) tQuery = tQuery.in('distributorId', distIds);
           else return setTickets([]);
@@ -106,43 +132,29 @@ export function SchedulerModule() {
           );
           setTickets(validTickets);
         }
-      } catch (error) {
-        console.error("Error fetching scheduler data:", error);
-      }
+      } catch (error) { console.error("Error fetching scheduler data:", error); }
     };
 
     fetchData();
-    const channel = supabase.channel('scheduler-changes')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'auditTickets' }, fetchData)
-      .subscribe();
-    
+    const channel = supabase.channel('scheduler-changes').on('postgres_changes', { event: '*', schema: 'public', table: 'auditTickets' }, fetchData).subscribe();
     return () => { supabase.removeChannel(channel); };
-  }, [profile?.uid, profile?.role, profile?.email]);
-
-  useEffect(() => {
-    if (negotiationTicket) {
-      const updated = tickets.find(t => t.id === negotiationTicket.id);
-      if (updated) setNegotiationTicket(updated);
-    }
-  }, [tickets, negotiationTicket?.id]);
+  }, [profile?.uid, profile?.role]);
 
   const deleteTicket = async (ticketId: string) => {
     if (window.confirm("Are you sure you want to permanently delete this ticket?")) {
       try {
         await supabase.from('auditLineItems').delete().eq('ticketId', ticketId);
         await supabase.from('auditTickets').delete().eq('id', ticketId);
-        setNegotiationTicket(null);
         setEditingActiveTicket(null);
+        if (currentNegTicket?.id === ticketId) setNegDistId('');
         setAuditorSearch('');
-      } catch (error) {
-        console.error("Error deleting ticket:", error);
-      }
+      } catch (error) { console.error("Error deleting ticket:", error); }
     }
   };
 
   const handleCreateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (createData.auditorIds.length === 0) return alert("Please assign at least one auditor.");
+    if (!createData.distributorId) return alert("Please select a distributor.");
 
     try {
       const dist = distMap[createData.distributorId];
@@ -154,7 +166,6 @@ export function SchedulerModule() {
         await supabase.from('auditTickets').update({
           proposedDate: createData.proposedDate,
           scheduledDate: createData.proposedDate,
-          auditorIds: createData.auditorIds, 
           auditDays: createData.auditDays,
           status: 'scheduled',
           updatedAt: new Date().toISOString()
@@ -164,7 +175,7 @@ export function SchedulerModule() {
           id: Math.random().toString(36).substring(7),
           distributorId: createData.distributorId,
           proposedDate: createData.proposedDate,
-          auditorIds: createData.auditorIds, 
+          auditorIds: [], 
           auditDays: createData.auditDays,
           approvedValue: dist.approvedValue,
           maxAllowedValue: dist.approvedValue * 1.05,
@@ -184,17 +195,14 @@ export function SchedulerModule() {
       logActivity(user, profile, "Audit Scheduled", `${profile?.role.toUpperCase()} scheduled audit for ${dist?.name} on ${createData.proposedDate}`);
 
       setIsCreateModalOpen(false);
-      setCreateData({ distributorId: '', proposedDate: '', auditorIds: [], auditDays: 1 });
-      setAuditorSearch('');
-    } catch (error) {
-      console.error("Error creating audit ticket:", error);
-    }
+      setCreateData({ distributorId: '', proposedDate: '', auditDays: 1 });
+      setCreateAseId('');
+    } catch (error) { console.error("Error creating audit ticket:", error); }
   };
 
   const handleEditActiveTicketSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingActiveTicket) return;
-    if (editTicketData.auditorIds.length === 0) return alert("Please assign at least one auditor.");
 
     try {
       await supabase.from('auditTickets').update({
@@ -206,22 +214,23 @@ export function SchedulerModule() {
       }).eq('id', editingActiveTicket.id);
 
       const dist = distMap[editingActiveTicket.distributorId];
-      logActivity(user, profile, "Audit Re-scheduled", `${profile?.role.toUpperCase()} modified the schedule/auditors for ${dist?.name}`);
+      logActivity(user, profile, "Audit Re-scheduled/Assigned", `${profile?.role.toUpperCase()} modified the schedule/auditors for ${dist?.name}`);
 
       setEditingActiveTicket(null);
       setAuditorSearch('');
-    } catch (error) {
-      console.error("Error updating ticket:", error);
-    }
+    } catch (error) { console.error("Error updating ticket:", error); }
   };
 
+  // --- UNIFIED PROPOSAL SUBMIT WITH COUNTER-DISTRIBUTOR LOGIC ---
   const submitProposal = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!negotiationTicket || !user || !profile) return;
+    if (!user || !profile) return;
+
+    const finalTargetDistId = replyDistId || negDistId;
+    if (!finalTargetDistId) return alert("Please select a distributor first.");
 
     if (!proposalData.date && !proposalData.remarks.trim()) {
-      alert("Please provide either a date or a message to send.");
-      return;
+      return alert("Please provide either a date or a message to send.");
     }
 
     try {
@@ -236,46 +245,98 @@ export function SchedulerModule() {
         timestamp: new Date().toISOString()
       };
 
-      const updatedProposals = [...(negotiationTicket.dateProposals || []), newProposal];
-      const newMainDate = proposalData.date ? proposalData.date : negotiationTicket.proposedDate;
+      // If the ASE changed the distributor dropdown to counter-propose a different distributor
+      if (finalTargetDistId !== negDistId && currentNegTicket) {
+        const targetDistName = distMap[finalTargetDistId]?.name;
+        
+        // 1. Leave a closure remark on the old ticket
+        const redirectProposal: DateProposal = {
+          id: Math.random().toString(36).substring(7),
+          date: proposalData.date || '',
+          proposedByUserId: user.id,
+          proposedByName: profile.name,
+          role: profile.role,
+          email: profile.email,
+          remarks: `Counter-proposed for a different distributor: ${targetDistName}. ${proposalData.remarks ? `Remarks: ${proposalData.remarks}` : ''}`,
+          timestamp: new Date().toISOString()
+        };
+        const updatedOldProposals = [...(currentNegTicket.dateProposals || []), redirectProposal];
+        
+        await supabase.from('auditTickets').update({
+          dateProposals: updatedOldProposals,
+          updatedAt: new Date().toISOString()
+        }).eq('id', currentNegTicket.id);
+      }
 
-      await supabase.from('auditTickets').update({
-        proposedDate: newMainDate,
-        dateProposals: updatedProposals,
-        updatedAt: new Date().toISOString()
-      }).eq('id', negotiationTicket.id);
+      // 2. Now add the actual proposal to the target ticket
+      const targetTicket = tickets.find(t => t.distributorId === finalTargetDistId && t.status === 'tentative');
+
+      if (targetTicket) {
+        const updatedProposals = [...(targetTicket.dateProposals || []), newProposal];
+        const newMainDate = proposalData.date ? proposalData.date : targetTicket.proposedDate;
+
+        await supabase.from('auditTickets').update({
+          proposedDate: newMainDate,
+          dateProposals: updatedProposals,
+          updatedAt: new Date().toISOString()
+        }).eq('id', targetTicket.id);
+
+      } else {
+        const dist = distMap[finalTargetDistId];
+        const newTicket: Partial<AuditTicket> = {
+          id: Math.random().toString(36).substring(7),
+          distributorId: finalTargetDistId,
+          proposedDate: proposalData.date || null,
+          auditorIds: [],
+          auditDays: 1,
+          approvedValue: dist.approvedValue,
+          maxAllowedValue: dist.approvedValue * 1.05,
+          status: 'tentative',
+          scheduledDate: null,
+          verifiedTotal: 0,
+          presenceLogs: [],
+          signOffs: {},
+          media: [],
+          dateProposals: [newProposal],
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        };
+
+        await supabase.from('auditTickets').insert([newTicket]);
+        logActivity(user, profile, "Date Proposed", `${profile?.role.toUpperCase()} initiated a date proposal for ${dist?.name}`);
+      }
 
       setProposalData({ date: '', remarks: '' });
-    } catch (error) {
-      console.error("Error submitting proposal:", error);
-    }
+      setNegDistId(finalTargetDistId); // Switch the UI context to the new distributor
+    } catch (error) { console.error("Error submitting proposal:", error); }
   };
 
   const approveAndSchedule = async (proposalDate: string) => {
-    if (!negotiationTicket || approvalAuditorIds.length === 0) {
-      alert("Please select at least one Auditor first!");
-      return;
-    }
+    if (!currentNegTicket) return;
 
     try {
       await supabase.from('auditTickets').update({
         status: 'scheduled',
         scheduledDate: proposalDate, 
-        auditorIds: approvalAuditorIds, 
         auditDays: approvalAuditDays, 
         updatedAt: new Date().toISOString()
-      }).eq('id', negotiationTicket.id);
+      }).eq('id', currentNegTicket.id);
 
-      const dist = distMap[negotiationTicket.distributorId];
-      logActivity(user, profile, "Audit Scheduled", `${profile?.role.toUpperCase()} approved date proposal and scheduled audit for ${dist?.name} on ${proposalDate}`);
+      const dist = distMap[currentNegTicket.distributorId];
+      logActivity(user, profile, "Date Approved", `${profile?.role.toUpperCase()} approved date proposal for ${dist?.name} on ${proposalDate}`);
 
-      setNegotiationTicket(null); 
-      setApprovalAuditorIds([]);
+      setIsNegotiationModalOpen(false);
+      setNegDistId('');
       setApprovalAuditDays(1);
-      setAuditorSearch('');
-    } catch (error) {
-      console.error("Error approving schedule:", error);
-    }
+    } catch (error) { console.error("Error approving schedule:", error); }
+  };
+
+  const openNegotiationModal = (distId: string) => {
+    setNegDistId(distId);
+    setProposalData({ date: '', remarks: '' });
+    setIsNegotiationModalOpen(true);
+    setHeaderSearchTerm('');
+    setIsHeaderSearchOpen(false);
   };
 
   const monthStart = startOfMonth(currentMonth);
@@ -285,14 +346,22 @@ export function SchedulerModule() {
   const paddingDays = Array.from({ length: startDayOfWeek }).map((_, i) => i);
 
   const allPendingTickets = useMemo(() => tickets.filter(t => t.status === 'tentative'), [tickets]);
+  
   const uniquePendingAseIds = useMemo(() => {
-    const ids = allPendingTickets.map(t => distMap[t.distributorId]?.aseId).filter(Boolean) as string[];
-    return Array.from(new Set(ids));
+    const ids = new Set<string>();
+    allPendingTickets.forEach(t => {
+      const dist = distMap[t.distributorId];
+      if (dist && dist.aseIds) { dist.aseIds.forEach((id: string) => ids.add(id)); }
+    });
+    return Array.from(ids);
   }, [allPendingTickets, distMap]);
 
   const filteredPendingTickets = useMemo(() => {
     return allPendingTickets.filter(t => {
-      if (pendingFilterAse !== 'all') return distMap[t.distributorId]?.aseId === pendingFilterAse;
+      if (pendingFilterAse !== 'all') {
+        const dist = distMap[t.distributorId];
+        return dist && dist.aseIds && dist.aseIds.includes(pendingFilterAse);
+      }
       return true;
     });
   }, [allPendingTickets, pendingFilterAse, distMap]);
@@ -309,6 +378,8 @@ export function SchedulerModule() {
 
   return (
     <div className="space-y-6 sm:space-y-8 pb-12 w-full min-w-0">
+      
+      {/* Header Actions */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 sm:gap-6">
         <div className="flex items-center justify-between sm:justify-start gap-2 sm:gap-4 bg-white p-2 rounded-2xl shadow-sm border border-zinc-200">
           <button onClick={() => setCurrentMonth(subMonths(currentMonth, 1))} className="p-2 hover:bg-zinc-100 rounded-xl transition-colors"><ChevronLeft size={20} className="w-5 h-5" /></button>
@@ -316,11 +387,58 @@ export function SchedulerModule() {
           <button onClick={() => setCurrentMonth(addMonths(currentMonth, 1))} className="p-2 hover:bg-zinc-100 rounded-xl transition-colors"><ChevronRight size={20} className="w-5 h-5" /></button>
         </div>
         
-        {isAdminOrHO && (
-          <button onClick={() => setIsCreateModalOpen(true)} className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 sm:px-6 py-3 sm:py-4 bg-black text-white rounded-xl sm:rounded-2xl font-bold hover:bg-zinc-800 transition-all shadow-md sm:shadow-xl sm:shadow-black/10 active:scale-95 text-sm sm:text-base">
-            <Plus size={18} className="sm:w-5 sm:h-5" /> Force Schedule
-          </button>
-        )}
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-3 w-full sm:w-auto">
+          {(isAdminOrHO || profile?.role === 'ase') && (
+            <div className="relative w-full sm:w-72">
+              <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-400" size={18} />
+              <input 
+                type="text" 
+                placeholder="Search dist to propose date..." 
+                className="w-full pl-10 pr-4 py-3 sm:py-3.5 bg-white border border-zinc-200 text-black rounded-xl font-bold focus:ring-2 focus:ring-black outline-none transition-all shadow-sm text-sm"
+                value={headerSearchTerm}
+                onChange={e => {
+                  setHeaderSearchTerm(e.target.value);
+                  setIsHeaderSearchOpen(true);
+                }}
+                onFocus={() => setIsHeaderSearchOpen(true)}
+                onBlur={() => setTimeout(() => setIsHeaderSearchOpen(false), 200)}
+              />
+              <AnimatePresence>
+                {isHeaderSearchOpen && headerFilteredDistributors.length > 0 && (
+                  <motion.div 
+                    initial={{ opacity: 0, y: -10 }} 
+                    animate={{ opacity: 1, y: 0 }} 
+                    exit={{ opacity: 0, y: -10 }}
+                    className="absolute top-full mt-2 left-0 w-full bg-white border border-zinc-200 rounded-xl shadow-xl z-50 max-h-60 overflow-y-auto custom-scrollbar flex flex-col p-1"
+                  >
+                    {headerFilteredDistributors.map(dist => (
+                      <button 
+                        key={dist.id} 
+                        onClick={() => openNegotiationModal(dist.id)}
+                        className="text-left px-3 py-2.5 hover:bg-zinc-50 rounded-lg transition-colors flex items-center gap-3 w-full"
+                      >
+                        <Store size={14} className="text-zinc-400 shrink-0" />
+                        <div className="min-w-0">
+                          <p className="font-bold text-sm text-zinc-900 truncate">{dist.name}</p>
+                          <p className="text-[10px] text-zinc-500 font-mono truncate">{dist.code}</p>
+                        </div>
+                      </button>
+                    ))}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          )}
+
+          {isAdminOrHO && (
+            <button 
+              onClick={() => setIsCreateModalOpen(true)} 
+              className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-3 sm:py-3.5 bg-black text-white rounded-xl font-bold hover:bg-zinc-800 transition-all shadow-md active:scale-95 text-sm"
+            >
+              <Plus size={18} /> Force Schedule
+            </button>
+          )}
+        </div>
       </div>
 
       {allPendingTickets.length > 0 && (
@@ -355,17 +473,19 @@ export function SchedulerModule() {
               <div className="space-y-3">
                 {displayTickets.map(ticket => {
                   const dist = distMap[ticket.distributorId];
-                  const ase = dist ? userMap[dist.aseId || ''] : null;
+                  const aseNames = dist?.aseIds?.length > 0 
+                    ? dist.aseIds.map((id: string) => userMap[id]?.name.split(' ')[0]).filter(Boolean).join(', ')
+                    : 'Unassigned';
                   const lastProposal = ticket.dateProposals?.[ticket.dateProposals.length - 1];
 
                   return (
-                    <motion.div layout key={ticket.id} onClick={() => setNegotiationTicket(ticket)} className={cn("bg-white p-3 sm:p-4 rounded-xl sm:rounded-2xl border shadow-sm hover:shadow-md transition-all cursor-pointer flex flex-col lg:flex-row lg:items-center justify-between gap-3 sm:gap-4 group", pendingTab === 'approval' ? "border-amber-200 hover:border-amber-400" : "border-zinc-200 hover:border-zinc-400")}>
+                    <motion.div layout key={ticket.id} onClick={() => openNegotiationModal(ticket.distributorId)} className={cn("bg-white p-3 sm:p-4 rounded-xl sm:rounded-2xl border shadow-sm hover:shadow-md transition-all cursor-pointer flex flex-col lg:flex-row lg:items-center justify-between gap-3 sm:gap-4 group", pendingTab === 'approval' ? "border-amber-200 hover:border-amber-400" : "border-zinc-200 hover:border-zinc-400")}>
                       <div className="flex items-start sm:items-center gap-3 sm:gap-4 min-w-0">
                         <div className={cn("w-10 h-10 rounded-xl flex items-center justify-center shrink-0", pendingTab === 'approval' ? "bg-amber-50 text-amber-600" : "bg-zinc-100 text-zinc-500")}><Store size={18} /></div>
                         <div className="min-w-0">
                           <p className="font-bold text-sm sm:text-base text-zinc-900 truncate">{dist?.name || 'Unknown'}</p>
                           <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 mt-0.5 sm:mt-1">
-                            <span className="text-[9px] sm:text-[10px] text-zinc-500 bg-zinc-100 px-1.5 sm:px-2 py-0.5 rounded font-medium truncate max-w-[150px]">ASE: {ase?.name || 'Unassigned'}</span>
+                            <span className="text-[9px] sm:text-[10px] text-zinc-500 bg-zinc-100 px-1.5 sm:px-2 py-0.5 rounded font-medium truncate max-w-[150px]">ASE: {aseNames}</span>
                             <span className="text-[9px] sm:text-[10px] text-zinc-400 truncate">{dist?.city || 'No Location'}</span>
                           </div>
                         </div>
@@ -418,19 +538,19 @@ export function SchedulerModule() {
                         const dist = distMap[ticket.distributorId];
                         const auditorNames = ticket.auditorIds && ticket.auditorIds.length > 0 
                           ? ticket.auditorIds.map(id => userMap[id]?.name.split(' ')[0]).join(', ')
-                          : userMap[ticket.auditorId || '']?.name.split(' ')[0] || 'Assigned';
+                          : 'Unassigned';
 
                         return (
                           <div 
                             key={ticket.id} 
                             onClick={() => {
                               if (ticket.status === 'tentative') {
-                                setNegotiationTicket(ticket);
+                                openNegotiationModal(ticket.distributorId);
                               } else if (isAdminOrHO) {
                                 setEditingActiveTicket(ticket);
                                 setEditTicketData({
                                   scheduledDate: ticket.scheduledDate || '',
-                                  auditorIds: ticket.auditorIds || (ticket.auditorId ? [ticket.auditorId] : []),
+                                  auditorIds: ticket.auditorIds || [],
                                   auditDays: ticket.auditDays || 1
                                 });
                               }
@@ -536,83 +656,76 @@ export function SchedulerModule() {
         )}
       </AnimatePresence>
 
-      {/* --- NEGOTIATION & SCHEDULING MODAL --- */}
+      {/* --- UNIFIED NEGOTIATION HUB MODAL --- */}
       <AnimatePresence>
-        {negotiationTicket && (
+        {isNegotiationModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6">
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => { setNegotiationTicket(null); setAuditorSearch(''); }} className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsNegotiationModalOpen(false)} className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
             
             <motion.div initial={{ opacity: 0, scale: 0.9, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9, y: 20 }} className="relative w-full max-w-2xl bg-white rounded-[1.5rem] sm:rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
               
-              <div className="p-4 sm:p-6 md:p-8 border-b border-zinc-100 flex items-center justify-between shrink-0 bg-white z-10">
+              <div className="p-4 sm:p-5 md:p-6 border-b border-zinc-100 flex items-center justify-between shrink-0 bg-white z-10">
                 <div className="flex items-center gap-3 sm:gap-4">
-                  <div className="w-10 h-10 sm:w-12 sm:h-12 bg-amber-50 rounded-xl sm:rounded-2xl flex items-center justify-center shrink-0"><CalendarIcon className="text-amber-600 sm:w-5 sm:h-5" size={18} /></div>
-                  <div><h4 className="text-lg sm:text-xl font-bold tracking-tight">Date Negotiation</h4><p className="text-[10px] sm:text-sm text-zinc-500 truncate max-w-[200px] sm:max-w-[250px]">{distMap[negotiationTicket.distributorId]?.name}</p></div>
+                  <div className="w-10 h-10 sm:w-12 sm:h-12 bg-amber-50 rounded-xl flex items-center justify-center shrink-0"><CalendarIcon className="text-amber-600 sm:w-5 sm:h-5" size={18} /></div>
+                  <div>
+                    <h4 className="text-lg sm:text-xl font-bold tracking-tight">Date Negotiation</h4>
+                    {currentNegTicket ? (
+                      <p className="text-[10px] sm:text-sm text-zinc-500 truncate max-w-[200px] sm:max-w-[250px]">{distMap[currentNegTicket.distributorId]?.name}</p>
+                    ) : (
+                      <p className="text-[10px] sm:text-sm text-zinc-500">Coordinate and approve audit schedules.</p>
+                    )}
+                  </div>
                 </div>
                 <div className="flex items-center gap-1 sm:gap-2">
-                  {isAdminOrHO && <button onClick={() => deleteTicket(negotiationTicket.id)} className="p-1.5 sm:p-2 text-zinc-400 hover:text-red-600 hover:bg-red-50 rounded-lg sm:rounded-xl transition-colors" title="Delete this ticket"><Trash2 size={18} className="sm:w-5 sm:h-5" /></button>}
-                  <button onClick={() => { setNegotiationTicket(null); setAuditorSearch(''); }} className="p-1.5 sm:p-2 hover:bg-zinc-100 rounded-lg sm:rounded-xl transition-colors"><X size={18} className="sm:w-5 sm:h-5" /></button>
+                  {isAdminOrHO && currentNegTicket && <button onClick={() => deleteTicket(currentNegTicket.id)} className="p-1.5 sm:p-2 text-zinc-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Delete this ticket"><Trash2 size={18}/></button>}
+                  <button onClick={() => setIsNegotiationModalOpen(false)} className="p-1.5 sm:p-2 hover:bg-zinc-100 rounded-lg transition-colors"><X size={18}/></button>
                 </div>
               </div>
               
-              <div className="p-4 sm:p-6 md:p-8 overflow-y-auto bg-zinc-50/50 flex-1 space-y-4 sm:space-y-6 custom-scrollbar min-h-0">
-                {(!negotiationTicket.dateProposals || negotiationTicket.dateProposals.length === 0) ? (
-                  <div className="text-center py-6 sm:py-8 text-zinc-400"><MessageSquare size={28} className="mx-auto mb-2 sm:mb-3 opacity-50 sm:w-8 sm:h-8" /><p className="text-xs sm:text-sm font-medium">No messages yet.</p></div>
+              <div className="overflow-y-auto bg-zinc-50/30 flex-1 p-4 sm:p-5 md:p-6 space-y-4 custom-scrollbar min-h-0">
+                {(!negDistId) ? (
+                  <div className="text-center py-6 sm:py-8 text-zinc-400">
+                    <Store size={28} className="mx-auto mb-2 opacity-50" />
+                    <p className="text-xs sm:text-sm font-medium">Select a distributor using the search bar above to start.</p>
+                  </div>
+                ) : (!currentNegTicket || !currentNegTicket.dateProposals || currentNegTicket.dateProposals.length === 0) ? (
+                  <div className="text-center py-6 sm:py-8 text-zinc-400">
+                    <MessageSquare size={28} className="mx-auto mb-2 opacity-50" />
+                    <p className="text-xs sm:text-sm font-medium">No messages yet. Send a proposal below to start.</p>
+                  </div>
                 ) : (
-                  negotiationTicket.dateProposals.map((prop) => (
-                    <div key={prop.id} className="bg-white border border-zinc-200 rounded-xl sm:rounded-2xl p-4 sm:p-5 shadow-sm">
+                  currentNegTicket.dateProposals.map((prop) => (
+                    <div key={prop.id} className="bg-white border border-zinc-200 rounded-xl p-4 shadow-sm">
                       <div className="flex justify-between items-start mb-2 sm:mb-3">
                         <div className="flex items-center gap-2 sm:gap-3">
-                          <div className="w-6 h-6 sm:w-8 sm:h-8 rounded-full bg-zinc-100 flex items-center justify-center text-[10px] sm:text-xs font-bold text-zinc-600 shrink-0">{prop.proposedByName.charAt(0)}</div>
-                          <div><p className="text-xs sm:text-sm font-bold text-zinc-900">{prop.proposedByName}</p><div className="flex flex-wrap items-center gap-1.5 sm:gap-2 mt-0.5"><span className="text-zinc-500 uppercase font-black tracking-wider text-[8px] sm:text-[9px] bg-zinc-100 px-1 sm:px-1.5 py-0.5 rounded">{prop.role}</span><span className="text-[10px] sm:text-xs text-zinc-400">{prop.email}</span></div></div>
+                          <div className="w-8 h-8 rounded-full bg-zinc-100 flex items-center justify-center text-xs font-bold text-zinc-600 shrink-0">{prop.proposedByName.charAt(0)}</div>
+                          <div>
+                            <p className="text-sm font-bold text-zinc-900">{prop.proposedByName}</p>
+                            <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
+                              <span className="text-zinc-500 uppercase font-black tracking-wider text-[9px] bg-zinc-100 px-1.5 py-0.5 rounded">{prop.role}</span>
+                              <span className="text-[10px] text-zinc-400">{prop.email}</span>
+                              <span className="text-[9px] text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider border border-blue-100/50 truncate max-w-[150px]">
+                                {distMap[negDistId]?.name}
+                              </span>
+                            </div>
+                          </div>
                         </div>
-                        <span className="text-[9px] sm:text-[10px] text-zinc-400 font-medium shrink-0">{new Date(prop.timestamp).toLocaleDateString()}</span>
+                        <span className="text-[10px] text-zinc-400 font-medium shrink-0">{new Date(prop.timestamp).toLocaleDateString()}</span>
                       </div>
                       
-                      <div className="pl-8 sm:pl-11 space-y-2 sm:space-y-3">
-                        {prop.date && <div className="inline-flex items-center gap-1.5 sm:gap-2 bg-amber-50 text-amber-700 px-2 sm:px-3 py-1 sm:py-1.5 rounded-md sm:rounded-lg border border-amber-100 text-xs sm:text-sm font-bold"><CalendarIcon size={12} className="sm:w-[14px] sm:h-[14px]" /> Proposed: {format(new Date(prop.date), 'dd MMM yyyy')}</div>}
-                        {prop.remarks && <p className="text-xs sm:text-sm text-zinc-600 bg-zinc-50 p-2 sm:p-3 rounded-lg sm:rounded-xl border border-zinc-100">"{prop.remarks}"</p>}
+                      <div className="pl-11 space-y-2">
+                        {prop.date && <div className="inline-flex items-center gap-1.5 bg-amber-50 text-amber-700 px-2 py-1 rounded-md border border-amber-100 text-xs font-bold"><CalendarIcon size={12}/> Proposed: {format(new Date(prop.date), 'dd MMM yyyy')}</div>}
+                        {prop.remarks && <p className="text-sm text-zinc-600 bg-zinc-50 p-2.5 rounded-lg border border-zinc-100">"{prop.remarks}"</p>}
                         
+                        {/* ONLY APPROVE, NO AUDITOR ASSIGNMENT */}
                         {isAdminOrHO && prop.date && (
-                          <div className="pt-3 sm:pt-4 mt-2 sm:mt-3 border-t border-zinc-100 flex flex-col gap-2 sm:gap-3">
-                            <label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-500">Assign Auditors for Approval</label>
-                            
-                            <div className="mb-1 relative">
-                              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-400" size={14} />
-                              <input 
-                                type="text" 
-                                placeholder="Search auditors..." 
-                                className="w-full pl-8 pr-3 py-1.5 bg-white border border-zinc-200 rounded-lg text-xs focus:ring-2 focus:ring-black outline-none transition-all"
-                                value={auditorSearch}
-                                onChange={(e) => setAuditorSearch(e.target.value)}
-                              />
-                            </div>
-
-                            <div className="max-h-24 sm:max-h-32 overflow-y-auto border border-zinc-200 rounded-lg sm:rounded-xl p-2 sm:p-3 bg-zinc-50 grid grid-cols-1 sm:grid-cols-2 gap-1 sm:gap-2 custom-scrollbar">
-                              {displayedAuditors.length > 0 ? displayedAuditors.map(a => (
-                                <label key={a.uid} className="flex items-center gap-2 cursor-pointer p-1 sm:p-1.5 hover:bg-zinc-100 rounded-md sm:rounded-lg">
-                                  <input 
-                                    type="checkbox" 
-                                    checked={approvalAuditorIds.includes(a.uid)}
-                                    onChange={(e) => {
-                                      const newIds = e.target.checked ? [...approvalAuditorIds, a.uid] : approvalAuditorIds.filter(id => id !== a.uid);
-                                      setApprovalAuditorIds(newIds);
-                                    }}
-                                    className="w-3.5 h-3.5 sm:w-4 sm:h-4 rounded border-zinc-300 text-black focus:ring-black"
-                                  />
-                                  <span className="text-xs sm:text-sm font-medium text-zinc-700 truncate">{a.name}</span>
-                                </label>
-                              )) : (
-                                <div className="col-span-full text-center py-2 text-[10px] sm:text-xs text-zinc-400">No auditors found.</div>
-                              )}
-                            </div>
-
-                            <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
-                              <select className="w-full sm:w-32 text-xs sm:text-sm p-2 sm:p-2 rounded-lg sm:rounded-xl bg-zinc-50 border border-zinc-200 focus:ring-2 focus:ring-black cursor-pointer" value={approvalAuditDays} onChange={(e) => setApprovalAuditDays(parseInt(e.target.value))}>
+                          <div className="pt-3 mt-2 border-t border-zinc-100 flex flex-col gap-2">
+                            <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                              <select className="w-full sm:w-28 text-xs p-2 rounded-lg bg-white border border-zinc-200 focus:ring-2 focus:ring-black cursor-pointer" value={approvalAuditDays} onChange={(e) => setApprovalAuditDays(parseInt(e.target.value))}>
                                 {[1,2,3,4,5].map(n => <option key={n} value={n}>{n} Day{n>1?'s':''}</option>)}
                               </select>
-                              <button onClick={() => approveAndSchedule(prop.date)} className="w-full sm:w-auto flex justify-center items-center gap-1.5 px-4 py-2 bg-emerald-500 text-white text-xs sm:text-sm font-bold rounded-lg sm:rounded-xl hover:bg-emerald-600 transition-colors">
-                                <CheckCircle2 size={14} className="sm:w-4 sm:h-4" /> Approve & Assign
+                              <button onClick={() => approveAndSchedule(prop.date)} type="button" className="w-full sm:w-auto flex justify-center items-center gap-1.5 px-4 py-2 bg-emerald-500 text-white text-xs font-bold rounded-lg hover:bg-emerald-600 transition-colors">
+                                <CheckCircle2 size={14} /> Approve Schedule
                               </button>
                             </div>
                           </div>
@@ -623,66 +736,37 @@ export function SchedulerModule() {
                 )}
               </div>
 
-              <div className="p-4 sm:p-6 md:p-8 bg-white border-t border-zinc-100 shrink-0">
-                <form onSubmit={(e) => {
-                  e.preventDefault();
-                  if (isAdminOrHO && approvalAuditorIds.length > 0) {
-                    if (!proposalData.date) return alert("Select a date to schedule.");
-                    approveAndSchedule(proposalData.date);
-                  } else {
-                    submitProposal(e);
-                  }
-                }} className="space-y-3 sm:space-y-4">
-                  <h5 className="text-xs sm:text-sm font-bold tracking-tight text-zinc-900">{isAdminOrHO ? "Suggest a Date & Assign" : "Add a Reply or Suggest a Date"}</h5>
-                  <div className="grid grid-cols-1 gap-3 sm:gap-4">
-                    <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 w-full">
-                      <input type="date" min={new Date().toISOString().split('T')[0]} className="w-full sm:w-40 px-3 sm:px-4 py-2.5 sm:py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black transition-all text-xs sm:text-sm font-medium text-zinc-700 cursor-pointer shrink-0" value={proposalData.date} onChange={e => setProposalData({...proposalData, date: e.target.value})} />
+              <div className="p-4 sm:p-5 md:p-6 bg-white border-t border-zinc-100 shrink-0">
+                <form onSubmit={submitProposal} className="space-y-3">
+                  <h5 className="text-xs font-bold tracking-tight text-zinc-900">{isAdminOrHO ? "Suggest a Date & Distributor" : "Counter-Propose Date or Distributor"}</h5>
+                  <div className="flex flex-col gap-3 w-full">
+                    
+                    {/* --- DISTRIBUTOR COUNTER-PROPOSE DROPDOWN --- */}
+                    <select 
+                      disabled={!negDistId} 
+                      className="w-full px-3 py-2.5 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black outline-none transition-all text-xs font-medium text-zinc-700 cursor-pointer disabled:opacity-50" 
+                      value={replyDistId} 
+                      onChange={e => setReplyDistId(e.target.value)}
+                    >
+                      {negDistId && <option value={negDistId}>{distMap[negDistId]?.name} ({distMap[negDistId]?.code}) - Current</option>}
+                      <optgroup label="Counter-Propose Another Distributor">
+                        {distributors.filter(d => 
+                          d.id !== negDistId && 
+                          d.active && 
+                          (!pendingFilterAse || pendingFilterAse === 'all' || (d.aseIds && d.aseIds.includes(profile?.role === 'ase' ? profile.uid : pendingFilterAse)))
+                        ).map(d => (
+                          <option key={d.id} value={d.id}>{d.name} ({d.code})</option>
+                        ))}
+                      </optgroup>
+                    </select>
+
+                    <div className="flex flex-col sm:flex-row gap-3 w-full">
+                      <input type="date" disabled={!negDistId} min={new Date().toISOString().split('T')[0]} className="w-full sm:w-40 px-3 py-2.5 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black outline-none transition-all text-xs font-medium text-zinc-700 cursor-pointer shrink-0 disabled:opacity-50" value={proposalData.date} onChange={e => setProposalData({...proposalData, date: e.target.value})} />
                       <div className={cn("relative flex-1")}>
-                        <input type="text" placeholder="Type message..." className="w-full pl-3 sm:pl-4 pr-10 sm:pr-12 py-2.5 sm:py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black transition-all text-xs sm:text-sm" value={proposalData.remarks} onChange={e => setProposalData({...proposalData, remarks: e.target.value})} />
-                        <button type="submit" className="absolute right-1.5 sm:right-2 top-1/2 -translate-y-1/2 p-1.5 sm:p-2 bg-black text-white rounded-lg hover:bg-zinc-800 transition-colors"><Send size={14} className="sm:w-[14px] sm:h-[14px]" /></button>
+                        <input type="text" disabled={!negDistId} placeholder="Type message..." className="w-full pl-3 pr-10 py-2.5 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black outline-none transition-all text-xs disabled:opacity-50" value={proposalData.remarks} onChange={e => setProposalData({...proposalData, remarks: e.target.value})} />
+                        <button type="submit" disabled={!negDistId} className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1.5 bg-black text-white rounded-lg hover:bg-zinc-800 transition-colors disabled:opacity-50"><Send size={14}/></button>
                       </div>
                     </div>
-
-                    {isAdminOrHO && (
-                      <div className="p-3 sm:p-4 border border-zinc-200 rounded-xl bg-zinc-50 mt-1 sm:mt-2">
-                        <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center mb-2 gap-2">
-                          <label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-500 shrink-0">Assign Auditors</label>
-                          <div className="flex items-center gap-2 w-full sm:w-auto">
-                            <div className="relative flex-1 sm:w-40">
-                              <Search className="absolute left-2 top-1/2 -translate-y-1/2 text-zinc-400" size={12} />
-                              <input 
-                                type="text" 
-                                placeholder="Search..." 
-                                className="w-full pl-6 pr-2 py-1.5 bg-white border border-zinc-200 rounded-md text-[10px] sm:text-xs focus:ring-1 focus:ring-black outline-none"
-                                value={auditorSearch}
-                                onChange={(e) => setAuditorSearch(e.target.value)}
-                              />
-                            </div>
-                            <select className="w-24 sm:w-28 text-[10px] sm:text-xs p-1 sm:p-1.5 rounded-lg bg-white border border-zinc-200 focus:ring-2 focus:ring-black cursor-pointer shrink-0" value={approvalAuditDays} onChange={(e) => setApprovalAuditDays(parseInt(e.target.value))}>
-                              {[1,2,3,4,5].map(n => <option key={n} value={n}>{n} Day{n>1?'s':''}</option>)}
-                            </select>
-                          </div>
-                        </div>
-                        <div className="max-h-20 sm:max-h-24 overflow-y-auto grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-1 sm:gap-2 custom-scrollbar">
-                          {displayedAuditors.length > 0 ? displayedAuditors.map(a => (
-                            <label key={a.uid} className="flex items-center gap-1.5 sm:gap-2 cursor-pointer p-1 hover:bg-zinc-100 rounded-md">
-                              <input 
-                                type="checkbox" 
-                                checked={approvalAuditorIds.includes(a.uid)}
-                                onChange={(e) => {
-                                  const newIds = e.target.checked ? [...approvalAuditorIds, a.uid] : approvalAuditorIds.filter(id => id !== a.uid);
-                                  setApprovalAuditorIds(newIds);
-                                }}
-                                className="w-3.5 h-3.5 sm:w-4 sm:h-4 rounded border-zinc-300 text-black focus:ring-black"
-                              />
-                              <span className="text-[10px] sm:text-xs font-medium text-zinc-700 truncate">{a.name}</span>
-                            </label>
-                          )) : (
-                            <div className="col-span-full text-center py-2 text-[10px] sm:text-xs text-zinc-400">No auditors found.</div>
-                          )}
-                        </div>
-                      </div>
-                    )}
                   </div>
                 </form>
               </div>
@@ -695,21 +779,34 @@ export function SchedulerModule() {
       <AnimatePresence>
         {isCreateModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6">
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => { setIsCreateModalOpen(false); setAuditorSearch(''); }} className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsCreateModalOpen(false)} className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
             <motion.div initial={{ opacity: 0, scale: 0.9, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9, y: 20 }} className="relative w-full max-w-md bg-white rounded-[1.5rem] sm:rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
               
               <div className="flex justify-between items-center p-5 sm:p-6 border-b border-zinc-100 shrink-0">
                 <h3 className="text-lg sm:text-xl font-bold">Force Schedule Audit</h3>
-                <button onClick={() => { setIsCreateModalOpen(false); setAuditorSearch(''); }} className="p-1.5 sm:p-2 hover:bg-zinc-100 rounded-lg sm:rounded-xl"><X size={18} className="sm:w-5 sm:h-5"/></button>
+                <button onClick={() => setIsCreateModalOpen(false)} className="p-1.5 sm:p-2 hover:bg-zinc-100 rounded-lg sm:rounded-xl"><X size={18} className="sm:w-5 sm:h-5"/></button>
               </div>
 
               <div className="p-5 sm:p-6 overflow-y-auto custom-scrollbar flex-1 min-h-0">
                 <form id="force-schedule-form" onSubmit={handleCreateSubmit} className="space-y-3 sm:space-y-4">
+                  
+                  {isAdminOrHO && (
+                    <div>
+                      <label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-400">Filter by ASE (Optional)</label>
+                      <select className="w-full mt-1 px-3 sm:px-4 py-2.5 sm:py-3 bg-zinc-50 border border-zinc-200 sm:border-none rounded-xl focus:ring-2 focus:ring-black transition-all cursor-pointer text-sm" value={createAseId} onChange={e => { setCreateAseId(e.target.value); setCreateData({...createData, distributorId: ''}); }}>
+                        <option value="">All ASEs...</option>
+                        {allUsers.filter(u => u.role === 'ase' && u.active).map(u => (
+                          <option key={u.uid} value={u.uid}>{u.name} {u.region ? `(${u.region})` : ''}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
                   <div>
-                    <label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-400">Select Distributor</label>
-                    <select required className="w-full mt-1 px-3 sm:px-4 py-2.5 sm:py-3 bg-zinc-50 border border-zinc-200 sm:border-none rounded-xl focus:ring-2 focus:ring-black transition-all cursor-pointer text-sm" value={createData.distributorId} onChange={e => setCreateData({...createData, distributorId: e.target.value})}>
+                    <label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-400">Select Distributor *</label>
+                    <select required className="w-full mt-1 px-3 sm:px-4 py-2.5 sm:py-3 bg-zinc-50 border border-zinc-200 sm:border-none rounded-xl focus:ring-2 focus:ring-black transition-all cursor-pointer text-sm" value={createData.distributorId} onChange={e => setCreateData({...createData, distributorId: e.target.value})} disabled={isAdminOrHO && !createAseId && distributors.length > 50}>
                       <option value="">Choose a distributor...</option>
-                      {distributors.filter(d => d.active).map(d => (
+                      {distributors.filter(d => d.active && (!createAseId || (d.aseIds && d.aseIds.includes(createAseId)))).map(d => (
                         <option key={d.id} value={d.id}>{d.name} ({d.code})</option>
                       ))}
                     </select>
@@ -725,40 +822,6 @@ export function SchedulerModule() {
                       <select required className="w-full mt-1 px-3 sm:px-4 py-2.5 sm:py-3 bg-zinc-50 border border-zinc-200 sm:border-none rounded-xl focus:ring-2 focus:ring-black transition-all cursor-pointer text-sm" value={createData.auditDays} onChange={e => setCreateData({...createData, auditDays: parseInt(e.target.value)})}>
                         {[1,2,3,4,5].map(n => <option key={n} value={n}>{n} Day{n>1?'s':''}</option>)}
                       </select>
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-400 mb-1 block">Assign Auditors</label>
-                    <div className="mb-2 relative">
-                      <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-400" size={14} />
-                      <input 
-                        type="text" 
-                        placeholder="Search auditors by name..." 
-                        className="w-full pl-8 pr-3 py-2 bg-white border border-zinc-200 rounded-lg text-xs focus:ring-2 focus:ring-black outline-none transition-all"
-                        value={auditorSearch}
-                        onChange={(e) => setAuditorSearch(e.target.value)}
-                      />
-                    </div>
-                    <div className="max-h-32 sm:max-h-40 overflow-y-auto border border-zinc-200 rounded-xl p-2 sm:p-3 bg-zinc-50 grid grid-cols-1 sm:grid-cols-2 gap-1 sm:gap-2 custom-scrollbar">
-                      {displayedAuditors.length > 0 ? displayedAuditors.map(a => (
-                        <label key={a.uid} className="flex items-center gap-2 cursor-pointer p-1 sm:p-1.5 hover:bg-zinc-100 rounded-lg">
-                          <input 
-                            type="checkbox" 
-                            checked={createData.auditorIds.includes(a.uid)}
-                            onChange={(e) => {
-                              const newIds = e.target.checked 
-                                ? [...createData.auditorIds, a.uid] 
-                                : createData.auditorIds.filter(id => id !== a.uid);
-                              setCreateData({ ...createData, auditorIds: newIds });
-                            }}
-                            className="w-3.5 h-3.5 sm:w-4 sm:h-4 rounded border-zinc-300 text-black focus:ring-black"
-                          />
-                          <span className="text-xs sm:text-sm font-medium text-zinc-700 truncate">{a.name}</span>
-                        </label>
-                      )) : (
-                        <div className="col-span-full text-center py-4 text-xs font-medium text-zinc-400">No auditors found.</div>
-                      )}
                     </div>
                   </div>
                 </form>
