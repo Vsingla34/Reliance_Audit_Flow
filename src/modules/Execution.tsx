@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { supabase, logActivity } from '../supabase';
 import { Distributor, SignOff, AuditTicket as BaseTicket, AuditLineItem as BaseItem } from '../types';
-import { ClipboardCheck, Plus, Store, MapPin, CheckCircle2, ArrowLeft, AlertCircle, MessageSquare, PackageSearch, Lock, Trash2, Send, RotateCcw, CalendarClock, FileText, Upload, Loader2 } from 'lucide-react';
+import { ClipboardCheck, Plus, Store, MapPin, CheckCircle2, ArrowLeft, AlertCircle, MessageSquare, PackageSearch, Lock, Trash2, Send, RotateCcw, CalendarClock, FileText, Upload, Loader2, User as UserIcon, X } from 'lucide-react';
 import { cn, useAuth } from '../App';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -17,7 +17,11 @@ export interface AuditTicket extends BaseTicket {
   signoffDocumentUrl?: string;
   signoffDocumentApproved?: boolean;
 }
-export interface AuditLineItem extends BaseItem { qtyDrained?: number; }
+
+export interface AuditLineItem extends BaseItem { 
+  qtyDrained?: number; 
+  bbdApprovalStatus?: 'none' | 'pending' | 'approved' | 'rejected';
+}
 
 export interface CombinedDumpItem {
   id: string; itemCode: string; itemName: string; expectedQty: number; rate: number; category: string;
@@ -27,7 +31,7 @@ export interface CombinedDumpItem {
 export function ExecutionModule() {
   const { profile, user } = useAuth();
   const [tickets, setTickets] = useState<AuditTicket[]>([]);
-  const [distributors, setDistributors] = useState<Distributor[]>([]);
+  const [distributors, setDistributors] = useState<any[]>([]); 
   const [activeTicket, setActiveTicket] = useState<AuditTicket | null>(null);
   const [items, setItems] = useState<AuditLineItem[]>([]);
   const [availableDumpItems, setAvailableDumpItems] = useState<CombinedDumpItem[]>([]);
@@ -41,44 +45,65 @@ export function ExecutionModule() {
 
   const [activeTab, setActiveTab] = useState<'active' | 'drainage' | 'signoff' | 'completed'>('active');
 
+  const isAdminOrHO = ['superadmin', 'admin', 'ho'].includes(profile?.role || '');
+
   const distMap = useMemo(() => {
-    const map = new Map<string, Distributor>();
-    distributors.forEach(d => map.set(d.id, d));
+    const map: Record<string, any> = {};
+    distributors.forEach(d => { map[d.id] = d; });
     return map;
   }, [distributors]);
 
   const dumpItemMap = useMemo(() => {
-    const map = new Map<string, CombinedDumpItem>();
-    availableDumpItems.forEach(d => map.set(d.itemCode, d));
+    const map: Record<string, CombinedDumpItem> = {};
+    availableDumpItems.forEach(d => { map[d.itemCode] = d; });
     return map;
   }, [availableDumpItems]);
 
   const fetchData = async () => {
     if (!profile) return;
     try {
-      let dQuery = supabase.from('distributors').select('*');
-      if (profile.role === 'ase') dQuery = dQuery.eq('aseId', profile.uid);
-      else if (profile.role === 'asm') dQuery = dQuery.eq('asmId', profile.uid);
-      else if (profile.role === 'sm') dQuery = dQuery.eq('smId', profile.uid);
-      else if (profile.role === 'dm') dQuery = dQuery.eq('dmId', profile.uid);
-
-      const { data: dData } = await dQuery;
-      const fetchedDistributors = (dData || []) as Distributor[];
-      setDistributors(fetchedDistributors);
-
-      let tQuery = supabase.from('auditTickets').select('*').in('status', ['scheduled', 'in_progress', 'auditor_submitted', 'drainage_pending', 'submitted', 'evidence_uploaded', 'signed', 'closed']);
+      let tQuery = supabase.from('auditTickets')
+        .select('*')
+        .in('status', ['scheduled', 'in_progress', 'auditor_submitted', 'drainage_pending', 'submitted', 'evidence_uploaded', 'signed', 'closed']);
+      
       if (profile.role === 'auditor') {
         tQuery = tQuery.or(`auditorId.eq.${profile.uid},auditorIds.cs.{${profile.uid}}`);
       }
-      else if (['ase', 'asm', 'sm', 'dm'].includes(profile.role)) {
-        const distIds = fetchedDistributors.map(d => d.id);
-        if (distIds.length > 0) tQuery = tQuery.in('distributorId', distIds);
-        else return setTickets([]);
+
+      const { data: tData, error: tError } = await tQuery;
+      if (tError) throw tError;
+      const fetchedTickets = (tData || []) as AuditTicket[];
+
+      let dQuery = supabase.from('distributors').select('*');
+      
+      if (['ase', 'asm', 'sm', 'dm'].includes(profile.role)) {
+        if (profile.role === 'ase') dQuery = dQuery.contains('aseIds', [profile.uid]);
+        else if (profile.role === 'asm') dQuery = dQuery.contains('asmIds', [profile.uid]);
+        else if (profile.role === 'sm') dQuery = dQuery.contains('smIds', [profile.uid]);
+        else if (profile.role === 'dm') dQuery = dQuery.contains('dmIds', [profile.uid]);
+      } else if (profile.role === 'auditor' && fetchedTickets.length > 0) {
+        const distIds = Array.from(new Set(fetchedTickets.map(t => t.distributorId)));
+        dQuery = dQuery.in('id', distIds);
       }
 
-      const { data: tData } = await tQuery;
-      if (tData) setTickets(tData as AuditTicket[]);
-    } catch (error) { console.error(error); }
+      const { data: dData, error: dError } = await dQuery;
+      if (dError) throw dError;
+      const fetchedDistributors = (dData || []) as any[];
+
+      setDistributors(fetchedDistributors);
+
+      if (['ase', 'asm', 'sm', 'dm'].includes(profile.role)) {
+         const distIds = fetchedDistributors.map(d => d.id);
+         const validTickets = fetchedTickets.filter(t => distIds.includes(t.distributorId));
+         setTickets(validTickets);
+      } else {
+         const validTickets = fetchedTickets.filter(t => fetchedDistributors.some(d => d.id === t.distributorId));
+         setTickets(validTickets);
+      }
+
+    } catch (error) {
+      console.error("Execution Data Fetch Error:", error);
+    }
   };
 
   useEffect(() => {
@@ -134,7 +159,7 @@ export function ExecutionModule() {
       await supabase.from('auditTickets').update({ status: newStatus, updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
       setActiveTicket({ ...activeTicket, status: newStatus as any });
       
-      const dist = distMap.get(activeTicket.distributorId);
+      const dist = distMap[activeTicket.distributorId];
       logActivity(user, profile, "Status Overridden", `Admin manually changed status to ${newStatus.replace('_', ' ')} for ${dist?.name}`);
     } catch (error) {
       console.error("Failed to force update status:", error);
@@ -151,7 +176,7 @@ export function ExecutionModule() {
         status: 'tentative', scheduledDate: null as any, drainageDate: null, whatsappMediaApproved: false, signoffDocumentUrl: null, signoffDocumentApproved: false, auditorId: null as any, auditorIds: [], presenceLogs: [], media: [], signOffs: {}, comments: [], dateProposals: [], verifiedTotal: 0, updatedAt: new Date().toISOString()
       }).eq('id', activeTicket.id);
       
-      const dist = distMap.get(activeTicket.distributorId);
+      const dist = distMap[activeTicket.distributorId];
       logActivity(user, profile, "Audit Reset", `Admin reset the audit for ${dist?.name} back to Scheduler`);
 
       setTickets(prev => prev.filter(t => t.id !== activeTicket.id)); setActiveTicket(null);
@@ -166,7 +191,7 @@ export function ExecutionModule() {
       await supabase.from('auditTickets').update({ whatsappMediaApproved: newStatus, updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
       setActiveTicket({ ...activeTicket, whatsappMediaApproved: newStatus });
       
-      const dist = distMap.get(activeTicket.distributorId);
+      const dist = distMap[activeTicket.distributorId];
       logActivity(user, profile, "WhatsApp Media Confirmed", `Admin marked WhatsApp evidence as ${newStatus ? 'Approved' : 'Pending'} for ${dist?.name}`);
     } catch (error) { console.error("Failed to update WhatsApp approval:", error); }
   };
@@ -197,7 +222,7 @@ export function ExecutionModule() {
       await supabase.from('auditTickets').update({ signoffDocumentApproved: newStatus, updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
       setActiveTicket({ ...activeTicket, signoffDocumentApproved: newStatus });
       
-      const dist = distMap.get(activeTicket.distributorId);
+      const dist = distMap[activeTicket.distributorId];
       logActivity(user, profile, "Sign-off Document Confirmed", `Admin marked physical sign-off sheet as ${newStatus ? 'Approved' : 'Pending'} for ${dist?.name}`);
     } catch (error) { console.error("Failed to update Sign-off approval:", error); }
   };
@@ -210,35 +235,84 @@ export function ExecutionModule() {
     } catch (error) { console.error(error); }
   };
 
-  const handleInlineChange = (id: string, field: 'qtyNonSaleable' | 'qtyBBD' | 'qtyDamaged' | 'mfgDate' | 'expDate', value: any) => {
-    setItems(prev => prev.map(item => {
-      if (item.id === id) {
-        const updatedItem = { ...item, [field]: value };
-        
-        if (['qtyNonSaleable', 'qtyBBD', 'qtyDamaged'].includes(field)) {
-           updatedItem.quantity = (Number(updatedItem.qtyNonSaleable) || 0) + (Number(updatedItem.qtyBBD) || 0) + (Number(updatedItem.qtyDamaged) || 0);
-           updatedItem.totalValue = updatedItem.quantity * updatedItem.unitValue;
-        }
+  const handleInlineChange = (id: string, field: 'qtyNonSaleable' | 'qtyBBD' | 'qtyDamaged' | 'mfgDate' | 'expDate', value: any, e?: React.ChangeEvent<HTMLInputElement>) => {
+    setItems(prev => {
+      const itemIndex = prev.findIndex(i => i.id === id);
+      if (itemIndex === -1) return prev;
 
-        if (field === 'mfgDate' || field === 'expDate') {
-           if (updatedItem.mfgDate && updatedItem.expDate) {
-             const m = new Date(updatedItem.mfgDate);
-             const e = new Date(updatedItem.expDate);
-             if (!isNaN(m.getTime()) && !isNaN(e.getTime())) {
-               const diffDays = Math.ceil((e.getTime() - m.getTime()) / (1000 * 60 * 60 * 24));
-               updatedItem.productLife = `${diffDays} Days`;
-             } else { updatedItem.productLife = '-'; }
-           } else { updatedItem.productLife = '-'; }
-        }
-        
-        return updatedItem;
+      const oldItem = prev[itemIndex];
+      const updatedItem = { ...oldItem, [field]: value };
+
+      if (['qtyNonSaleable', 'qtyBBD', 'qtyDamaged'].includes(field)) {
+         updatedItem.quantity = (Number(updatedItem.qtyNonSaleable) || 0) + (Number(updatedItem.qtyBBD) || 0) + (Number(updatedItem.qtyDamaged) || 0);
+         updatedItem.totalValue = updatedItem.quantity * updatedItem.unitValue;
       }
-      return item;
-    }));
+
+      if (field === 'mfgDate' || field === 'expDate') {
+         if (updatedItem.mfgDate && updatedItem.expDate) {
+           const m = new Date(updatedItem.mfgDate);
+           const eDate = new Date(updatedItem.expDate);
+           if (!isNaN(m.getTime()) && !isNaN(eDate.getTime())) {
+             const diffDays = Math.ceil((eDate.getTime() - m.getTime()) / (1000 * 60 * 60 * 24));
+             updatedItem.productLife = `${diffDays} Days`;
+           } else { updatedItem.productLife = '-'; }
+         } else { updatedItem.productLife = '-'; }
+      }
+      
+      // 1. HARD BLOCK ON MANUFACTURING DATE (Bypassed for Admins)
+      if (field === 'mfgDate' && value && activeTicket?.scheduledDate && !isAdminOrHO) {
+          const mfgDateObj = new Date(value);
+          const auditDateObj = new Date(activeTicket.scheduledDate);
+          mfgDateObj.setHours(0,0,0,0);
+          auditDateObj.setHours(0,0,0,0);
+          if (mfgDateObj > auditDateObj) {
+              alert("Manufacturing Date cannot be in the future.");
+              if (e && e.target) e.target.value = oldItem[field] || ''; 
+              return [...prev];
+          }
+      }
+
+      // 2. STRICT EXPIRY DATE TRAP
+      const currentExp = field === 'expDate' ? value : updatedItem.expDate;
+      
+      if (currentExp && activeTicket?.scheduledDate) {
+          const expDateObj = new Date(currentExp);
+          const auditDateObj = new Date(activeTicket.scheduledDate);
+          
+          expDateObj.setHours(0,0,0,0);
+          auditDateObj.setHours(0,0,0,0);
+          
+          if (expDateObj > auditDateObj) {
+              if (isAdminOrHO) {
+                updatedItem.bbdApprovalStatus = 'approved';
+              } else if (oldItem.bbdApprovalStatus !== 'pending' && oldItem.bbdApprovalStatus !== 'approved') {
+                const confirmMsg = `WARNING: You selected a date (${currentExp}) that is BEYOND the scheduled audit date.\n\nFuture dates cannot be recorded without Admin Approval.\n\nDo you want to request special Admin Approval to allow this exception? Click OK to request, or Cancel to revert.`;
+                
+                if (!window.confirm(confirmMsg)) {
+                   if (e && e.target) e.target.value = oldItem[field] || ''; 
+                   return [...prev]; 
+                }
+                updatedItem.bbdApprovalStatus = 'pending';
+              } else {
+                 updatedItem.bbdApprovalStatus = oldItem.bbdApprovalStatus;
+              }
+          } else {
+              updatedItem.bbdApprovalStatus = 'none';
+          }
+      } else {
+          updatedItem.bbdApprovalStatus = 'none';
+      }
+
+      const newItems = [...prev];
+      newItems[itemIndex] = updatedItem;
+      return newItems;
+    });
   };
 
   const saveInlineEdit = async (itemToSave: AuditLineItem) => {
     if (!activeTicket) return;
+    
+    const latestItemState = items.find(i => i.id === itemToSave.id) || itemToSave;
     const newVerifiedTotal = items.reduce((sum, item) => sum + item.totalValue, 0);
     
     if (newVerifiedTotal > activeTicket.maxAllowedValue) { 
@@ -249,22 +323,55 @@ export function ExecutionModule() {
 
     try {
       if (newVerifiedTotal > activeTicket.approvedValue && (activeTicket.verifiedTotal || 0) <= activeTicket.approvedValue) {
-        const dist = distMap.get(activeTicket.distributorId);
+        const dist = distMap[activeTicket.distributorId];
         logActivity(user, profile, "Buffer Zone Triggered", `Audit for ${dist?.name} exceeded the primary limit of ₹${activeTicket.approvedValue.toLocaleString()} and entered the 5% buffer zone.`);
       }
 
       await supabase.from('auditLineItems').update({ 
-        quantity: itemToSave.quantity, 
-        qtyNonSaleable: itemToSave.qtyNonSaleable,
-        qtyBBD: itemToSave.qtyBBD,
-        qtyDamaged: itemToSave.qtyDamaged,
-        totalValue: itemToSave.totalValue,
-        mfgDate: itemToSave.mfgDate,
-        expDate: itemToSave.expDate,
-        productLife: itemToSave.productLife
-      }).eq('id', itemToSave.id);
+        quantity: latestItemState.quantity, 
+        qtyNonSaleable: latestItemState.qtyNonSaleable,
+        qtyBBD: latestItemState.qtyBBD,
+        qtyDamaged: latestItemState.qtyDamaged,
+        totalValue: latestItemState.totalValue,
+        mfgDate: latestItemState.mfgDate,
+        expDate: latestItemState.expDate,
+        productLife: latestItemState.productLife,
+        bbdApprovalStatus: latestItemState.bbdApprovalStatus || 'none'
+      }).eq('id', latestItemState.id);
+      
       await supabase.from('auditTickets').update({ verifiedTotal: newVerifiedTotal, updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
     } catch (error) { console.error(error); }
+  };
+
+  const approveBBDItem = async (item: AuditLineItem) => {
+    if (!activeTicket || !user || !profile) return;
+    try {
+      await supabase.from('auditLineItems').update({ bbdApprovalStatus: 'approved' }).eq('id', item.id);
+      setItems(prev => prev.map(i => i.id === item.id ? { ...i, bbdApprovalStatus: 'approved' } : i));
+      logActivity(user, profile, "Future Expiry Approved", `Admin approved an exception for a future-dated expiry item: ${item.articleNumber}`);
+    } catch (e) { console.error(e); }
+  };
+
+  const rejectBBDItem = async (item: AuditLineItem) => {
+    if (!activeTicket || !user || !profile) return;
+    try {
+      const newTotalQty = (Number(item.qtyNonSaleable) || 0) + 0 + (Number(item.qtyDamaged) || 0);
+      const newTotalValue = newTotalQty * item.unitValue;
+
+      await supabase.from('auditLineItems').update({ 
+        qtyBBD: 0, 
+        quantity: newTotalQty, 
+        totalValue: newTotalValue, 
+        bbdApprovalStatus: 'rejected' 
+      }).eq('id', item.id);
+      
+      setItems(prev => prev.map(i => i.id === item.id ? { ...i, qtyBBD: 0, quantity: newTotalQty, totalValue: newTotalValue, bbdApprovalStatus: 'rejected' } : i));
+      
+      const newVerifiedTotal = items.reduce((sum, i) => i.id === item.id ? sum + newTotalValue : sum + i.totalValue, 0);
+      await supabase.from('auditTickets').update({ verifiedTotal: newVerifiedTotal }).eq('id', activeTicket.id);
+      
+      logActivity(user, profile, "Future Expiry Rejected", `Admin rejected exception for future expiry date on ${item.articleNumber}. BBD quantity reset to 0.`);
+    } catch (e) { console.error(e); }
   };
 
   const setDrainageDate = async () => {
@@ -272,7 +379,7 @@ export function ExecutionModule() {
     await supabase.from('auditTickets').update({ drainageDate: drainageDateInput, updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
     setActiveTicket({ ...activeTicket, drainageDate: drainageDateInput });
     
-    const dist = distMap.get(activeTicket.distributorId);
+    const dist = distMap[activeTicket.distributorId];
     logActivity(user, profile, "Drainage Scheduled", `Drainage date set to ${drainageDateInput} for ${dist?.name}`);
     
     alert("Drainage date saved successfully!");
@@ -300,9 +407,16 @@ export function ExecutionModule() {
 
   const submitByAuditor = async () => {
     if (!activeTicket) return;
+    
+    const hasPendingItems = items.some(i => i.bbdApprovalStatus === 'pending');
+    if (hasPendingItems) {
+       alert("You have items marked as Expired that have future expiry dates. An Admin must approve these exceptions before you can submit the audit.");
+       return;
+    }
+
     await supabase.from('auditTickets').update({ status: 'auditor_submitted', updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
     
-    const dist = distMap.get(activeTicket.distributorId);
+    const dist = distMap[activeTicket.distributorId];
     logActivity(user, profile, "Audit Count Completed", `Auditor submitted count for ${dist?.name}`);
 
     setActiveTicket(null); alert("Audit successfully forwarded to ASE for review!");
@@ -312,7 +426,7 @@ export function ExecutionModule() {
     if (!activeTicket) return;
     await supabase.from('auditTickets').update({ status: 'drainage_pending', updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
     
-    const dist = distMap.get(activeTicket.distributorId);
+    const dist = distMap[activeTicket.distributorId];
     logActivity(user, profile, "Audit Verified", `ASE verified audit for ${dist?.name} and moved it to Drainage Phase`);
 
     setActiveTicket(null); alert("Audit verified! It is now pending Drainage scheduling.");
@@ -322,7 +436,7 @@ export function ExecutionModule() {
     if (!activeTicket) return;
     await supabase.from('auditTickets').update({ status: 'submitted', updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
     
-    const dist = distMap.get(activeTicket.distributorId);
+    const dist = distMap[activeTicket.distributorId];
     logActivity(user, profile, "Drainage Completed", `Drainage phase completed and audit officially submitted for ${dist?.name}`);
 
     setActiveTicket(null); alert("Drainage completed! Audit officially submitted for sign-offs.");
@@ -341,14 +455,13 @@ export function ExecutionModule() {
     const allSigned = signOffs.auditor && signOffs.ase && signOffs.distributor;
     await supabase.from('auditTickets').update({ signOffs, status: allSigned ? 'signed' : activeTicket.status, updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
     
-    const dist = distMap.get(activeTicket.distributorId);
+    const dist = distMap[activeTicket.distributorId];
     logActivity(user, profile, "Audit Signed Off", `${roleRequired.toUpperCase()} signed off on the audit for ${dist?.name}`);
   };
 
   if (activeTicket) {
-    const dist = distMap.get(activeTicket.distributorId);
+    const dist = distMap[activeTicket.distributorId];
     
-    const isAdminOrHO = ['superadmin', 'admin', 'ho'].includes(profile?.role || '');
     const isAuditor = profile?.role === 'auditor';
     const isASE = profile?.role === 'ase';
     const isSubmitted = ['submitted', 'signed', 'evidence_uploaded', 'closed'].includes(activeTicket.status);
@@ -369,6 +482,8 @@ export function ExecutionModule() {
     const percentUsed = ((activeTicket.verifiedTotal || 0) / activeTicket.approvedValue) * 100;
     const isOverBudget = (activeTicket.verifiedTotal || 0) > activeTicket.approvedValue;
     const isMaxedOut = (activeTicket.verifiedTotal || 0) >= activeTicket.maxAllowedValue;
+    
+    const auditDateString = activeTicket.scheduledDate?.split('T')[0] || '';
     
     return (
       <div className="space-y-4 sm:space-y-6 pb-12 w-full min-w-0">
@@ -518,14 +633,13 @@ export function ExecutionModule() {
               {/* --- RESPONSIVE TABLE WRAPPER --- */}
               <div className="bg-white border border-zinc-200 rounded-2xl sm:rounded-3xl overflow-hidden shadow-sm w-full">
                 <div className="w-full overflow-x-auto custom-scrollbar">
-                  {/* Keep table minimum width so headers and inputs don't squash */}
-                  <table className="w-full text-xs sm:text-sm min-w-[1000px]">
+                  <table className="w-full text-xs sm:text-sm min-w-[1100px]">
                     <thead className="bg-zinc-50 border-b border-zinc-200">
                       <tr>
                         <th className="px-4 py-3 sm:py-4 text-left font-bold text-zinc-500 sticky left-0 bg-zinc-50 z-10 border-r sm:border-r-0 border-zinc-200">Article & Desc</th>
                         <th className="px-3 py-3 sm:py-4 text-center font-bold text-zinc-500 bg-zinc-100 border-x border-zinc-200">Sys Qty</th>
                         <th className="px-3 py-3 sm:py-4 text-center font-bold text-red-500 bg-red-50 border-r border-red-100">Non-Saleable</th>
-                        <th className="px-3 py-3 sm:py-4 text-center font-bold text-amber-500 bg-amber-50 border-r border-amber-100">BBD</th>
+                        <th className="px-3 py-3 sm:py-4 text-center font-bold text-amber-500 bg-amber-50 border-r border-amber-100">BBD (Expired)</th>
                         <th className="px-3 py-3 sm:py-4 text-center font-bold text-purple-500 bg-purple-50 border-r border-purple-100">Damaged</th>
                         <th className="px-3 py-3 sm:py-4 text-center font-black text-zinc-900 bg-zinc-100 border-r border-zinc-200">Total Count</th>
                         
@@ -542,11 +656,10 @@ export function ExecutionModule() {
                     </thead>
                     <tbody className="divide-y divide-zinc-100 relative">
                       {items.map(item => {
-                        const dumpMatch = dumpItemMap.get(item.articleNumber);
+                        const dumpMatch = dumpItemMap[item.articleNumber];
                         const systemQty = dumpMatch ? dumpMatch.expectedQty : 0;
                         return (
                           <tr key={item.id} className="hover:bg-zinc-50/50 transition-colors group">
-                            {/* Sticky first column for mobile scrolling */}
                             <td className="px-4 py-3 sm:py-4 sticky left-0 bg-white group-hover:bg-zinc-50/50 z-10 border-r sm:border-r-0 border-zinc-100">
                               <p className="font-bold text-zinc-900">{item.articleNumber}</p>
                               <p className="text-[9px] sm:text-[10px] text-zinc-500 truncate max-w-[120px] sm:max-w-[150px]">{item.description}</p>
@@ -554,24 +667,74 @@ export function ExecutionModule() {
                             <td className="px-3 py-3 sm:py-4 text-center bg-zinc-50/50 border-x border-zinc-100"><span className="font-mono text-zinc-500">{systemQty}</span></td>
                             
                             <td className="px-3 py-3 sm:py-4 text-center bg-red-50/30 border-r border-red-100">
-                              {canEditItems ? <input type="number" min="0" value={item.qtyNonSaleable} onChange={(e) => handleInlineChange(item.id, 'qtyNonSaleable', e.target.value)} onBlur={() => saveInlineEdit(item)} className="w-12 text-center bg-white border text-xs font-bold rounded px-1 py-2 sm:py-1 focus:ring-2 focus:ring-red-500 outline-none text-red-700 border-red-200" /> : <span className="font-bold text-red-700">{item.qtyNonSaleable}</span>}
+                              {canEditItems ? <input type="number" min="0" value={item.qtyNonSaleable} onChange={(e) => handleInlineChange(item.id, 'qtyNonSaleable', e.target.value, e)} onBlur={() => saveInlineEdit(item)} className="w-12 text-center bg-white border text-xs font-bold rounded px-1 py-2 sm:py-1 focus:ring-2 focus:ring-red-500 outline-none text-red-700 border-red-200" /> : <span className="font-bold text-red-700">{item.qtyNonSaleable}</span>}
                             </td>
-                            <td className="px-3 py-3 sm:py-4 text-center bg-amber-50/30 border-r border-amber-100">
-                              {canEditItems ? <input type="number" min="0" value={item.qtyBBD} onChange={(e) => handleInlineChange(item.id, 'qtyBBD', e.target.value)} onBlur={() => saveInlineEdit(item)} className="w-12 text-center bg-white border text-xs font-bold rounded px-1 py-2 sm:py-1 focus:ring-2 focus:ring-amber-500 outline-none text-amber-700 border-amber-200" /> : <span className="font-bold text-amber-700">{item.qtyBBD}</span>}
+                            
+                            {/* --- EXPIRY BBD COLUMN --- */}
+                            <td className="px-3 py-3 sm:py-4 text-center bg-amber-50/30 border-r border-amber-100 relative align-top">
+                              {canEditItems ? (
+                                 <input 
+                                    type="number" min="0" value={item.qtyBBD} 
+                                    onChange={(e) => handleInlineChange(item.id, 'qtyBBD', e.target.value, e)} 
+                                    onBlur={() => saveInlineEdit(item)} 
+                                    className={cn("w-12 text-center bg-white border text-xs font-bold rounded px-1 py-2 sm:py-1 focus:outline-none transition-colors", item.bbdApprovalStatus === 'pending' ? "border-red-400 ring-2 ring-red-400 text-red-700" : "border-amber-200 focus:ring-2 focus:ring-amber-500 text-amber-700")} 
+                                 />
+                              ) : (
+                                 <span className="font-bold text-amber-700">{item.qtyBBD}</span>
+                              )}
+                              
+                              {/* Expiry Status Indicators */}
+                              {item.bbdApprovalStatus === 'pending' && <div className="mt-1.5 flex flex-col items-center justify-center gap-1 text-[9px] leading-tight text-red-600 font-black uppercase tracking-wider"><AlertCircle size={10}/> Pending Admin</div>}
+                              {item.bbdApprovalStatus === 'rejected' && <div className="mt-1.5 flex items-center justify-center gap-1 text-[9px] text-red-600 font-black uppercase tracking-wider"><X size={10}/> Rejected</div>}
+                              {item.bbdApprovalStatus === 'approved' && <div className="mt-1.5 flex items-center justify-center gap-1 text-[9px] text-emerald-600 font-black uppercase tracking-wider"><CheckCircle2 size={10}/> Approved</div>}
+                              
+                              {/* Admin Action Buttons */}
+                              {isAdminOrHO && item.bbdApprovalStatus === 'pending' && (
+                                 <div className="flex gap-1.5 justify-center mt-2.5">
+                                    <button onClick={() => approveBBDItem(item)} className="text-emerald-600 bg-white hover:bg-emerald-50 p-1.5 rounded border border-emerald-200 shadow-sm transition-colors" title="Approve Exception"><CheckCircle2 size={12}/></button>
+                                    <button onClick={() => rejectBBDItem(item)} className="text-red-600 bg-white hover:bg-red-50 p-1.5 rounded border border-red-200 shadow-sm transition-colors" title="Reject Exception"><X size={12}/></button>
+                                 </div>
+                              )}
                             </td>
+
                             <td className="px-3 py-3 sm:py-4 text-center bg-purple-50/30 border-r border-purple-100">
-                              {canEditItems ? <input type="number" min="0" value={item.qtyDamaged} onChange={(e) => handleInlineChange(item.id, 'qtyDamaged', e.target.value)} onBlur={() => saveInlineEdit(item)} className="w-12 text-center bg-white border text-xs font-bold rounded px-1 py-2 sm:py-1 focus:ring-2 focus:ring-purple-500 outline-none text-purple-700 border-purple-200" /> : <span className="font-bold text-purple-700">{item.qtyDamaged}</span>}
+                              {canEditItems ? <input type="number" min="0" value={item.qtyDamaged} onChange={(e) => handleInlineChange(item.id, 'qtyDamaged', e.target.value, e)} onBlur={() => saveInlineEdit(item)} className="w-12 text-center bg-white border text-xs font-bold rounded px-1 py-2 sm:py-1 focus:ring-2 focus:ring-purple-500 outline-none text-purple-700 border-purple-200" /> : <span className="font-bold text-purple-700">{item.qtyDamaged}</span>}
                             </td>
                             <td className="px-3 py-3 sm:py-4 text-center bg-zinc-50 border-r border-zinc-100">
                               <span className={cn("font-black", item.quantity !== systemQty && item.reasonCode !== 'Surprise Find' ? "text-red-600" : "text-zinc-900")}>{item.quantity}</span>
                             </td>
 
+                            {/* --- CONDITIONAL NATIVE MAXIMUM DATE RESTRICTIONS --- */}
                             <td className="px-3 py-3 sm:py-4 text-center bg-blue-50/30 border-r border-blue-100">
-                              {canEditItems ? <input type="date" value={item.mfgDate || ''} onChange={(e) => handleInlineChange(item.id, 'mfgDate', e.target.value)} onBlur={() => saveInlineEdit(item)} className="w-[100px] sm:w-[110px] text-center bg-white border text-[10px] font-bold rounded px-1 py-2 sm:py-1 focus:ring-2 focus:ring-blue-500 outline-none text-blue-700 border-blue-200" /> : <span className="font-bold text-blue-700 text-[10px]">{item.mfgDate || '-'}</span>}
+                              {canEditItems ? (
+                                <input 
+                                  type="date" 
+                                  max={!isAdminOrHO ? auditDateString : undefined} 
+                                  value={item.mfgDate || ''} 
+                                  onChange={(e) => handleInlineChange(item.id, 'mfgDate', e.target.value, e)} 
+                                  onBlur={() => saveInlineEdit(item)} 
+                                  className="w-[100px] sm:w-[110px] text-center bg-white border text-[10px] font-bold rounded px-1 py-2 sm:py-1 focus:ring-2 focus:ring-blue-500 outline-none text-blue-700 border-blue-200 cursor-pointer" 
+                                />
+                              ) : (
+                                <span className="font-bold text-blue-700 text-[10px]">{item.mfgDate || '-'}</span>
+                              )}
                             </td>
+                            
                             <td className="px-3 py-3 sm:py-4 text-center bg-blue-50/30 border-r border-blue-100">
-                              {canEditItems ? <input type="date" value={item.expDate || ''} onChange={(e) => handleInlineChange(item.id, 'expDate', e.target.value)} onBlur={() => saveInlineEdit(item)} className="w-[100px] sm:w-[110px] text-center bg-white border text-[10px] font-bold rounded px-1 py-2 sm:py-1 focus:ring-2 focus:ring-blue-500 outline-none text-blue-700 border-blue-200" /> : <span className="font-bold text-blue-700 text-[10px]">{item.expDate || '-'}</span>}
+                              {canEditItems ? (
+                                <input 
+                                  type="date" 
+                                  max={!isAdminOrHO ? auditDateString : undefined} 
+                                  value={item.expDate || ''} 
+                                  onChange={(e) => handleInlineChange(item.id, 'expDate', e.target.value, e)} 
+                                  onBlur={() => saveInlineEdit(item)} 
+                                  className="w-[100px] sm:w-[110px] text-center bg-white border text-[10px] font-bold rounded px-1 py-2 sm:py-1 focus:ring-2 focus:ring-blue-500 outline-none text-blue-700 border-blue-200 cursor-pointer" 
+                                />
+                              ) : (
+                                <span className="font-bold text-blue-700 text-[10px]">{item.expDate || '-'}</span>
+                              )}
                             </td>
+                            
                             <td className="px-3 py-3 sm:py-4 text-center bg-blue-50/30 border-r border-blue-100">
                               <span className="font-bold text-blue-900 text-[10px] sm:text-xs whitespace-nowrap">{item.productLife || '-'}</span>
                             </td>
@@ -746,7 +909,7 @@ export function ExecutionModule() {
           isOpen={isAddModalOpen} 
           onClose={() => setIsAddModalOpen(false)} 
           activeTicket={activeTicket} 
-          distributor={dist} 
+          distributor={distMap[activeTicket.distributorId]} 
           availableDumpItems={availableDumpItems} 
           existingItemCodes={items.map(i => i.articleNumber)} 
           user={user}
@@ -759,7 +922,6 @@ export function ExecutionModule() {
     );
   }
 
-  // Calculate local timezone date string safely (YYYY-MM-DD)
   const todayDate = new Date();
   const offset = todayDate.getTimezoneOffset();
   const localToday = new Date(todayDate.getTime() - (offset*60*1000));
@@ -806,7 +968,7 @@ export function ExecutionModule() {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6 w-full px-4 sm:px-0">
           {displayTickets.map(ticket => {
-            const dist = distMap.get(ticket.distributorId);
+            const dist = distMap[ticket.distributorId];
             return (
               <motion.div layout key={ticket.id} onClick={() => setActiveTicket(ticket)} className="bg-white p-5 sm:p-6 rounded-[1.5rem] sm:rounded-[2rem] border border-zinc-200 shadow-sm hover:shadow-md hover:border-black transition-all cursor-pointer group flex flex-col w-full">
                 <div className="flex justify-between items-start mb-3 sm:mb-4">
