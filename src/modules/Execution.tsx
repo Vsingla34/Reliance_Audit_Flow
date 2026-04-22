@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { supabase, logActivity } from '../supabase';
 import { Distributor, SignOff, AuditTicket as BaseTicket, AuditLineItem as BaseItem } from '../types';
-import { ClipboardCheck, Plus, Store, MapPin, CheckCircle2, ArrowLeft, AlertCircle, MessageSquare, PackageSearch, Lock, Trash2, Send, RotateCcw, CalendarClock, FileText, Upload, Loader2, User as UserIcon, X } from 'lucide-react';
+import { ClipboardCheck, Plus, Store, MapPin, CheckCircle2, ArrowLeft, AlertCircle, MessageSquare, PackageSearch, Lock, Trash2, Send, RotateCcw, CalendarClock, FileText, Upload, Loader2, User as UserIcon, X, Droplets } from 'lucide-react';
 import { cn, useAuth } from '../App';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -14,6 +14,7 @@ const BUCKET_NAME = 'audit-media';
 export interface AuditTicket extends BaseTicket { 
   drainageDate?: string; 
   whatsappMediaApproved?: boolean; 
+  drainageMediaApproved?: boolean; 
   signoffDocumentUrl?: string;
   signoffDocumentApproved?: boolean;
 }
@@ -46,6 +47,7 @@ export function ExecutionModule() {
   const [activeTab, setActiveTab] = useState<'active' | 'drainage' | 'signoff' | 'completed'>('active');
 
   const isAdminOrHO = ['superadmin', 'admin', 'ho'].includes(profile?.role || '');
+  const isAdminOrSuperadmin = ['superadmin', 'admin'].includes(profile?.role || '');
 
   const distMap = useMemo(() => {
     const map: Record<string, any> = {};
@@ -173,7 +175,7 @@ export function ExecutionModule() {
     try {
       await supabase.from('auditLineItems').delete().eq('ticketId', activeTicket.id);
       await supabase.from('auditTickets').update({ 
-        status: 'tentative', scheduledDate: null as any, drainageDate: null, whatsappMediaApproved: false, signoffDocumentUrl: null, signoffDocumentApproved: false, auditorId: null as any, auditorIds: [], presenceLogs: [], media: [], signOffs: {}, comments: [], dateProposals: [], verifiedTotal: 0, updatedAt: new Date().toISOString()
+        status: 'tentative', scheduledDate: null as any, drainageDate: null, whatsappMediaApproved: false, drainageMediaApproved: false, signoffDocumentUrl: null, signoffDocumentApproved: false, auditorId: null as any, auditorIds: [], presenceLogs: [], media: [], signOffs: {}, comments: [], dateProposals: [], verifiedTotal: 0, updatedAt: new Date().toISOString()
       }).eq('id', activeTicket.id);
       
       const dist = distMap[activeTicket.distributorId];
@@ -192,8 +194,21 @@ export function ExecutionModule() {
       setActiveTicket({ ...activeTicket, whatsappMediaApproved: newStatus });
       
       const dist = distMap[activeTicket.distributorId];
-      logActivity(user, profile, "WhatsApp Media Confirmed", `Admin marked WhatsApp evidence as ${newStatus ? 'Approved' : 'Pending'} for ${dist?.name}`);
+      logActivity(user, profile, "WhatsApp Media Confirmed", `Admin marked WhatsApp audit evidence as ${newStatus ? 'Approved' : 'Pending'} for ${dist?.name}`);
     } catch (error) { console.error("Failed to update WhatsApp approval:", error); }
+  };
+
+  // NEW: Drainage Media Approval Workflow
+  const toggleDrainageMediaApproval = async () => {
+    if (!activeTicket || !user || !profile) return;
+    const newStatus = !activeTicket.drainageMediaApproved;
+    try {
+      await supabase.from('auditTickets').update({ drainageMediaApproved: newStatus, updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
+      setActiveTicket({ ...activeTicket, drainageMediaApproved: newStatus });
+      
+      const dist = distMap[activeTicket.distributorId];
+      logActivity(user, profile, "Drainage Media Confirmed", `Admin marked Drainage evidence as ${newStatus ? 'Approved' : 'Pending'} for ${dist?.name}`);
+    } catch (error) { console.error("Failed to update Drainage Media approval:", error); }
   };
 
   const handleSignoffUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -231,7 +246,6 @@ export function ExecutionModule() {
     if (!activeTicket) return;
     try {
       await supabase.from('auditLineItems').delete().eq('id', item.id);
-      await supabase.from('auditTickets').update({ verifiedTotal: (activeTicket.verifiedTotal || 0) - item.totalValue, updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
     } catch (error) { console.error(error); }
   };
 
@@ -259,8 +273,7 @@ export function ExecutionModule() {
          } else { updatedItem.productLife = '-'; }
       }
       
-      // 1. HARD BLOCK ON MANUFACTURING DATE (Bypassed for Admins)
-      if (field === 'mfgDate' && value && activeTicket?.scheduledDate && !isAdminOrHO) {
+      if (field === 'mfgDate' && value && activeTicket?.scheduledDate && !isAdminOrSuperadmin) {
           const mfgDateObj = new Date(value);
           const auditDateObj = new Date(activeTicket.scheduledDate);
           mfgDateObj.setHours(0,0,0,0);
@@ -272,7 +285,6 @@ export function ExecutionModule() {
           }
       }
 
-      // 2. STRICT EXPIRY DATE TRAP
       const currentExp = field === 'expDate' ? value : updatedItem.expDate;
       
       if (currentExp && activeTicket?.scheduledDate) {
@@ -313,16 +325,18 @@ export function ExecutionModule() {
     if (!activeTicket) return;
     
     const latestItemState = items.find(i => i.id === itemToSave.id) || itemToSave;
-    const newVerifiedTotal = items.reduce((sum, item) => sum + item.totalValue, 0);
     
-    if (newVerifiedTotal > activeTicket.maxAllowedValue) { 
+    const originalItem = items.find(i => i.id === itemToSave.id);
+    const valueDifference = latestItemState.totalValue - (originalItem ? originalItem.totalValue : 0);
+    
+    if ((activeTicket.verifiedTotal || 0) + valueDifference > activeTicket.maxAllowedValue) { 
       alert(`Changes reverted. This update exceeds the absolute 5% maximum limit (₹${activeTicket.maxAllowedValue.toLocaleString()}).`); 
       fetchItems(activeTicket.id); 
       return; 
     }
 
     try {
-      if (newVerifiedTotal > activeTicket.approvedValue && (activeTicket.verifiedTotal || 0) <= activeTicket.approvedValue) {
+      if ((activeTicket.verifiedTotal || 0) + valueDifference > activeTicket.approvedValue && (activeTicket.verifiedTotal || 0) <= activeTicket.approvedValue) {
         const dist = distMap[activeTicket.distributorId];
         logActivity(user, profile, "Buffer Zone Triggered", `Audit for ${dist?.name} exceeded the primary limit of ₹${activeTicket.approvedValue.toLocaleString()} and entered the 5% buffer zone.`);
       }
@@ -339,7 +353,6 @@ export function ExecutionModule() {
         bbdApprovalStatus: latestItemState.bbdApprovalStatus || 'none'
       }).eq('id', latestItemState.id);
       
-      await supabase.from('auditTickets').update({ verifiedTotal: newVerifiedTotal, updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
     } catch (error) { console.error(error); }
   };
 
@@ -366,10 +379,6 @@ export function ExecutionModule() {
       }).eq('id', item.id);
       
       setItems(prev => prev.map(i => i.id === item.id ? { ...i, qtyBBD: 0, quantity: newTotalQty, totalValue: newTotalValue, bbdApprovalStatus: 'rejected' } : i));
-      
-      const newVerifiedTotal = items.reduce((sum, i) => i.id === item.id ? sum + newTotalValue : sum + i.totalValue, 0);
-      await supabase.from('auditTickets').update({ verifiedTotal: newVerifiedTotal }).eq('id', activeTicket.id);
-      
       logActivity(user, profile, "Future Expiry Rejected", `Admin rejected exception for future expiry date on ${item.articleNumber}. BBD quantity reset to 0.`);
     } catch (e) { console.error(e); }
   };
@@ -422,6 +431,43 @@ export function ExecutionModule() {
     setActiveTicket(null); alert("Audit successfully forwarded to ASE for review!");
   };
 
+  const rejectByASE = async () => {
+    if (!activeTicket || !user || !profile) return;
+    
+    const reason = window.prompt("Please provide a reason for rejecting this audit count (this will be logged in the Discussion):");
+    if (reason === null) return; 
+
+    try {
+      const rejectionMessage = `🚨 Audit Rejected by ASE: ${reason || 'No reason provided.'}`;
+      
+      const newComment = {
+        id: Math.random().toString(36).substring(7),
+        userId: user.id,
+        userName: profile.name,
+        role: profile.role,
+        text: rejectionMessage,
+        timestamp: new Date().toISOString()
+      };
+
+      const updatedComments = [...(activeTicket.comments || []), newComment];
+
+      await supabase.from('auditTickets').update({ 
+        status: 'in_progress', 
+        comments: updatedComments,
+        updatedAt: new Date().toISOString() 
+      }).eq('id', activeTicket.id);
+      
+      const dist = distMap[activeTicket.distributorId];
+      logActivity(user, profile, "Audit Rejected", `ASE rejected the audit count for ${dist?.name} and returned it to in_progress.`);
+
+      setActiveTicket(null); 
+      alert("Audit rejected and returned to the Auditor for corrections!");
+    } catch (error) {
+      console.error("Error rejecting audit:", error);
+      alert("Failed to reject audit.");
+    }
+  };
+
   const submitByASE = async () => {
     if (!activeTicket) return;
     await supabase.from('auditTickets').update({ status: 'drainage_pending', updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
@@ -467,7 +513,9 @@ export function ExecutionModule() {
     const isSubmitted = ['submitted', 'signed', 'evidence_uploaded', 'closed'].includes(activeTicket.status);
     
     const today = new Date();
-    const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    const offset = today.getTimezoneOffset();
+    const localToday = new Date(today.getTime() - (offset*60*1000));
+    const todayStr = localToday.toISOString().split('T')[0];
     
     const isActionableDate = activeTicket.scheduledDate ? (activeTicket.scheduledDate <= todayStr || activeTicket.status === 'in_progress') : false;
 
@@ -476,8 +524,8 @@ export function ExecutionModule() {
 
     const canUploadFiles = (isAuditor || isAdminOrHO) && (!isSubmitted && !['auditor_submitted', 'drainage_pending'].includes(activeTicket.status));
     
-    const canEditItems = canUploadFiles && isActionableDate && hasApprovedCheckIn && activeTicket.status === 'in_progress'; 
-    const canEditDrainage = (isAuditor || isAdminOrHO) && activeTicket.status === 'drainage_pending';
+    const canEditItems = (isAuditor || isAdminOrSuperadmin) && canUploadFiles && isActionableDate && hasApprovedCheckIn && activeTicket.status === 'in_progress'; 
+    const canEditDrainage = (isAuditor || isAdminOrSuperadmin) && activeTicket.status === 'drainage_pending';
 
     const percentUsed = ((activeTicket.verifiedTotal || 0) / activeTicket.approvedValue) * 100;
     const isOverBudget = (activeTicket.verifiedTotal || 0) > activeTicket.approvedValue;
@@ -638,9 +686,11 @@ export function ExecutionModule() {
                       <tr>
                         <th className="px-4 py-3 sm:py-4 text-left font-bold text-zinc-500 sticky left-0 bg-zinc-50 z-10 border-r sm:border-r-0 border-zinc-200">Article & Desc</th>
                         <th className="px-3 py-3 sm:py-4 text-center font-bold text-zinc-500 bg-zinc-100 border-x border-zinc-200">Sys Qty</th>
+                        
+                        <th className="px-3 py-3 sm:py-4 text-center font-bold text-purple-500 bg-purple-50 border-r border-purple-100">Primary Damage</th>
                         <th className="px-3 py-3 sm:py-4 text-center font-bold text-red-500 bg-red-50 border-r border-red-100">Non-Saleable</th>
                         <th className="px-3 py-3 sm:py-4 text-center font-bold text-amber-500 bg-amber-50 border-r border-amber-100">BBD (Expired)</th>
-                        <th className="px-3 py-3 sm:py-4 text-center font-bold text-purple-500 bg-purple-50 border-r border-purple-100">Damaged</th>
+                        
                         <th className="px-3 py-3 sm:py-4 text-center font-black text-zinc-900 bg-zinc-100 border-r border-zinc-200">Total Count</th>
                         
                         <th className="px-3 py-3 sm:py-4 text-center font-bold text-blue-600 bg-blue-50 border-r border-blue-100">Mfg Date</th>
@@ -666,11 +716,14 @@ export function ExecutionModule() {
                             </td>
                             <td className="px-3 py-3 sm:py-4 text-center bg-zinc-50/50 border-x border-zinc-100"><span className="font-mono text-zinc-500">{systemQty}</span></td>
                             
+                            <td className="px-3 py-3 sm:py-4 text-center bg-purple-50/30 border-r border-purple-100">
+                              {canEditItems ? <input type="number" min="0" value={item.qtyDamaged} onChange={(e) => handleInlineChange(item.id, 'qtyDamaged', e.target.value, e)} onBlur={() => saveInlineEdit(item)} className="w-12 text-center bg-white border text-xs font-bold rounded px-1 py-2 sm:py-1 focus:ring-2 focus:ring-purple-500 outline-none text-purple-700 border-purple-200" /> : <span className="font-bold text-purple-700">{item.qtyDamaged}</span>}
+                            </td>
+
                             <td className="px-3 py-3 sm:py-4 text-center bg-red-50/30 border-r border-red-100">
                               {canEditItems ? <input type="number" min="0" value={item.qtyNonSaleable} onChange={(e) => handleInlineChange(item.id, 'qtyNonSaleable', e.target.value, e)} onBlur={() => saveInlineEdit(item)} className="w-12 text-center bg-white border text-xs font-bold rounded px-1 py-2 sm:py-1 focus:ring-2 focus:ring-red-500 outline-none text-red-700 border-red-200" /> : <span className="font-bold text-red-700">{item.qtyNonSaleable}</span>}
                             </td>
                             
-                            {/* --- EXPIRY BBD COLUMN --- */}
                             <td className="px-3 py-3 sm:py-4 text-center bg-amber-50/30 border-r border-amber-100 relative align-top">
                               {canEditItems ? (
                                  <input 
@@ -683,12 +736,10 @@ export function ExecutionModule() {
                                  <span className="font-bold text-amber-700">{item.qtyBBD}</span>
                               )}
                               
-                              {/* Expiry Status Indicators */}
                               {item.bbdApprovalStatus === 'pending' && <div className="mt-1.5 flex flex-col items-center justify-center gap-1 text-[9px] leading-tight text-red-600 font-black uppercase tracking-wider"><AlertCircle size={10}/> Pending Admin</div>}
                               {item.bbdApprovalStatus === 'rejected' && <div className="mt-1.5 flex items-center justify-center gap-1 text-[9px] text-red-600 font-black uppercase tracking-wider"><X size={10}/> Rejected</div>}
                               {item.bbdApprovalStatus === 'approved' && <div className="mt-1.5 flex items-center justify-center gap-1 text-[9px] text-emerald-600 font-black uppercase tracking-wider"><CheckCircle2 size={10}/> Approved</div>}
                               
-                              {/* Admin Action Buttons */}
                               {isAdminOrHO && item.bbdApprovalStatus === 'pending' && (
                                  <div className="flex gap-1.5 justify-center mt-2.5">
                                     <button onClick={() => approveBBDItem(item)} className="text-emerald-600 bg-white hover:bg-emerald-50 p-1.5 rounded border border-emerald-200 shadow-sm transition-colors" title="Approve Exception"><CheckCircle2 size={12}/></button>
@@ -697,19 +748,15 @@ export function ExecutionModule() {
                               )}
                             </td>
 
-                            <td className="px-3 py-3 sm:py-4 text-center bg-purple-50/30 border-r border-purple-100">
-                              {canEditItems ? <input type="number" min="0" value={item.qtyDamaged} onChange={(e) => handleInlineChange(item.id, 'qtyDamaged', e.target.value, e)} onBlur={() => saveInlineEdit(item)} className="w-12 text-center bg-white border text-xs font-bold rounded px-1 py-2 sm:py-1 focus:ring-2 focus:ring-purple-500 outline-none text-purple-700 border-purple-200" /> : <span className="font-bold text-purple-700">{item.qtyDamaged}</span>}
-                            </td>
                             <td className="px-3 py-3 sm:py-4 text-center bg-zinc-50 border-r border-zinc-100">
                               <span className={cn("font-black", item.quantity !== systemQty && item.reasonCode !== 'Surprise Find' ? "text-red-600" : "text-zinc-900")}>{item.quantity}</span>
                             </td>
 
-                            {/* --- CONDITIONAL NATIVE MAXIMUM DATE RESTRICTIONS --- */}
                             <td className="px-3 py-3 sm:py-4 text-center bg-blue-50/30 border-r border-blue-100">
                               {canEditItems ? (
                                 <input 
                                   type="date" 
-                                  max={!isAdminOrHO ? auditDateString : undefined} 
+                                  max={!isAdminOrSuperadmin ? auditDateString : undefined} 
                                   value={item.mfgDate || ''} 
                                   onChange={(e) => handleInlineChange(item.id, 'mfgDate', e.target.value, e)} 
                                   onBlur={() => saveInlineEdit(item)} 
@@ -724,7 +771,7 @@ export function ExecutionModule() {
                               {canEditItems ? (
                                 <input 
                                   type="date" 
-                                  max={!isAdminOrHO ? auditDateString : undefined} 
+                                  max={!isAdminOrSuperadmin ? auditDateString : undefined} 
                                   value={item.expDate || ''} 
                                   onChange={(e) => handleInlineChange(item.id, 'expDate', e.target.value, e)} 
                                   onBlur={() => saveInlineEdit(item)} 
@@ -808,6 +855,32 @@ export function ExecutionModule() {
                   )}
                 </div>
 
+                {/* --- NEW DRAINAGE EVIDENCE CARD --- */}
+                <div className="p-4 sm:p-5 bg-zinc-50 border border-zinc-200 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <div className={cn("w-10 h-10 sm:w-12 sm:h-12 rounded-xl flex items-center justify-center shrink-0 shadow-inner", activeTicket.drainageMediaApproved ? "bg-emerald-100 text-emerald-600" : "bg-zinc-200 text-zinc-500")}>
+                      {activeTicket.drainageMediaApproved ? <CheckCircle2 size={20} /> : <Trash2 size={20} />}
+                    </div>
+                    <div>
+                      <h5 className="font-bold text-zinc-900 text-xs sm:text-sm">Drainage Evidence</h5>
+                      <p className="text-[10px] sm:text-xs text-zinc-500">Photos/videos of destruction</p>
+                    </div>
+                  </div>
+                  
+                  {isAdminOrHO ? (
+                    <button
+                      onClick={toggleDrainageMediaApproval}
+                      className={cn("w-full sm:w-auto px-4 py-2 text-xs font-bold rounded-xl transition-all active:scale-95", activeTicket.drainageMediaApproved ? "bg-emerald-600 text-white shadow-lg shadow-emerald-600/20" : "bg-black text-white hover:bg-zinc-800 shadow-md")}
+                    >
+                      {activeTicket.drainageMediaApproved ? 'Approved' : 'Mark Received'}
+                    </button>
+                  ) : (
+                    <span className={cn("w-full sm:w-auto text-center px-3 py-2 sm:py-1.5 text-[10px] sm:text-xs font-bold rounded-xl", activeTicket.drainageMediaApproved ? "bg-emerald-50 border border-emerald-200 text-emerald-700" : "bg-zinc-100 text-zinc-500")}>
+                      {activeTicket.drainageMediaApproved ? 'Approved by Admin' : 'Pending Admin'}
+                    </span>
+                  )}
+                </div>
+
                 <div className="p-4 sm:p-5 bg-zinc-50 border border-zinc-200 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div className="flex items-center gap-3">
                     <div className={cn("w-10 h-10 sm:w-12 sm:h-12 rounded-xl flex items-center justify-center shrink-0 shadow-inner", activeTicket.signoffDocumentApproved ? "bg-emerald-100 text-emerald-600" : activeTicket.signoffDocumentUrl ? "bg-amber-100 text-amber-600" : "bg-zinc-200 text-zinc-500")}>
@@ -877,19 +950,24 @@ export function ExecutionModule() {
             </div>
 
             {/* --- ACTION BUTTONS --- */}
-            {(isAuditor || isAdminOrHO) && activeTicket.status === 'in_progress' && items.length > 0 && (
+            {(isAuditor || isAdminOrSuperadmin) && activeTicket.status === 'in_progress' && items.length > 0 && (
               <div className="pt-6 sm:pt-8 flex justify-end border-t border-zinc-100 w-full">
                 <button onClick={submitByAuditor} className="w-full sm:w-auto flex justify-center items-center gap-2 px-6 sm:px-8 py-3.5 sm:py-4 bg-black text-white rounded-xl sm:rounded-2xl font-bold hover:bg-zinc-800 transition-all shadow-xl shadow-black/10 active:scale-95 text-sm sm:text-base"><Send size={18} /> Submit Audit to ASE</button>
               </div>
             )}
 
             {(isASE || isAdminOrHO) && activeTicket.status === 'auditor_submitted' && (
-              <div className="pt-6 sm:pt-8 flex justify-end border-t border-zinc-100 w-full">
-                <button onClick={submitByASE} className="w-full sm:w-auto flex justify-center items-center gap-2 px-6 sm:px-8 py-3.5 sm:py-4 bg-blue-600 text-white rounded-xl sm:rounded-2xl font-bold hover:bg-blue-700 transition-all shadow-xl shadow-blue-600/20 active:scale-95 text-sm sm:text-base"><CheckCircle2 size={18} /> Verify & Move to Drainage</button>
+              <div className="pt-6 sm:pt-8 flex flex-col-reverse sm:flex-row justify-end gap-3 border-t border-zinc-100 w-full">
+                <button onClick={rejectByASE} className="w-full sm:w-auto flex justify-center items-center gap-2 px-6 sm:px-8 py-3.5 sm:py-4 bg-white border border-red-200 text-red-600 rounded-xl sm:rounded-2xl font-bold hover:bg-red-50 transition-all shadow-sm active:scale-95 text-sm sm:text-base">
+                  <RotateCcw size={18} /> Reject & Return to Auditor
+                </button>
+                <button onClick={submitByASE} className="w-full sm:w-auto flex justify-center items-center gap-2 px-6 sm:px-8 py-3.5 sm:py-4 bg-blue-600 text-white rounded-xl sm:rounded-2xl font-bold hover:bg-blue-700 transition-all shadow-xl shadow-blue-600/20 active:scale-95 text-sm sm:text-base">
+                  <CheckCircle2 size={18} /> Verify & Move to Drainage
+                </button>
               </div>
             )}
 
-            {(isAuditor || isAdminOrHO) && activeTicket.status === 'drainage_pending' && (
+            {(isAuditor || isAdminOrSuperadmin) && activeTicket.status === 'drainage_pending' && (
               <div className="pt-6 sm:pt-8 flex justify-end border-t border-zinc-100 w-full">
                 <button 
                   onClick={submitDrainage} 

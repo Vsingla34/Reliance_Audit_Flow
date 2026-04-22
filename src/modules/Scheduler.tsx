@@ -17,21 +17,20 @@ export function SchedulerModule() {
   
   // --- UNIFIED NEGOTIATION STATE ---
   const [isNegotiationModalOpen, setIsNegotiationModalOpen] = useState(false);
+  const [negFilterAseId, setNegFilterAseId] = useState('');
   const [negDistId, setNegDistId] = useState('');
-  const [replyDistId, setReplyDistId] = useState(''); // State for counter-proposing a different distributor
+  const [replyDistId, setReplyDistId] = useState('');
   const [proposalData, setProposalData] = useState({ date: '', remarks: '' });
   
-  // --- HEADER SEARCHABLE DROPDOWN STATE ---
   const [headerSearchTerm, setHeaderSearchTerm] = useState('');
   const [isHeaderSearchOpen, setIsHeaderSearchOpen] = useState(false);
 
   const [editingActiveTicket, setEditingActiveTicket] = useState<AuditTicket | null>(null);
   const [editTicketData, setEditTicketData] = useState({ scheduledDate: '', auditorIds: [] as string[], auditDays: 1 });
 
-  const [pendingTab, setPendingTab] = useState<'approval' | 'waiting'>('approval');
+  const [pendingTab, setPendingTab] = useState<'action' | 'waiting'>('action');
   const [pendingFilterAse, setPendingFilterAse] = useState<string>('all');
 
-  // --- FORCE SCHEDULE STATE ---
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [createAseId, setCreateAseId] = useState('');
   const [createData, setCreateData] = useState({ distributorId: '', proposedDate: '', auditDays: 1 });
@@ -70,9 +69,10 @@ export function SchedulerModule() {
     return auditors.filter(a => a.name.toLowerCase().includes(auditorSearch.toLowerCase()));
   }, [auditors, auditorSearch]);
 
+  // UPDATE: Now grabs Tentative OR Scheduled tickets for negotiation
   const currentNegTicket = useMemo(() => {
     if (!negDistId) return null;
-    return tickets.find(t => t.distributorId === negDistId && t.status === 'tentative') || null;
+    return tickets.find(t => t.distributorId === negDistId && ['tentative', 'scheduled'].includes(t.status)) || null;
   }, [negDistId, tickets]);
 
   const headerFilteredDistributors = useMemo(() => {
@@ -83,28 +83,21 @@ export function SchedulerModule() {
     );
   }, [distributors, headerSearchTerm]);
 
-  useEffect(() => {
-    // Keep the reply dropdown in sync with the actively viewed distributor
-    setReplyDistId(negDistId);
-  }, [negDistId]);
+  useEffect(() => { setReplyDistId(negDistId); }, [negDistId]);
 
   useEffect(() => {
     const fetchData = async () => {
       if (!profile) return;
       try {
         let dQuery = supabase.from('distributors').select('*');
-        
         if (profile.role === 'ase') dQuery = dQuery.contains('aseIds', [profile.uid]);
-        if (profile.role === 'asm') dQuery = dQuery.contains('asmIds', [profile.uid]);
-        if (profile.role === 'sm') dQuery = dQuery.contains('smIds', [profile.uid]);
-        if (profile.role === 'dm') dQuery = dQuery.contains('dmIds', [profile.uid]);
+        else if (profile.role === 'asm') dQuery = dQuery.contains('asmIds', [profile.uid]);
+        else if (profile.role === 'sm') dQuery = dQuery.contains('smIds', [profile.uid]);
+        else if (profile.role === 'dm') dQuery = dQuery.contains('dmIds', [profile.uid]);
         
-        const [dRes, uRes] = await Promise.all([
-          dQuery,
-          supabase.from('users').select('*') 
-        ]);
-
+        const [dRes, uRes] = await Promise.all([dQuery, supabase.from('users').select('*')]);
         if (dRes.error) throw dRes.error;
+        
         const fetchedDistributors = (dRes.data || []) as any[];
         setDistributors(fetchedDistributors);
         
@@ -125,11 +118,8 @@ export function SchedulerModule() {
 
         const tRes = await tQuery;
         if (tRes.error) throw tRes.error;
-        
         if (tRes.data) {
-          const validTickets = (tRes.data as AuditTicket[]).filter(t => 
-            fetchedDistributors.some(d => d.id === t.distributorId)
-          );
+          const validTickets = (tRes.data as AuditTicket[]).filter(t => fetchedDistributors.some(d => d.id === t.distributorId));
           setTickets(validTickets);
         }
       } catch (error) { console.error("Error fetching scheduler data:", error); }
@@ -193,7 +183,6 @@ export function SchedulerModule() {
       }
 
       logActivity(user, profile, "Audit Scheduled", `${profile?.role.toUpperCase()} scheduled audit for ${dist?.name} on ${createData.proposedDate}`);
-
       setIsCreateModalOpen(false);
       setCreateData({ distributorId: '', proposedDate: '', auditDays: 1 });
       setCreateAseId('');
@@ -221,7 +210,36 @@ export function SchedulerModule() {
     } catch (error) { console.error("Error updating ticket:", error); }
   };
 
-  // --- UNIFIED PROPOSAL SUBMIT WITH COUNTER-DISTRIBUTOR LOGIC ---
+  const handleAdminRequestDate = async () => {
+    if (!user || !profile || !negDistId) return;
+    
+    try {
+      const newProposal: DateProposal = {
+        id: Math.random().toString(36).substring(7),
+        date: '',
+        proposedByUserId: user.id,
+        proposedByName: profile.name,
+        role: profile.role,
+        email: profile.email,
+        remarks: "Please propose a date for the upcoming audit.",
+        timestamp: new Date().toISOString()
+      };
+
+      if (currentNegTicket) {
+        const updatedProposals = [...(currentNegTicket.dateProposals || []), newProposal];
+        await supabase.from('auditTickets').update({ dateProposals: updatedProposals, updatedAt: new Date().toISOString() }).eq('id', currentNegTicket.id);
+      } else {
+        const dist = distMap[negDistId];
+        const newTicket: Partial<AuditTicket> = {
+          id: Math.random().toString(36).substring(7), distributorId: negDistId, proposedDate: null, auditorIds: [], auditDays: 1, approvedValue: dist.approvedValue, maxAllowedValue: dist.approvedValue * 1.05, status: 'tentative', scheduledDate: null, verifiedTotal: 0, presenceLogs: [], signOffs: {}, media: [], dateProposals: [newProposal], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
+        };
+        await supabase.from('auditTickets').insert([newTicket]);
+        logActivity(user, profile, "Date Requested", `Admin requested a date proposal from ASE for ${dist?.name}`);
+      }
+      setProposalData({ date: '', remarks: '' });
+    } catch (error) { console.error("Error requesting date:", error); }
+  };
+
   const submitProposal = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user || !profile) return;
@@ -229,8 +247,11 @@ export function SchedulerModule() {
     const finalTargetDistId = replyDistId || negDistId;
     if (!finalTargetDistId) return alert("Please select a distributor first.");
 
-    if (!proposalData.date && !proposalData.remarks.trim()) {
-      return alert("Please provide either a date or a message to send.");
+    if (!isAdminOrHO && !proposalData.date) {
+      return alert("You must select a proposed date before submitting.");
+    }
+    if (isAdminOrHO && !proposalData.date && !proposalData.remarks.trim()) {
+      return alert("Please provide a date or a message to send.");
     }
 
     try {
@@ -245,86 +266,53 @@ export function SchedulerModule() {
         timestamp: new Date().toISOString()
       };
 
-      // If the ASE changed the distributor dropdown to counter-propose a different distributor
       if (finalTargetDistId !== negDistId && currentNegTicket) {
         const targetDistName = distMap[finalTargetDistId]?.name;
-        
-        // 1. Leave a closure remark on the old ticket
         const redirectProposal: DateProposal = {
-          id: Math.random().toString(36).substring(7),
-          date: proposalData.date || '',
-          proposedByUserId: user.id,
-          proposedByName: profile.name,
-          role: profile.role,
-          email: profile.email,
-          remarks: `Counter-proposed for a different distributor: ${targetDistName}. ${proposalData.remarks ? `Remarks: ${proposalData.remarks}` : ''}`,
-          timestamp: new Date().toISOString()
+          id: Math.random().toString(36).substring(7), date: proposalData.date || '', proposedByUserId: user.id, proposedByName: profile.name, role: profile.role, email: profile.email, remarks: `Counter-proposed for a different distributor: ${targetDistName}. ${proposalData.remarks ? `Remarks: ${proposalData.remarks}` : ''}`, timestamp: new Date().toISOString()
         };
         const updatedOldProposals = [...(currentNegTicket.dateProposals || []), redirectProposal];
         
-        await supabase.from('auditTickets').update({
-          dateProposals: updatedOldProposals,
-          updatedAt: new Date().toISOString()
-        }).eq('id', currentNegTicket.id);
+        // If ASE is modifying a scheduled ticket, force it back to tentative
+        const oldTicketStatus = currentNegTicket.status === 'scheduled' && !isAdminOrHO ? 'tentative' : currentNegTicket.status;
+        await supabase.from('auditTickets').update({ dateProposals: updatedOldProposals, status: oldTicketStatus, updatedAt: new Date().toISOString() }).eq('id', currentNegTicket.id);
       }
 
-      // 2. Now add the actual proposal to the target ticket
-      const targetTicket = tickets.find(t => t.distributorId === finalTargetDistId && t.status === 'tentative');
+      // Find tentative OR scheduled
+      const targetTicket = tickets.find(t => t.distributorId === finalTargetDistId && ['tentative', 'scheduled'].includes(t.status));
 
       if (targetTicket) {
         const updatedProposals = [...(targetTicket.dateProposals || []), newProposal];
         const newMainDate = proposalData.date ? proposalData.date : targetTicket.proposedDate;
+        
+        // UPDATE: If the ASE proposes a new date/message on a SCHEDULED ticket, revert status to Tentative!
+        const newStatus = targetTicket.status === 'scheduled' && !isAdminOrHO ? 'tentative' : targetTicket.status;
 
-        await supabase.from('auditTickets').update({
-          proposedDate: newMainDate,
-          dateProposals: updatedProposals,
-          updatedAt: new Date().toISOString()
-        }).eq('id', targetTicket.id);
-
+        await supabase.from('auditTickets').update({ proposedDate: newMainDate, dateProposals: updatedProposals, status: newStatus, updatedAt: new Date().toISOString() }).eq('id', targetTicket.id);
+        
+        if (newStatus === 'tentative' && targetTicket.status === 'scheduled') {
+           logActivity(user, profile, "Reschedule Requested", `ASE requested a reschedule for ${distMap[finalTargetDistId]?.name}`);
+        }
       } else {
         const dist = distMap[finalTargetDistId];
         const newTicket: Partial<AuditTicket> = {
-          id: Math.random().toString(36).substring(7),
-          distributorId: finalTargetDistId,
-          proposedDate: proposalData.date || null,
-          auditorIds: [],
-          auditDays: 1,
-          approvedValue: dist.approvedValue,
-          maxAllowedValue: dist.approvedValue * 1.05,
-          status: 'tentative',
-          scheduledDate: null,
-          verifiedTotal: 0,
-          presenceLogs: [],
-          signOffs: {},
-          media: [],
-          dateProposals: [newProposal],
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString()
+          id: Math.random().toString(36).substring(7), distributorId: finalTargetDistId, proposedDate: proposalData.date || null, auditorIds: [], auditDays: 1, approvedValue: dist.approvedValue, maxAllowedValue: dist.approvedValue * 1.05, status: 'tentative', scheduledDate: null, verifiedTotal: 0, presenceLogs: [], signOffs: {}, media: [], dateProposals: [newProposal], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
         };
-
         await supabase.from('auditTickets').insert([newTicket]);
         logActivity(user, profile, "Date Proposed", `${profile?.role.toUpperCase()} initiated a date proposal for ${dist?.name}`);
       }
 
       setProposalData({ date: '', remarks: '' });
-      setNegDistId(finalTargetDistId); // Switch the UI context to the new distributor
+      setNegDistId(finalTargetDistId); 
     } catch (error) { console.error("Error submitting proposal:", error); }
   };
 
   const approveAndSchedule = async (proposalDate: string) => {
     if (!currentNegTicket) return;
-
     try {
-      await supabase.from('auditTickets').update({
-        status: 'scheduled',
-        scheduledDate: proposalDate, 
-        auditDays: approvalAuditDays, 
-        updatedAt: new Date().toISOString()
-      }).eq('id', currentNegTicket.id);
-
+      await supabase.from('auditTickets').update({ status: 'scheduled', scheduledDate: proposalDate, auditDays: approvalAuditDays, updatedAt: new Date().toISOString() }).eq('id', currentNegTicket.id);
       const dist = distMap[currentNegTicket.distributorId];
       logActivity(user, profile, "Date Approved", `${profile?.role.toUpperCase()} approved date proposal for ${dist?.name} on ${proposalDate}`);
-
       setIsNegotiationModalOpen(false);
       setNegDistId('');
       setApprovalAuditDays(1);
@@ -366,15 +354,25 @@ export function SchedulerModule() {
     });
   }, [allPendingTickets, pendingFilterAse, distMap]);
 
-  const awaitingApproval = useMemo(() => filteredPendingTickets.filter(t => t.dateProposals && t.dateProposals.length > 0), [filteredPendingTickets]);
-  const awaitingProposal = useMemo(() => filteredPendingTickets.filter(t => !t.dateProposals || t.dateProposals.length === 0), [filteredPendingTickets]);
-  const displayTickets = pendingTab === 'approval' ? awaitingApproval : awaitingProposal;
+  const isPendingAdmin = (ticket: AuditTicket) => {
+    const last = ticket.dateProposals?.[ticket.dateProposals.length - 1];
+    return last && ['ase', 'asm', 'sm', 'dm'].includes(last.role);
+  };
+
+  const isPendingASE = (ticket: AuditTicket) => {
+    const last = ticket.dateProposals?.[ticket.dateProposals.length - 1];
+    return !last || ['superadmin', 'admin', 'ho'].includes(last.role);
+  };
+
+  const actionRequiredTickets = useMemo(() => filteredPendingTickets.filter(t => isAdminOrHO ? isPendingAdmin(t) : isPendingASE(t)), [filteredPendingTickets, isAdminOrHO]);
+  const waitingTickets = useMemo(() => filteredPendingTickets.filter(t => isAdminOrHO ? isPendingASE(t) : isPendingAdmin(t)), [filteredPendingTickets, isAdminOrHO]);
+  const displayTickets = pendingTab === 'action' ? actionRequiredTickets : waitingTickets;
 
   useEffect(() => {
-    if (awaitingApproval.length === 0 && awaitingProposal.length > 0 && pendingTab === 'approval') {
+    if (actionRequiredTickets.length === 0 && waitingTickets.length > 0 && pendingTab === 'action') {
       setPendingTab('waiting');
     }
-  }, [awaitingApproval.length, awaitingProposal.length, pendingTab]);
+  }, [actionRequiredTickets.length, waitingTickets.length, pendingTab]);
 
   return (
     <div className="space-y-6 sm:space-y-8 pb-12 w-full min-w-0">
@@ -388,6 +386,7 @@ export function SchedulerModule() {
         </div>
         
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-3 w-full sm:w-auto">
+          
           {(isAdminOrHO || profile?.role === 'ase') && (
             <div className="relative w-full sm:w-72">
               <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-400" size={18} />
@@ -396,27 +395,15 @@ export function SchedulerModule() {
                 placeholder="Search dist to propose date..." 
                 className="w-full pl-10 pr-4 py-3 sm:py-3.5 bg-white border border-zinc-200 text-black rounded-xl font-bold focus:ring-2 focus:ring-black outline-none transition-all shadow-sm text-sm"
                 value={headerSearchTerm}
-                onChange={e => {
-                  setHeaderSearchTerm(e.target.value);
-                  setIsHeaderSearchOpen(true);
-                }}
+                onChange={e => { setHeaderSearchTerm(e.target.value); setIsHeaderSearchOpen(true); }}
                 onFocus={() => setIsHeaderSearchOpen(true)}
                 onBlur={() => setTimeout(() => setIsHeaderSearchOpen(false), 200)}
               />
               <AnimatePresence>
                 {isHeaderSearchOpen && headerFilteredDistributors.length > 0 && (
-                  <motion.div 
-                    initial={{ opacity: 0, y: -10 }} 
-                    animate={{ opacity: 1, y: 0 }} 
-                    exit={{ opacity: 0, y: -10 }}
-                    className="absolute top-full mt-2 left-0 w-full bg-white border border-zinc-200 rounded-xl shadow-xl z-50 max-h-60 overflow-y-auto custom-scrollbar flex flex-col p-1"
-                  >
+                  <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="absolute top-full mt-2 left-0 w-full bg-white border border-zinc-200 rounded-xl shadow-xl z-50 max-h-60 overflow-y-auto custom-scrollbar flex flex-col p-1">
                     {headerFilteredDistributors.map(dist => (
-                      <button 
-                        key={dist.id} 
-                        onClick={() => openNegotiationModal(dist.id)}
-                        className="text-left px-3 py-2.5 hover:bg-zinc-50 rounded-lg transition-colors flex items-center gap-3 w-full"
-                      >
+                      <button key={dist.id} onClick={() => openNegotiationModal(dist.id)} className="text-left px-3 py-2.5 hover:bg-zinc-50 rounded-lg transition-colors flex items-center gap-3 w-full">
                         <Store size={14} className="text-zinc-400 shrink-0" />
                         <div className="min-w-0">
                           <p className="font-bold text-sm text-zinc-900 truncate">{dist.name}</p>
@@ -431,10 +418,7 @@ export function SchedulerModule() {
           )}
 
           {isAdminOrHO && (
-            <button 
-              onClick={() => setIsCreateModalOpen(true)} 
-              className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-3 sm:py-3.5 bg-black text-white rounded-xl font-bold hover:bg-zinc-800 transition-all shadow-md active:scale-95 text-sm"
-            >
+            <button onClick={() => setIsCreateModalOpen(true)} className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-3 sm:py-3.5 bg-black text-white rounded-xl font-bold hover:bg-zinc-800 transition-all shadow-md active:scale-95 text-sm">
               <Plus size={18} /> Force Schedule
             </button>
           )}
@@ -446,11 +430,11 @@ export function SchedulerModule() {
           <div className="p-4 sm:p-6 border-b border-zinc-100 flex flex-col md:flex-row md:items-center justify-between gap-4 bg-zinc-50/50">
             <div className="flex items-center gap-4 overflow-x-auto custom-scrollbar -mx-4 px-4 sm:mx-0 sm:px-0">
               <div className="flex bg-zinc-200/50 p-1 rounded-xl w-max">
-                <button onClick={() => setPendingTab('approval')} className={cn("px-3 sm:px-4 py-2 text-xs sm:text-sm font-bold rounded-lg transition-all flex items-center gap-2 whitespace-nowrap", pendingTab === 'approval' ? "bg-white text-amber-600 shadow-sm" : "text-zinc-500 hover:text-black")}>
-                  Needs Approval <span className={cn("px-1.5 sm:px-2 py-0.5 rounded-full text-[10px]", pendingTab === 'approval' ? "bg-amber-100" : "bg-zinc-200")}>{awaitingApproval.length}</span>
+                <button onClick={() => setPendingTab('action')} className={cn("px-3 sm:px-4 py-2 text-xs sm:text-sm font-bold rounded-lg transition-all flex items-center gap-2 whitespace-nowrap", pendingTab === 'action' ? (isAdminOrHO ? "bg-white text-amber-600 shadow-sm" : "bg-white text-blue-600 shadow-sm") : "text-zinc-500 hover:text-black")}>
+                  {isAdminOrHO ? 'Needs Approval' : 'Action Required'} <span className={cn("px-1.5 sm:px-2 py-0.5 rounded-full text-[10px]", pendingTab === 'action' ? (isAdminOrHO ? "bg-amber-100" : "bg-blue-100") : "bg-zinc-200")}>{actionRequiredTickets.length}</span>
                 </button>
                 <button onClick={() => setPendingTab('waiting')} className={cn("px-3 sm:px-4 py-2 text-xs sm:text-sm font-bold rounded-lg transition-all flex items-center gap-2 whitespace-nowrap", pendingTab === 'waiting' ? "bg-white text-zinc-900 shadow-sm" : "text-zinc-500 hover:text-black")}>
-                  Waiting on ASE <span className={cn("px-1.5 sm:px-2 py-0.5 rounded-full text-[10px]", pendingTab === 'waiting' ? "bg-zinc-100" : "bg-zinc-200")}>{awaitingProposal.length}</span>
+                  {isAdminOrHO ? 'Waiting on ASE' : 'Pending Admin'} <span className={cn("px-1.5 sm:px-2 py-0.5 rounded-full text-[10px]", pendingTab === 'waiting' ? "bg-zinc-100" : "bg-zinc-200")}>{waitingTickets.length}</span>
                 </button>
               </div>
             </div>
@@ -479,9 +463,9 @@ export function SchedulerModule() {
                   const lastProposal = ticket.dateProposals?.[ticket.dateProposals.length - 1];
 
                   return (
-                    <motion.div layout key={ticket.id} onClick={() => openNegotiationModal(ticket.distributorId)} className={cn("bg-white p-3 sm:p-4 rounded-xl sm:rounded-2xl border shadow-sm hover:shadow-md transition-all cursor-pointer flex flex-col lg:flex-row lg:items-center justify-between gap-3 sm:gap-4 group", pendingTab === 'approval' ? "border-amber-200 hover:border-amber-400" : "border-zinc-200 hover:border-zinc-400")}>
+                    <motion.div layout key={ticket.id} onClick={() => openNegotiationModal(ticket.distributorId)} className={cn("bg-white p-3 sm:p-4 rounded-xl sm:rounded-2xl border shadow-sm hover:shadow-md transition-all cursor-pointer flex flex-col lg:flex-row lg:items-center justify-between gap-3 sm:gap-4 group", pendingTab === 'action' ? (isAdminOrHO ? "border-amber-200 hover:border-amber-400" : "border-blue-200 hover:border-blue-400") : "border-zinc-200 hover:border-zinc-400")}>
                       <div className="flex items-start sm:items-center gap-3 sm:gap-4 min-w-0">
-                        <div className={cn("w-10 h-10 rounded-xl flex items-center justify-center shrink-0", pendingTab === 'approval' ? "bg-amber-50 text-amber-600" : "bg-zinc-100 text-zinc-500")}><Store size={18} /></div>
+                        <div className={cn("w-10 h-10 rounded-xl flex items-center justify-center shrink-0", pendingTab === 'action' ? (isAdminOrHO ? "bg-amber-50 text-amber-600" : "bg-blue-50 text-blue-600") : "bg-zinc-100 text-zinc-500")}><Store size={18} /></div>
                         <div className="min-w-0">
                           <p className="font-bold text-sm sm:text-base text-zinc-900 truncate">{dist?.name || 'Unknown'}</p>
                           <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 mt-0.5 sm:mt-1">
@@ -492,7 +476,7 @@ export function SchedulerModule() {
                       </div>
 
                       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between lg:justify-end gap-3 sm:gap-6 w-full lg:w-auto mt-2 lg:mt-0">
-                        {pendingTab === 'approval' && lastProposal && (
+                        {pendingTab === 'action' && lastProposal && (
                           <div className="text-left lg:text-right w-full lg:w-auto bg-amber-50/50 p-2 rounded-lg lg:bg-transparent lg:p-0 lg:rounded-none">
                             <p className="text-[9px] sm:text-[10px] font-bold text-amber-600 uppercase tracking-wider mb-0.5 flex items-center gap-1"><MessageSquare size={10} /> Latest Reply</p>
                             <p className="text-xs font-medium text-zinc-700 truncate max-w-full lg:max-w-[200px]">"{lastProposal.remarks || 'No remarks'}"</p>
@@ -536,9 +520,7 @@ export function SchedulerModule() {
                     <div className="space-y-1.5 sm:space-y-2 flex-1 overflow-y-auto custom-scrollbar pr-1">
                       {dayTickets.map(ticket => {
                         const dist = distMap[ticket.distributorId];
-                        const auditorNames = ticket.auditorIds && ticket.auditorIds.length > 0 
-                          ? ticket.auditorIds.map(id => userMap[id]?.name.split(' ')[0]).join(', ')
-                          : 'Unassigned';
+                        const auditorNames = ticket.auditorIds && ticket.auditorIds.length > 0 ? ticket.auditorIds.map(id => userMap[id]?.name.split(' ')[0]).join(', ') : 'Unassigned';
 
                         return (
                           <div 
@@ -546,29 +528,27 @@ export function SchedulerModule() {
                             onClick={() => {
                               if (ticket.status === 'tentative') {
                                 openNegotiationModal(ticket.distributorId);
-                              } else if (isAdminOrHO) {
-                                setEditingActiveTicket(ticket);
-                                setEditTicketData({
-                                  scheduledDate: ticket.scheduledDate || '',
-                                  auditorIds: ticket.auditorIds || [],
-                                  auditDays: ticket.auditDays || 1
-                                });
+                              } else if (ticket.status === 'scheduled') {
+                                if (isAdminOrHO) {
+                                  setEditingActiveTicket(ticket);
+                                  setEditTicketData({ scheduledDate: ticket.scheduledDate || '', auditorIds: ticket.auditorIds || [], auditDays: ticket.auditDays || 1 });
+                                } else if (profile?.role === 'ase') {
+                                  openNegotiationModal(ticket.distributorId);
+                                }
                               }
                             }} 
                             className={cn(
                               "p-1.5 sm:p-2 rounded-lg sm:rounded-xl text-[10px] sm:text-xs border transition-all", 
                               ticket.status === 'tentative' ? "bg-amber-50 border-amber-200 hover:shadow-md cursor-pointer hover:-translate-y-0.5" : 
-                              cn("bg-emerald-50 border-emerald-100/50", isAdminOrHO ? "cursor-pointer hover:shadow-md hover:border-emerald-300" : "cursor-default")
+                              cn("bg-emerald-50 border-emerald-100/50", (isAdminOrHO || (profile?.role === 'ase' && ticket.status === 'scheduled')) ? "cursor-pointer hover:shadow-md hover:border-emerald-300 hover:-translate-y-0.5" : "cursor-default")
                             )} 
-                            title={ticket.status === 'tentative' ? 'Click to negotiate dates' : (isAdminOrHO ? 'Click to edit assignment' : 'Scheduled')}
+                            title={ticket.status === 'tentative' ? 'Click to negotiate dates' : (isAdminOrHO ? 'Click to edit assignment' : (profile?.role === 'ase' ? 'Click to request reschedule' : 'Scheduled'))}
                           >
                             <p className="font-bold text-zinc-900 truncate mb-0.5 sm:mb-1 leading-tight">{dist?.name || 'Unknown'}</p>
                             {ticket.status === 'tentative' ? (
                               <div className="flex items-center gap-1 text-[9px] sm:text-[10px] font-bold text-amber-600 uppercase"><Clock size={10} /> Needs Approval</div>
                             ) : (
-                              <div className="flex items-center gap-1 text-[9px] sm:text-[10px] font-medium text-emerald-700 bg-emerald-100/50 px-1 sm:px-1.5 py-0.5 rounded">
-                                <Store size={10} className="shrink-0" /><span className="truncate">{auditorNames}</span>
-                              </div>
+                              <div className="flex items-center gap-1 text-[9px] sm:text-[10px] font-medium text-emerald-700 bg-emerald-100/50 px-1 sm:px-1.5 py-0.5 rounded"><Store size={10} className="shrink-0" /><span className="truncate">{auditorNames}</span></div>
                             )}
                           </div>
                         );
@@ -614,42 +594,22 @@ export function SchedulerModule() {
                     <label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-400 mb-1 block">Assign Auditors</label>
                     <div className="mb-2 relative">
                       <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-400" size={14} />
-                      <input 
-                        type="text" 
-                        placeholder="Search auditors by name..." 
-                        className="w-full pl-8 pr-3 py-2 bg-white border border-zinc-200 rounded-lg text-xs focus:ring-2 focus:ring-black outline-none transition-all"
-                        value={auditorSearch}
-                        onChange={(e) => setAuditorSearch(e.target.value)}
-                      />
+                      <input type="text" placeholder="Search auditors by name..." className="w-full pl-8 pr-3 py-2 bg-white border border-zinc-200 rounded-lg text-xs focus:ring-2 focus:ring-black outline-none transition-all" value={auditorSearch} onChange={(e) => setAuditorSearch(e.target.value)} />
                     </div>
                     <div className="max-h-40 overflow-y-auto border border-zinc-200 rounded-xl p-2 sm:p-3 bg-zinc-50 grid grid-cols-1 sm:grid-cols-2 gap-1 sm:gap-2 custom-scrollbar">
                       {displayedAuditors.length > 0 ? displayedAuditors.map(a => (
                         <label key={a.uid} className="flex items-center gap-2 cursor-pointer p-1.5 hover:bg-zinc-100 rounded-lg">
-                          <input 
-                            type="checkbox" 
-                            checked={editTicketData.auditorIds.includes(a.uid)}
-                            onChange={(e) => {
-                              const newIds = e.target.checked ? [...editTicketData.auditorIds, a.uid] : editTicketData.auditorIds.filter(id => id !== a.uid);
-                              setEditTicketData({ ...editTicketData, auditorIds: newIds });
-                            }}
-                            className="w-3.5 h-3.5 sm:w-4 sm:h-4 rounded border-zinc-300 text-black focus:ring-black"
-                          />
+                          <input type="checkbox" checked={editTicketData.auditorIds.includes(a.uid)} onChange={(e) => { const newIds = e.target.checked ? [...editTicketData.auditorIds, a.uid] : editTicketData.auditorIds.filter(id => id !== a.uid); setEditTicketData({ ...editTicketData, auditorIds: newIds }); }} className="w-3.5 h-3.5 sm:w-4 sm:h-4 rounded border-zinc-300 text-black focus:ring-black" />
                           <span className="text-xs sm:text-sm font-medium text-zinc-700 truncate">{a.name}</span>
                         </label>
-                      )) : (
-                        <div className="col-span-full text-center py-4 text-xs font-medium text-zinc-400">No auditors found.</div>
-                      )}
+                      )) : <div className="col-span-full text-center py-4 text-xs font-medium text-zinc-400">No auditors found.</div>}
                     </div>
                   </div>
                 </form>
               </div>
               <div className="flex flex-col sm:flex-row items-center gap-2 sm:gap-3 pt-4 border-t border-zinc-100 shrink-0 mt-4">
-                <button type="button" onClick={() => deleteTicket(editingActiveTicket.id)} className="w-full sm:w-auto px-4 py-3 sm:py-4 bg-red-50 text-red-600 rounded-xl sm:rounded-2xl font-bold hover:bg-red-100 transition-colors flex justify-center items-center gap-2" title="Delete Ticket">
-                  <Trash2 size={18} className="sm:w-5 sm:h-5" /> <span className="sm:hidden">Delete Ticket</span>
-                </button>
-                <button type="submit" form="edit-ticket-form" className="w-full sm:flex-1 py-3 sm:py-4 bg-black text-white rounded-xl sm:rounded-2xl font-bold hover:bg-zinc-800 transition-all shadow-md sm:shadow-xl sm:shadow-black/10 active:scale-95 text-sm sm:text-base">
-                  Save Changes
-                </button>
+                <button type="button" onClick={() => deleteTicket(editingActiveTicket.id)} className="w-full sm:w-auto px-4 py-3 sm:py-4 bg-red-50 text-red-600 rounded-xl sm:rounded-2xl font-bold hover:bg-red-100 transition-colors flex justify-center items-center gap-2" title="Delete Ticket"><Trash2 size={18} className="sm:w-5 sm:h-5" /> <span className="sm:hidden">Delete Ticket</span></button>
+                <button type="submit" form="edit-ticket-form" className="w-full sm:flex-1 py-3 sm:py-4 bg-black text-white rounded-xl sm:rounded-2xl font-bold hover:bg-zinc-800 transition-all shadow-md sm:shadow-xl sm:shadow-black/10 active:scale-95 text-sm sm:text-base">Save Changes</button>
               </div>
             </motion.div>
           </div>
@@ -670,10 +630,11 @@ export function SchedulerModule() {
                   <div>
                     <h4 className="text-lg sm:text-xl font-bold tracking-tight">Date Negotiation</h4>
                     {currentNegTicket ? (
-                      <p className="text-[10px] sm:text-sm text-zinc-500 truncate max-w-[200px] sm:max-w-[250px]">{distMap[currentNegTicket.distributorId]?.name}</p>
-                    ) : (
-                      <p className="text-[10px] sm:text-sm text-zinc-500">Coordinate and approve audit schedules.</p>
-                    )}
+                      <p className="text-[10px] sm:text-sm text-zinc-500 flex items-center gap-2 truncate max-w-[200px] sm:max-w-[250px]">
+                        {distMap[currentNegTicket.distributorId]?.name}
+                        {currentNegTicket.status === 'scheduled' && <span className="bg-emerald-100 text-emerald-700 font-bold px-1.5 py-0.5 rounded text-[9px] uppercase tracking-wider">Scheduled</span>}
+                      </p>
+                    ) : <p className="text-[10px] sm:text-sm text-zinc-500">Coordinate and approve audit schedules.</p>}
                   </div>
                 </div>
                 <div className="flex items-center gap-1 sm:gap-2">
@@ -682,16 +643,45 @@ export function SchedulerModule() {
                 </div>
               </div>
               
+              {/* Dynamic Selector: Only show if we don't have a ticket yet */}
+              {!currentNegTicket && (
+                <div className="p-4 sm:p-5 md:p-6 bg-zinc-50 border-b border-zinc-200 shrink-0 space-y-3">
+                  {isAdminOrHO && (
+                    <div>
+                      <label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-500">Filter by Area Sales Exec (ASE)</label>
+                      <select className="w-full mt-1 px-3 py-2.5 bg-white border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black outline-none transition-all cursor-pointer text-xs sm:text-sm shadow-sm" value={negFilterAseId} onChange={e => { setNegFilterAseId(e.target.value); setNegDistId(''); }}>
+                        <option value="">All Area Sales Execs...</option>
+                        {allUsers.filter(u => u.role === 'ase' && u.active).map(u => <option key={u.uid} value={u.uid}>{u.name} {u.region ? `(${u.region})` : ''}</option>)}
+                      </select>
+                    </div>
+                  )}
+                  <div>
+                    <label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-500">Select Distributor</label>
+                    <select className="w-full mt-1 px-3 py-2.5 bg-white border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black outline-none transition-all cursor-pointer text-xs sm:text-sm font-medium shadow-sm" value={negDistId} onChange={e => setNegDistId(e.target.value)}>
+                      <option value="">Choose a distributor...</option>
+                      {distributors.filter(d => d.id === negDistId || (d.active && (!negFilterAseId || (d.aseIds && d.aseIds.includes(negFilterAseId))))).map(d => <option key={d.id} value={d.id}>{d.name} ({d.code})</option>)}
+                    </select>
+                  </div>
+                </div>
+              )}
+
               <div className="overflow-y-auto bg-zinc-50/30 flex-1 p-4 sm:p-5 md:p-6 space-y-4 custom-scrollbar min-h-0">
                 {(!negDistId) ? (
                   <div className="text-center py-6 sm:py-8 text-zinc-400">
                     <Store size={28} className="mx-auto mb-2 opacity-50" />
-                    <p className="text-xs sm:text-sm font-medium">Select a distributor using the search bar above to start.</p>
+                    <p className="text-xs sm:text-sm font-medium">Select a distributor above to start.</p>
                   </div>
                 ) : (!currentNegTicket || !currentNegTicket.dateProposals || currentNegTicket.dateProposals.length === 0) ? (
                   <div className="text-center py-6 sm:py-8 text-zinc-400">
                     <MessageSquare size={28} className="mx-auto mb-2 opacity-50" />
-                    <p className="text-xs sm:text-sm font-medium">No messages yet. Send a proposal below to start.</p>
+                    <p className="text-xs sm:text-sm font-medium">{isAdminOrHO ? 'Request a date proposal from the ASE below.' : 'No messages yet. Send a proposal below to start.'}</p>
+                    
+                    {/* --- ADMIN QUICK ACTION: REQUEST DATE --- */}
+                    {isAdminOrHO && (
+                      <button onClick={handleAdminRequestDate} className="mt-4 px-6 py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 shadow-md active:scale-95 transition-all text-sm">
+                        Request Date from ASE
+                      </button>
+                    )}
                   </div>
                 ) : (
                   currentNegTicket.dateProposals.map((prop) => (
@@ -704,9 +694,7 @@ export function SchedulerModule() {
                             <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
                               <span className="text-zinc-500 uppercase font-black tracking-wider text-[9px] bg-zinc-100 px-1.5 py-0.5 rounded">{prop.role}</span>
                               <span className="text-[10px] text-zinc-400">{prop.email}</span>
-                              <span className="text-[9px] text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider border border-blue-100/50 truncate max-w-[150px]">
-                                {distMap[negDistId]?.name}
-                              </span>
+                              <span className="text-[9px] text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider border border-blue-100/50 truncate max-w-[150px]">{distMap[negDistId]?.name}</span>
                             </div>
                           </div>
                         </div>
@@ -717,8 +705,7 @@ export function SchedulerModule() {
                         {prop.date && <div className="inline-flex items-center gap-1.5 bg-amber-50 text-amber-700 px-2 py-1 rounded-md border border-amber-100 text-xs font-bold"><CalendarIcon size={12}/> Proposed: {format(new Date(prop.date), 'dd MMM yyyy')}</div>}
                         {prop.remarks && <p className="text-sm text-zinc-600 bg-zinc-50 p-2.5 rounded-lg border border-zinc-100">"{prop.remarks}"</p>}
                         
-                        {/* ONLY APPROVE, NO AUDITOR ASSIGNMENT */}
-                        {isAdminOrHO && prop.date && (
+                        {isAdminOrHO && prop.date && currentNegTicket.status === 'tentative' && (
                           <div className="pt-3 mt-2 border-t border-zinc-100 flex flex-col gap-2">
                             <div className="flex flex-col sm:flex-row sm:items-center gap-2">
                               <select className="w-full sm:w-28 text-xs p-2 rounded-lg bg-white border border-zinc-200 focus:ring-2 focus:ring-black cursor-pointer" value={approvalAuditDays} onChange={(e) => setApprovalAuditDays(parseInt(e.target.value))}>
@@ -736,40 +723,32 @@ export function SchedulerModule() {
                 )}
               </div>
 
-              <div className="p-4 sm:p-5 md:p-6 bg-white border-t border-zinc-100 shrink-0">
-                <form onSubmit={submitProposal} className="space-y-3">
-                  <h5 className="text-xs font-bold tracking-tight text-zinc-900">{isAdminOrHO ? "Suggest a Date & Distributor" : "Counter-Propose Date or Distributor"}</h5>
-                  <div className="flex flex-col gap-3 w-full">
-                    
-                    {/* --- DISTRIBUTOR COUNTER-PROPOSE DROPDOWN --- */}
-                    <select 
-                      disabled={!negDistId} 
-                      className="w-full px-3 py-2.5 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black outline-none transition-all text-xs font-medium text-zinc-700 cursor-pointer disabled:opacity-50" 
-                      value={replyDistId} 
-                      onChange={e => setReplyDistId(e.target.value)}
-                    >
-                      {negDistId && <option value={negDistId}>{distMap[negDistId]?.name} ({distMap[negDistId]?.code}) - Current</option>}
-                      <optgroup label="Counter-Propose Another Distributor">
-                        {distributors.filter(d => 
-                          d.id !== negDistId && 
-                          d.active && 
-                          (!pendingFilterAse || pendingFilterAse === 'all' || (d.aseIds && d.aseIds.includes(profile?.role === 'ase' ? profile.uid : pendingFilterAse)))
-                        ).map(d => (
-                          <option key={d.id} value={d.id}>{d.name} ({d.code})</option>
-                        ))}
-                      </optgroup>
-                    </select>
+              {(!isAdminOrHO || (isAdminOrHO && currentNegTicket)) && (
+                <div className="p-4 sm:p-5 md:p-6 bg-white border-t border-zinc-100 shrink-0">
+                  <form onSubmit={submitProposal} className="space-y-3">
+                    <h5 className="text-xs font-bold tracking-tight text-zinc-900">
+                      {isAdminOrHO ? "Suggest a Date & Distributor" : currentNegTicket?.status === 'scheduled' ? "Request Reschedule" : "Submit Date Proposal"}
+                    </h5>
+                    <div className="flex flex-col gap-3 w-full">
+                      
+                      <select disabled={!negDistId} className="w-full px-3 py-2.5 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black outline-none transition-all text-xs font-medium text-zinc-700 cursor-pointer disabled:opacity-50" value={replyDistId} onChange={e => setReplyDistId(e.target.value)}>
+                        {negDistId && <option value={negDistId}>{distMap[negDistId]?.name} ({distMap[negDistId]?.code}) - Current</option>}
+                        <optgroup label="Counter-Propose Another Distributor">
+                          {distributors.filter(d => d.id !== negDistId && d.active && (!pendingFilterAse || pendingFilterAse === 'all' || (d.aseIds && d.aseIds.includes(profile?.role === 'ase' ? profile.uid : pendingFilterAse)))).map(d => <option key={d.id} value={d.id}>{d.name} ({d.code})</option>)}
+                        </optgroup>
+                      </select>
 
-                    <div className="flex flex-col sm:flex-row gap-3 w-full">
-                      <input type="date" disabled={!negDistId} min={new Date().toISOString().split('T')[0]} className="w-full sm:w-40 px-3 py-2.5 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black outline-none transition-all text-xs font-medium text-zinc-700 cursor-pointer shrink-0 disabled:opacity-50" value={proposalData.date} onChange={e => setProposalData({...proposalData, date: e.target.value})} />
-                      <div className={cn("relative flex-1")}>
-                        <input type="text" disabled={!negDistId} placeholder="Type message..." className="w-full pl-3 pr-10 py-2.5 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black outline-none transition-all text-xs disabled:opacity-50" value={proposalData.remarks} onChange={e => setProposalData({...proposalData, remarks: e.target.value})} />
-                        <button type="submit" disabled={!negDistId} className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1.5 bg-black text-white rounded-lg hover:bg-zinc-800 transition-colors disabled:opacity-50"><Send size={14}/></button>
+                      <div className="flex flex-col sm:flex-row gap-3 w-full">
+                        <input type="date" required={!isAdminOrHO} disabled={!negDistId} min={new Date().toISOString().split('T')[0]} className="w-full sm:w-40 px-3 py-2.5 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black outline-none transition-all text-xs font-medium text-zinc-700 cursor-pointer shrink-0 disabled:opacity-50" value={proposalData.date} onChange={e => setProposalData({...proposalData, date: e.target.value})} />
+                        <div className={cn("relative flex-1")}>
+                          <input type="text" disabled={!negDistId} placeholder="Type message..." className="w-full pl-3 pr-10 py-2.5 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black outline-none transition-all text-xs disabled:opacity-50" value={proposalData.remarks} onChange={e => setProposalData({...proposalData, remarks: e.target.value})} />
+                          <button type="submit" disabled={!negDistId} className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1.5 bg-black text-white rounded-lg hover:bg-zinc-800 transition-colors disabled:opacity-50"><Send size={14}/></button>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                </form>
-              </div>
+                  </form>
+                </div>
+              )}
             </motion.div>
           </div>
         )}
@@ -795,9 +774,7 @@ export function SchedulerModule() {
                       <label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-400">Filter by ASE (Optional)</label>
                       <select className="w-full mt-1 px-3 sm:px-4 py-2.5 sm:py-3 bg-zinc-50 border border-zinc-200 sm:border-none rounded-xl focus:ring-2 focus:ring-black transition-all cursor-pointer text-sm" value={createAseId} onChange={e => { setCreateAseId(e.target.value); setCreateData({...createData, distributorId: ''}); }}>
                         <option value="">All ASEs...</option>
-                        {allUsers.filter(u => u.role === 'ase' && u.active).map(u => (
-                          <option key={u.uid} value={u.uid}>{u.name} {u.region ? `(${u.region})` : ''}</option>
-                        ))}
+                        {allUsers.filter(u => u.role === 'ase' && u.active).map(u => <option key={u.uid} value={u.uid}>{u.name} {u.region ? `(${u.region})` : ''}</option>)}
                       </select>
                     </div>
                   )}
@@ -806,9 +783,7 @@ export function SchedulerModule() {
                     <label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-400">Select Distributor *</label>
                     <select required className="w-full mt-1 px-3 sm:px-4 py-2.5 sm:py-3 bg-zinc-50 border border-zinc-200 sm:border-none rounded-xl focus:ring-2 focus:ring-black transition-all cursor-pointer text-sm" value={createData.distributorId} onChange={e => setCreateData({...createData, distributorId: e.target.value})} disabled={isAdminOrHO && !createAseId && distributors.length > 50}>
                       <option value="">Choose a distributor...</option>
-                      {distributors.filter(d => d.active && (!createAseId || (d.aseIds && d.aseIds.includes(createAseId)))).map(d => (
-                        <option key={d.id} value={d.id}>{d.name} ({d.code})</option>
-                      ))}
+                      {distributors.filter(d => d.active && (!createAseId || (d.aseIds && d.aseIds.includes(createAseId)))).map(d => <option key={d.id} value={d.id}>{d.name} ({d.code})</option>)}
                     </select>
                   </div>
                   
