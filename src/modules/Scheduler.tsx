@@ -69,7 +69,6 @@ export function SchedulerModule() {
     return auditors.filter(a => a.name.toLowerCase().includes(auditorSearch.toLowerCase()));
   }, [auditors, auditorSearch]);
 
-  // UPDATE: Now grabs Tentative OR Scheduled tickets for negotiation
   const currentNegTicket = useMemo(() => {
     if (!negDistId) return null;
     return tickets.find(t => t.distributorId === negDistId && ['tentative', 'scheduled'].includes(t.status)) || null;
@@ -254,6 +253,20 @@ export function SchedulerModule() {
       return alert("Please provide a date or a message to send.");
     }
 
+    const targetTicket = tickets.find(t => t.distributorId === finalTargetDistId && ['tentative', 'scheduled'].includes(t.status));
+    
+    let rescheduleReason = "";
+    if (targetTicket && targetTicket.status === 'scheduled' && !isAdminOrHO) {
+      rescheduleReason = window.prompt("⚠️ This audit is already scheduled and confirmed.\n\nPlease provide a mandatory reason for requesting this reschedule:") || "";
+      if (!rescheduleReason.trim()) {
+        return alert("Reschedule Cancelled: A valid reason is required to alter a confirmed schedule.");
+      }
+    }
+
+    const finalRemarks = rescheduleReason 
+      ? `🚨 Reschedule Reason: ${rescheduleReason}${proposalData.remarks ? ` | Notes: ${proposalData.remarks}` : ''}`
+      : proposalData.remarks;
+
     try {
       const newProposal: DateProposal = {
         id: Math.random().toString(36).substring(7),
@@ -262,36 +275,31 @@ export function SchedulerModule() {
         proposedByName: profile.name,
         role: profile.role,
         email: profile.email,
-        remarks: proposalData.remarks,
+        remarks: finalRemarks,
         timestamp: new Date().toISOString()
       };
 
       if (finalTargetDistId !== negDistId && currentNegTicket) {
         const targetDistName = distMap[finalTargetDistId]?.name;
         const redirectProposal: DateProposal = {
-          id: Math.random().toString(36).substring(7), date: proposalData.date || '', proposedByUserId: user.id, proposedByName: profile.name, role: profile.role, email: profile.email, remarks: `Counter-proposed for a different distributor: ${targetDistName}. ${proposalData.remarks ? `Remarks: ${proposalData.remarks}` : ''}`, timestamp: new Date().toISOString()
+          id: Math.random().toString(36).substring(7), date: proposalData.date || '', proposedByUserId: user.id, proposedByName: profile.name, role: profile.role, email: profile.email, remarks: `Counter-proposed for a different distributor: ${targetDistName}. ${finalRemarks ? `Remarks: ${finalRemarks}` : ''}`, timestamp: new Date().toISOString()
         };
         const updatedOldProposals = [...(currentNegTicket.dateProposals || []), redirectProposal];
         
-        // If ASE is modifying a scheduled ticket, force it back to tentative
         const oldTicketStatus = currentNegTicket.status === 'scheduled' && !isAdminOrHO ? 'tentative' : currentNegTicket.status;
         await supabase.from('auditTickets').update({ dateProposals: updatedOldProposals, status: oldTicketStatus, updatedAt: new Date().toISOString() }).eq('id', currentNegTicket.id);
       }
-
-      // Find tentative OR scheduled
-      const targetTicket = tickets.find(t => t.distributorId === finalTargetDistId && ['tentative', 'scheduled'].includes(t.status));
 
       if (targetTicket) {
         const updatedProposals = [...(targetTicket.dateProposals || []), newProposal];
         const newMainDate = proposalData.date ? proposalData.date : targetTicket.proposedDate;
         
-        // UPDATE: If the ASE proposes a new date/message on a SCHEDULED ticket, revert status to Tentative!
         const newStatus = targetTicket.status === 'scheduled' && !isAdminOrHO ? 'tentative' : targetTicket.status;
 
         await supabase.from('auditTickets').update({ proposedDate: newMainDate, dateProposals: updatedProposals, status: newStatus, updatedAt: new Date().toISOString() }).eq('id', targetTicket.id);
         
         if (newStatus === 'tentative' && targetTicket.status === 'scheduled') {
-           logActivity(user, profile, "Reschedule Requested", `ASE requested a reschedule for ${distMap[finalTargetDistId]?.name}`);
+           logActivity(user, profile, "Reschedule Requested", `ASE requested a reschedule for ${distMap[finalTargetDistId]?.name}. Reason: "${rescheduleReason}"`);
         }
       } else {
         const dist = distMap[finalTargetDistId];
@@ -305,6 +313,48 @@ export function SchedulerModule() {
       setProposalData({ date: '', remarks: '' });
       setNegDistId(finalTargetDistId); 
     } catch (error) { console.error("Error submitting proposal:", error); }
+  };
+
+  // --- 🚨 NEW: LATE CANCELLATION FLOW ---
+  const cancelAssignment = async () => {
+    if (!currentNegTicket || !user || !profile) return;
+    
+    const cancelReason = window.prompt("⚠️ You are cancelling an audit on the day of execution past 12 PM.\n\nPlease provide a mandatory reason for this late cancellation:");
+    if (!cancelReason?.trim()) return alert("Cancellation aborted: A valid reason is required.");
+
+    try {
+      const finalRemarks = `🚨 LATE CANCELLATION (Past 12 PM): ${cancelReason}`;
+      const newProposal: DateProposal = {
+        id: Math.random().toString(36).substring(7),
+        date: '',
+        proposedByUserId: user.id,
+        proposedByName: profile.name,
+        role: profile.role,
+        email: profile.email,
+        remarks: finalRemarks,
+        timestamp: new Date().toISOString()
+      };
+
+      const updatedProposals = [...(currentNegTicket.dateProposals || []), newProposal];
+
+      await supabase.from('auditTickets').update({ 
+        status: 'tentative', 
+        scheduledDate: null, 
+        proposedDate: null, 
+        dateProposals: updatedProposals, 
+        updatedAt: new Date().toISOString() 
+      }).eq('id', currentNegTicket.id);
+      
+      const dist = distMap[currentNegTicket.distributorId];
+      logActivity(user, profile, "Audit Cancelled", `ASE cancelled the audit for ${dist?.name} past 12 PM on execution day. Reason: "${cancelReason}"`);
+
+      setIsNegotiationModalOpen(false);
+      setNegDistId('');
+      alert("Audit has been cancelled and returned to the Admin for review.");
+    } catch (error) {
+      console.error("Error cancelling assignment:", error);
+      alert("Failed to cancel the assignment.");
+    }
   };
 
   const approveAndSchedule = async (proposalDate: string) => {
@@ -373,6 +423,16 @@ export function SchedulerModule() {
       setPendingTab('waiting');
     }
   }, [actionRequiredTickets.length, waitingTickets.length, pendingTab]);
+
+  // --- LATE CANCELLATION DATE/TIME CHECK ---
+  const todayObj = new Date();
+  const localOffset = todayObj.getTimezoneOffset();
+  const localToday = new Date(todayObj.getTime() - (localOffset * 60000));
+  const localTodayStr = localToday.toISOString().split('T')[0];
+  
+  const isTodayAudit = currentNegTicket?.scheduledDate === localTodayStr;
+  const isPastNoon = todayObj.getHours() >= 12;
+  const canCancelToday = !isAdminOrHO && currentNegTicket?.status === 'scheduled' && isTodayAudit && isPastNoon;
 
   return (
     <div className="space-y-6 sm:space-y-8 pb-12 w-full min-w-0">
@@ -723,6 +783,7 @@ export function SchedulerModule() {
                 )}
               </div>
 
+              {/* Form is only shown to ASEs, OR to Admins if the ticket already has history. If it's a blank ticket, Admin uses the big button above. */}
               {(!isAdminOrHO || (isAdminOrHO && currentNegTicket)) && (
                 <div className="p-4 sm:p-5 md:p-6 bg-white border-t border-zinc-100 shrink-0">
                   <form onSubmit={submitProposal} className="space-y-3">
@@ -747,6 +808,15 @@ export function SchedulerModule() {
                       </div>
                     </div>
                   </form>
+                  
+                  {/* 🚨 NEW: CANCEL TODAY'S AUDIT (LATE CANCELLATION) 🚨 */}
+                  {canCancelToday && (
+                    <div className="mt-4 pt-4 border-t border-zinc-100">
+                      <button type="button" onClick={cancelAssignment} className="w-full py-2.5 bg-red-50 text-red-600 font-bold rounded-xl border border-red-200 hover:bg-red-100 transition-colors flex justify-center items-center gap-2">
+                        <AlertCircle size={16} /> Cancel Today's Audit
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
             </motion.div>

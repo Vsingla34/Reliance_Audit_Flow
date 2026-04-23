@@ -1,9 +1,10 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useState, useMemo } from 'react';
 import { supabase, logActivity } from './supabase';
 import { User } from '@supabase/supabase-js';
 import { UserProfile, ActivityLog } from './types';
-import { LayoutDashboard, Users, Store, CalendarClock, PlaySquare, FileBarChart, LogOut, Menu, X, Database, Bell, Trash2, ShieldAlert } from 'lucide-react';
+import { LayoutDashboard, Users, Store, CalendarClock, PlaySquare, FileBarChart, LogOut, Menu, X, Database, Bell, Trash2, ShieldAlert, Search } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { isToday, isThisWeek, isThisMonth } from 'date-fns';
 
 // Modules
 import { DashboardModule } from './modules/Dashboard';
@@ -53,23 +54,18 @@ export default function App() {
   const [authError, setAuthError] = useState('');
   const [isLoggingIn, setIsLoggingIn] = useState(false);
 
-  // ==========================================
-  // CUSTOM URL ROUTING SYSTEM
-  // ==========================================
   const getInitialModule = () => {
     const path = window.location.pathname.replace('/', '');
-    return path || 'dashboard'; // Default to dashboard if root '/' is hit
+    return path || 'dashboard'; 
   };
 
   const [activeModuleState, setActiveModuleState] = useState(getInitialModule);
 
-  // Wrapper function to update both the UI state AND the browser URL
   const setActiveModule = (moduleId: string) => {
     setActiveModuleState(moduleId);
     window.history.pushState({}, '', `/${moduleId}`);
   };
 
-  // Listen for the Browser's Back/Forward buttons
   useEffect(() => {
     const handlePopState = () => {
       const path = window.location.pathname.replace('/', '');
@@ -78,13 +74,15 @@ export default function App() {
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
-  // ==========================================
 
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [needsPasswordSetup, setNeedsPasswordSetup] = useState(false);
 
+  // --- LOG DRAWER STATE & FILTERS ---
   const [isActivityOpen, setIsActivityOpen] = useState(false);
   const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
+  const [logSearch, setLogSearch] = useState('');
+  const [logTimeFilter, setLogTimeFilter] = useState<'all' | 'today' | 'week' | 'month'>('all');
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -124,9 +122,27 @@ export default function App() {
     return () => { supabase.removeChannel(channel); };
   }, [user]);
 
-  // ==========================================
-  // ROLE-BASED NAVIGATION & SMART REDIRECT
-  // ==========================================
+  // --- FILTER ENGINE ---
+  const filteredLogs = useMemo(() => {
+    return activityLogs.filter(log => {
+      let matchesTime = true;
+      if (logTimeFilter !== 'all') {
+        const logDate = new Date(log.timestamp);
+        if (logTimeFilter === 'today') matchesTime = isToday(logDate);
+        else if (logTimeFilter === 'week') matchesTime = isThisWeek(logDate, { weekStartsOn: 1 });
+        else if (logTimeFilter === 'month') matchesTime = isThisMonth(logDate);
+      }
+
+      const searchLower = logSearch.toLowerCase().trim();
+      const matchesSearch = searchLower === '' || 
+        (log.details && log.details.toLowerCase().includes(searchLower)) ||
+        (log.action && log.action.toLowerCase().includes(searchLower)) ||
+        (log.userName && log.userName.toLowerCase().includes(searchLower));
+
+      return matchesTime && matchesSearch;
+    });
+  }, [activityLogs, logTimeFilter, logSearch]);
+
   const navItems = [
     { id: 'dashboard', label: 'Overview', icon: LayoutDashboard, roles: ['superadmin', 'admin', 'ho'] },
     { id: 'masters', label: 'Data Masters', icon: Database, roles: ['superadmin', 'admin', 'ho'] },
@@ -147,17 +163,14 @@ export default function App() {
       const isAllowed = allowedNavItems.some(item => item.id === activeModuleState);
       
       if (!isAllowed) {
-        // If they forcefully try to access a URL they aren't allowed to see, redirect and replace history
         const fallbackId = allowedNavItems[0].id;
         setActiveModuleState(fallbackId);
         window.history.replaceState({}, '', `/${fallbackId}`);
       } else if (window.location.pathname === '/' || window.location.pathname !== `/${activeModuleState}`) {
-        // Ensure the URL perfectly syncs with the loaded component (e.g. if they just typed localhost:5173/)
         window.history.replaceState({}, '', `/${activeModuleState}`);
       }
     }
   }, [profile, activeModuleState]); 
-  // ==========================================
 
   const fetchProfile = async (userId: string) => {
     try {
@@ -210,7 +223,6 @@ export default function App() {
   };
 
   const deleteActivityLog = async (logId: string) => {
-    // HARD SECURITY CHECK: Only SuperAdmins can delete individual logs
     if (profile?.role !== 'superadmin') {
       alert("Action Denied: Only SuperAdmins can delete activity logs.");
       return;
@@ -221,7 +233,6 @@ export default function App() {
   };
 
   const clearAllLogs = async () => {
-    // HARD SECURITY CHECK: Only SuperAdmins can wipe all logs
     if (profile?.role !== 'superadmin') {
       alert("Action Denied: Only SuperAdmins can clear system logs.");
       return;
@@ -447,17 +458,42 @@ export default function App() {
                   <div><h3 className="font-bold text-base sm:text-lg">System Activity</h3><p className="text-[10px] sm:text-xs text-zinc-500">Live global assignment logs</p></div>
                 </div>
                 <div className="flex items-center gap-2">
-                  {/* EXCLUSIVE SUPERADMIN POWER: Clear all logs */}
                   {profile.role === 'superadmin' && activityLogs.length > 0 && <button onClick={clearAllLogs} className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors" title="Clear All Logs"><Trash2 size={18} /></button>}
                   <button onClick={() => setIsActivityOpen(false)} className="p-2 hover:bg-zinc-200 rounded-xl transition-colors"><X size={20} /></button>
                 </div>
               </div>
 
+              {/* NEW FILTERS SECTION */}
+              <div className="p-4 border-b border-zinc-100 space-y-3 bg-white shrink-0">
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" size={16} />
+                  <input 
+                    type="text" 
+                    placeholder="Search logs, distributors, users..." 
+                    className="w-full pl-9 pr-3 py-2 bg-zinc-50 border border-zinc-200 rounded-lg text-sm focus:ring-2 focus:ring-black outline-none transition-all"
+                    value={logSearch}
+                    onChange={(e) => setLogSearch(e.target.value)}
+                  />
+                </div>
+                <div className="flex items-center gap-2">
+                  <select 
+                    className="w-full p-2 bg-zinc-50 border border-zinc-200 rounded-lg text-sm font-medium focus:ring-2 focus:ring-black outline-none transition-all cursor-pointer text-zinc-700"
+                    value={logTimeFilter}
+                    onChange={(e) => setLogTimeFilter(e.target.value as any)}
+                  >
+                    <option value="all">All Time</option>
+                    <option value="today">Today</option>
+                    <option value="week">This Week</option>
+                    <option value="month">This Month</option>
+                  </select>
+                </div>
+              </div>
+
               <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar bg-zinc-50/50">
-                {activityLogs.length === 0 ? (
-                  <div className="text-center py-12 text-zinc-400 flex flex-col items-center"><Bell size={32} className="mb-3 opacity-20" /><p className="font-bold">No activity yet</p><p className="text-xs mt-1">Actions performed in the system will appear here.</p></div>
+                {filteredLogs.length === 0 ? (
+                  <div className="text-center py-12 text-zinc-400 flex flex-col items-center"><Bell size={32} className="mb-3 opacity-20" /><p className="font-bold">No activity found</p><p className="text-xs mt-1">Try adjusting your search or filters.</p></div>
                 ) : (
-                  activityLogs.map(log => {
+                  filteredLogs.map(log => {
                     const style = getLogStyle(log.action);
                     return (
                       <div key={log.id} className={cn("p-4 sm:p-5 rounded-2xl border shadow-sm relative group transition-all", style.bg, style.border)}>
@@ -469,7 +505,6 @@ export default function App() {
                             </p>
                             {log.details && <p className={cn("text-[10px] sm:text-xs mt-2 font-medium opacity-90 break-words", style.text)}>"{log.details}"</p>}
                           </div>
-                          {/* EXCLUSIVE SUPERADMIN POWER: Delete individual log */}
                           {profile.role === 'superadmin' && (
                             <button onClick={() => deleteActivityLog(log.id)} className="text-zinc-400 hover:text-red-500 bg-white/50 p-1.5 rounded-lg transition-colors opacity-100 lg:opacity-0 lg:group-hover:opacity-100 shrink-0"><Trash2 size={14} /></button>
                           )}

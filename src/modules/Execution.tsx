@@ -66,7 +66,7 @@ export function ExecutionModule() {
     try {
       let tQuery = supabase.from('auditTickets')
         .select('*')
-        .in('status', ['scheduled', 'in_progress', 'auditor_submitted', 'drainage_pending', 'submitted', 'evidence_uploaded', 'signed', 'closed']);
+        .in('status', ['scheduled', 'in_progress', 'auditor_submitted', 'submitted', 'drainage_pending', 'signed', 'evidence_uploaded', 'closed']);
       
       if (profile.role === 'auditor') {
         tQuery = tQuery.or(`auditorId.eq.${profile.uid},auditorIds.cs.{${profile.uid}}`);
@@ -198,7 +198,6 @@ export function ExecutionModule() {
     } catch (error) { console.error("Failed to update WhatsApp approval:", error); }
   };
 
-  // NEW: Drainage Media Approval Workflow
   const toggleDrainageMediaApproval = async () => {
     if (!activeTicket || !user || !profile) return;
     const newStatus = !activeTicket.drainageMediaApproved;
@@ -440,12 +439,15 @@ export function ExecutionModule() {
     try {
       const rejectionMessage = `🚨 Audit Rejected by ASE: ${reason || 'No reason provided.'}`;
       
+      // Inject rejection with multiple keys to ensure the Chat Modal reads it regardless of how it's structured
       const newComment = {
         id: Math.random().toString(36).substring(7),
         userId: user.id,
         userName: profile.name,
         role: profile.role,
         text: rejectionMessage,
+        message: rejectionMessage, // Added to fix rendering
+        content: rejectionMessage, // Added to fix rendering
         timestamp: new Date().toISOString()
       };
 
@@ -461,7 +463,7 @@ export function ExecutionModule() {
       logActivity(user, profile, "Audit Rejected", `ASE rejected the audit count for ${dist?.name} and returned it to in_progress.`);
 
       setActiveTicket(null); 
-      alert("Audit rejected and returned to the Auditor for corrections!");
+      alert("Audit rejected! The reason has been posted to the discussion board and returned to the Auditor for corrections.");
     } catch (error) {
       console.error("Error rejecting audit:", error);
       alert("Failed to reject audit.");
@@ -470,22 +472,12 @@ export function ExecutionModule() {
 
   const submitByASE = async () => {
     if (!activeTicket) return;
-    await supabase.from('auditTickets').update({ status: 'drainage_pending', updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
-    
-    const dist = distMap[activeTicket.distributorId];
-    logActivity(user, profile, "Audit Verified", `ASE verified audit for ${dist?.name} and moved it to Drainage Phase`);
-
-    setActiveTicket(null); alert("Audit verified! It is now pending Drainage scheduling.");
-  };
-
-  const submitDrainage = async () => {
-    if (!activeTicket) return;
     await supabase.from('auditTickets').update({ status: 'submitted', updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
     
     const dist = distMap[activeTicket.distributorId];
-    logActivity(user, profile, "Drainage Completed", `Drainage phase completed and audit officially submitted for ${dist?.name}`);
+    logActivity(user, profile, "Audit Verified", `ASE verified audit for ${dist?.name} and requested sign-offs`);
 
-    setActiveTicket(null); alert("Drainage completed! Audit officially submitted for sign-offs.");
+    setActiveTicket(null); alert("Audit verified! It is now pending Sign-offs.");
   };
 
   const signOff = async (roleRequired: 'auditor' | 'ase' | 'distributor') => {
@@ -499,10 +491,28 @@ export function ExecutionModule() {
     const signOffData: SignOff = { userId: user.id, name: profile.name, timestamp: new Date().toISOString() };
     const signOffs = { ...(activeTicket.signOffs || {}), [roleRequired]: signOffData };
     const allSigned = signOffs.auditor && signOffs.ase && signOffs.distributor;
-    await supabase.from('auditTickets').update({ signOffs, status: allSigned ? 'signed' : activeTicket.status, updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
+    
+    const newStatus = allSigned ? 'drainage_pending' : activeTicket.status;
+
+    await supabase.from('auditTickets').update({ signOffs, status: newStatus, updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
     
     const dist = distMap[activeTicket.distributorId];
     logActivity(user, profile, "Audit Signed Off", `${roleRequired.toUpperCase()} signed off on the audit for ${dist?.name}`);
+
+    if (allSigned) {
+      alert("All sign-offs completed! Audit has officially moved to the Drainage phase.");
+      setActiveTicket(null);
+    }
+  };
+
+  const submitDrainage = async () => {
+    if (!activeTicket) return;
+    await supabase.from('auditTickets').update({ status: 'closed', updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
+    
+    const dist = distMap[activeTicket.distributorId];
+    logActivity(user, profile, "Audit Closed", `Drainage phase completed and audit officially closed for ${dist?.name}`);
+
+    setActiveTicket(null); alert("Drainage completed! The audit is now fully Closed.");
   };
 
   if (activeTicket) {
@@ -510,7 +520,10 @@ export function ExecutionModule() {
     
     const isAuditor = profile?.role === 'auditor';
     const isASE = profile?.role === 'ase';
-    const isSubmitted = ['submitted', 'signed', 'evidence_uploaded', 'closed'].includes(activeTicket.status);
+    
+    const isSubmittedPhase = ['submitted', 'drainage_pending', 'signed', 'evidence_uploaded', 'closed'].includes(activeTicket.status);
+    const isClosedPhase = activeTicket.status === 'closed';
+    const isDrainagePhase = ['drainage_pending', 'closed'].includes(activeTicket.status);
     
     const today = new Date();
     const offset = today.getTimezoneOffset();
@@ -522,7 +535,7 @@ export function ExecutionModule() {
     const approvedLogs = activeTicket.presenceLogs?.filter((l: any) => l.status === 'approved') || [];
     const hasApprovedCheckIn = approvedLogs.length > 0;
 
-    const canUploadFiles = (isAuditor || isAdminOrHO) && (!isSubmitted && !['auditor_submitted', 'drainage_pending'].includes(activeTicket.status));
+    const canUploadFiles = (isAuditor || isAdminOrHO) && (!isSubmittedPhase && !['auditor_submitted'].includes(activeTicket.status));
     
     const canEditItems = (isAuditor || isAdminOrSuperadmin) && canUploadFiles && isActionableDate && hasApprovedCheckIn && activeTicket.status === 'in_progress'; 
     const canEditDrainage = (isAuditor || isAdminOrSuperadmin) && activeTicket.status === 'drainage_pending';
@@ -554,9 +567,8 @@ export function ExecutionModule() {
                   <option value="scheduled">Active (Scheduled)</option>
                   <option value="in_progress">Active (In Progress)</option>
                   <option value="auditor_submitted">Awaiting ASE Review</option>
+                  <option value="submitted">Pending Sign-offs</option>
                   <option value="drainage_pending">Drainage Pending</option>
-                  <option value="submitted">Pending Sign-off</option>
-                  <option value="signed">Completed (Signed)</option>
                   <option value="closed">Closed</option>
                 </select>
               </div>
@@ -639,7 +651,17 @@ export function ExecutionModule() {
               <AlertCircle className="text-blue-600 shrink-0 mt-0.5" size={20} />
               <div>
                 <h4 className="font-bold text-blue-900 text-sm sm:text-base">Awaiting ASE Review</h4>
-                <p className="text-xs sm:text-sm text-blue-800 mt-1">The Auditor has completed their count. This audit is currently locked waiting for the ASE to review and move it to Drainage.</p>
+                <p className="text-xs sm:text-sm text-blue-800 mt-1">The Auditor has completed their count. This audit is currently locked waiting for the ASE to review the counts.</p>
+              </div>
+            </div>
+          )}
+          
+          {activeTicket.status === 'submitted' && (
+            <div className="mb-6 sm:mb-8 p-4 sm:p-5 bg-amber-50 border border-amber-100 rounded-xl sm:rounded-2xl flex items-start gap-3 sm:gap-4">
+              <FileText className="text-amber-600 shrink-0 mt-0.5" size={20} />
+              <div>
+                <h4 className="font-bold text-amber-900 text-sm sm:text-base">Pending Sign-offs</h4>
+                <p className="text-xs sm:text-sm text-amber-800 mt-1">The audit is verified. All parties must provide their digital sign-off below before the Drainage Phase can begin.</p>
               </div>
             </div>
           )}
@@ -650,7 +672,7 @@ export function ExecutionModule() {
               <div className="w-full">
                 <h4 className="font-bold text-teal-900 text-sm sm:text-base">Drainage Phase Active</h4>
                 <p className="text-xs sm:text-sm text-teal-800 mt-1 mb-3 sm:mb-4">
-                  Original counts are frozen. The <strong>Drained Qty</strong> column is unlocked. Confirm the scheduled drainage date below.
+                  Original counts are frozen. The <strong>Drained Qty</strong> column is unlocked. Confirm the scheduled drainage date below to finalize.
                 </p>
                 <div className="flex flex-col sm:flex-row gap-2 sm:gap-3 max-w-sm">
                   <input type="date" className="w-full sm:flex-1 px-4 py-3 sm:py-2 rounded-xl border border-teal-200 outline-none focus:ring-2 focus:ring-teal-500 text-sm font-bold bg-white" value={drainageDateInput || activeTicket.drainageDate || ''} onChange={(e) => setDrainageDateInput(e.target.value)} />
@@ -660,7 +682,7 @@ export function ExecutionModule() {
             </div>
           )}
 
-          {!isSubmitted && activeTicket.status !== 'auditor_submitted' && activeTicket.status !== 'drainage_pending' && (isAuditor || isAdminOrHO) && (
+          {!isSubmittedPhase && activeTicket.status !== 'auditor_submitted' && activeTicket.status !== 'drainage_pending' && (isAuditor || isAdminOrHO) && (
             <CheckInBlock activeTicket={activeTicket} setActiveTicket={setActiveTicket} user={user} profile={profile} isAdminOrHO={isAdminOrHO} isActionableDate={isActionableDate} />
           )}
 
@@ -855,31 +877,33 @@ export function ExecutionModule() {
                   )}
                 </div>
 
-                {/* --- NEW DRAINAGE EVIDENCE CARD --- */}
-                <div className="p-4 sm:p-5 bg-zinc-50 border border-zinc-200 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div className="flex items-center gap-3">
-                    <div className={cn("w-10 h-10 sm:w-12 sm:h-12 rounded-xl flex items-center justify-center shrink-0 shadow-inner", activeTicket.drainageMediaApproved ? "bg-emerald-100 text-emerald-600" : "bg-zinc-200 text-zinc-500")}>
-                      {activeTicket.drainageMediaApproved ? <CheckCircle2 size={20} /> : <Trash2 size={20} />}
+                {/* --- DRAINAGE EVIDENCE CARD (ONLY VISIBLE POST-AUDIT) --- */}
+                {isDrainagePhase && (
+                  <div className="p-4 sm:p-5 bg-zinc-50 border border-zinc-200 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <div className={cn("w-10 h-10 sm:w-12 sm:h-12 rounded-xl flex items-center justify-center shrink-0 shadow-inner", activeTicket.drainageMediaApproved ? "bg-emerald-100 text-emerald-600" : "bg-zinc-200 text-zinc-500")}>
+                        {activeTicket.drainageMediaApproved ? <CheckCircle2 size={20} /> : <Droplets size={20} />}
+                      </div>
+                      <div>
+                        <h5 className="font-bold text-zinc-900 text-xs sm:text-sm">Drainage Evidence</h5>
+                        <p className="text-[10px] sm:text-xs text-zinc-500">Photos/videos of destruction</p>
+                      </div>
                     </div>
-                    <div>
-                      <h5 className="font-bold text-zinc-900 text-xs sm:text-sm">Drainage Evidence</h5>
-                      <p className="text-[10px] sm:text-xs text-zinc-500">Photos/videos of destruction</p>
-                    </div>
+                    
+                    {isAdminOrHO ? (
+                      <button
+                        onClick={toggleDrainageMediaApproval}
+                        className={cn("w-full sm:w-auto px-4 py-2 text-xs font-bold rounded-xl transition-all active:scale-95", activeTicket.drainageMediaApproved ? "bg-emerald-600 text-white shadow-lg shadow-emerald-600/20" : "bg-black text-white hover:bg-zinc-800 shadow-md")}
+                      >
+                        {activeTicket.drainageMediaApproved ? 'Approved' : 'Mark Received'}
+                      </button>
+                    ) : (
+                      <span className={cn("w-full sm:w-auto text-center px-3 py-2 sm:py-1.5 text-[10px] sm:text-xs font-bold rounded-xl", activeTicket.drainageMediaApproved ? "bg-emerald-50 border border-emerald-200 text-emerald-700" : "bg-zinc-100 text-zinc-500")}>
+                        {activeTicket.drainageMediaApproved ? 'Approved by Admin' : 'Pending Admin'}
+                      </span>
+                    )}
                   </div>
-                  
-                  {isAdminOrHO ? (
-                    <button
-                      onClick={toggleDrainageMediaApproval}
-                      className={cn("w-full sm:w-auto px-4 py-2 text-xs font-bold rounded-xl transition-all active:scale-95", activeTicket.drainageMediaApproved ? "bg-emerald-600 text-white shadow-lg shadow-emerald-600/20" : "bg-black text-white hover:bg-zinc-800 shadow-md")}
-                    >
-                      {activeTicket.drainageMediaApproved ? 'Approved' : 'Mark Received'}
-                    </button>
-                  ) : (
-                    <span className={cn("w-full sm:w-auto text-center px-3 py-2 sm:py-1.5 text-[10px] sm:text-xs font-bold rounded-xl", activeTicket.drainageMediaApproved ? "bg-emerald-50 border border-emerald-200 text-emerald-700" : "bg-zinc-100 text-zinc-500")}>
-                      {activeTicket.drainageMediaApproved ? 'Approved by Admin' : 'Pending Admin'}
-                    </span>
-                  )}
-                </div>
+                )}
 
                 <div className="p-4 sm:p-5 bg-zinc-50 border border-zinc-200 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div className="flex items-center gap-3">
@@ -897,7 +921,7 @@ export function ExecutionModule() {
                   </div>
                   
                   <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
-                    {!activeTicket.signoffDocumentUrl && (isAuditor || isASE || isAdminOrHO) && activeTicket.status !== 'signed' && (
+                    {!activeTicket.signoffDocumentUrl && (isAuditor || isASE || isAdminOrHO) && !isClosedPhase && (
                       <>
                         <input type="file" accept="image/*,application/pdf" capture="environment" className="hidden" ref={signoffFileRef} onChange={handleSignoffUpload} />
                         <button onClick={() => signoffFileRef.current?.click()} disabled={isUploadingSignoff} className="w-full sm:w-auto px-4 py-2 bg-white border border-zinc-200 text-zinc-700 text-xs font-bold rounded-xl hover:bg-zinc-50 transition-all shadow-sm">
@@ -931,7 +955,7 @@ export function ExecutionModule() {
 
               <div className="space-y-3 sm:space-y-4">
                 <h4 className="font-bold text-base sm:text-lg">Digital Sign-offs</h4>
-                {(isSubmitted || isAuditor) && (
+                {(isSubmittedPhase || isAuditor) && (
                   <div className="space-y-2 sm:space-y-3">
                     {['auditor', 'ase', 'distributor'].map((role) => {
                       const signedData = activeTicket.signOffs?.[role as keyof SignOff];
@@ -940,7 +964,7 @@ export function ExecutionModule() {
                         <div key={role} className="flex items-center justify-between p-3 sm:p-4 bg-zinc-50 rounded-xl sm:rounded-2xl border border-zinc-100">
                           <div><span className="text-xs sm:text-sm font-bold uppercase tracking-wider text-zinc-600">{role}</span></div>
                           {signedData ? <span className="flex items-center gap-1 text-[10px] sm:text-xs font-bold text-emerald-600 bg-emerald-50 px-2 sm:px-3 py-1 sm:py-1.5 rounded-lg sm:rounded-xl"><CheckCircle2 size={12} className="sm:w-[14px] sm:h-[14px]" /> Signed</span>
-                           : <button onClick={() => signOff(role as any)} disabled={!isMyRole || !isSubmitted} className={cn("px-3 sm:px-4 py-1.5 sm:py-2 text-[10px] sm:text-xs font-bold rounded-lg sm:rounded-xl", (isMyRole && isSubmitted) ? "bg-black text-white hover:bg-zinc-800" : "bg-zinc-200 text-zinc-400")}>{isMyRole ? 'Sign Off' : 'Awaiting'}</button>}
+                           : <button onClick={() => signOff(role as any)} disabled={!isMyRole || activeTicket.status !== 'submitted'} className={cn("px-3 sm:px-4 py-1.5 sm:py-2 text-[10px] sm:text-xs font-bold rounded-lg sm:rounded-xl", (isMyRole && activeTicket.status === 'submitted') ? "bg-black text-white hover:bg-zinc-800" : "bg-zinc-200 text-zinc-400")}>{isMyRole ? 'Sign Off' : 'Awaiting'}</button>}
                         </div>
                       );
                     })}
@@ -962,7 +986,7 @@ export function ExecutionModule() {
                   <RotateCcw size={18} /> Reject & Return to Auditor
                 </button>
                 <button onClick={submitByASE} className="w-full sm:w-auto flex justify-center items-center gap-2 px-6 sm:px-8 py-3.5 sm:py-4 bg-blue-600 text-white rounded-xl sm:rounded-2xl font-bold hover:bg-blue-700 transition-all shadow-xl shadow-blue-600/20 active:scale-95 text-sm sm:text-base">
-                  <CheckCircle2 size={18} /> Verify & Move to Drainage
+                  <CheckCircle2 size={18} /> Verify & Request Sign-offs
                 </button>
               </div>
             )}
@@ -975,7 +999,7 @@ export function ExecutionModule() {
                   title={!activeTicket.drainageDate ? "Please set a Drainage Date first" : ""}
                   className="w-full sm:w-auto flex justify-center items-center gap-2 px-6 sm:px-8 py-3.5 sm:py-4 bg-teal-600 text-white rounded-xl sm:rounded-2xl font-bold hover:bg-teal-700 transition-all shadow-xl shadow-teal-600/20 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed text-sm sm:text-base"
                 >
-                  <CheckCircle2 size={18} /> Complete Drainage
+                  <CheckCircle2 size={18} /> Complete Drainage & Close Audit
                 </button>
               </div>
             )}
@@ -1006,14 +1030,14 @@ export function ExecutionModule() {
   const todayStr = localToday.toISOString().split('T')[0];
 
   const activeTickets = tickets.filter(t => ['scheduled', 'in_progress', 'auditor_submitted'].includes(t.status));
+  const signoffTickets = tickets.filter(t => t.status === 'submitted');
   const drainageTickets = tickets.filter(t => t.status === 'drainage_pending');
-  const signoffTickets = tickets.filter(t => ['submitted', 'evidence_uploaded'].includes(t.status));
-  const completedTickets = tickets.filter(t => ['signed', 'closed'].includes(t.status) && t.updatedAt?.startsWith(todayStr));
+  const completedTickets = tickets.filter(t => t.status === 'closed' && t.updatedAt?.startsWith(todayStr));
 
   let displayTickets: AuditTicket[] = [];
   if (activeTab === 'active') displayTickets = activeTickets;
-  else if (activeTab === 'drainage') displayTickets = drainageTickets;
   else if (activeTab === 'signoff') displayTickets = signoffTickets;
+  else if (activeTab === 'drainage') displayTickets = drainageTickets;
   else if (activeTab === 'completed') displayTickets = completedTickets;
 
   return (
@@ -1025,11 +1049,11 @@ export function ExecutionModule() {
           <button onClick={() => setActiveTab('active')} className={cn("px-4 sm:px-6 py-2.5 sm:py-3 rounded-lg sm:rounded-xl text-xs sm:text-sm font-bold transition-all whitespace-nowrap flex items-center gap-2", activeTab === 'active' ? "bg-white text-black shadow-sm" : "text-zinc-500 hover:text-black")}>
             Active <span className={cn("px-1.5 sm:px-2 py-0.5 rounded-full text-[9px] sm:text-[10px]", activeTab === 'active' ? "bg-zinc-100 text-zinc-900" : "bg-zinc-200 text-zinc-500")}>{activeTickets.length}</span>
           </button>
-          <button onClick={() => setActiveTab('drainage')} className={cn("px-4 sm:px-6 py-2.5 sm:py-3 rounded-lg sm:rounded-xl text-xs sm:text-sm font-bold transition-all whitespace-nowrap flex items-center gap-2", activeTab === 'drainage' ? "bg-white text-black shadow-sm" : "text-zinc-500 hover:text-black")}>
-            Drainage <span className="hidden sm:inline">Pending</span> <span className={cn("px-1.5 sm:px-2 py-0.5 rounded-full text-[9px] sm:text-[10px]", activeTab === 'drainage' ? "bg-zinc-100 text-zinc-900" : "bg-zinc-200 text-zinc-500")}>{drainageTickets.length}</span>
-          </button>
           <button onClick={() => setActiveTab('signoff')} className={cn("px-4 sm:px-6 py-2.5 sm:py-3 rounded-lg sm:rounded-xl text-xs sm:text-sm font-bold transition-all whitespace-nowrap flex items-center gap-2", activeTab === 'signoff' ? "bg-white text-black shadow-sm" : "text-zinc-500 hover:text-black")}>
             Sign-off <span className={cn("px-1.5 sm:px-2 py-0.5 rounded-full text-[9px] sm:text-[10px]", activeTab === 'signoff' ? "bg-zinc-100 text-zinc-900" : "bg-zinc-200 text-zinc-500")}>{signoffTickets.length}</span>
+          </button>
+          <button onClick={() => setActiveTab('drainage')} className={cn("px-4 sm:px-6 py-2.5 sm:py-3 rounded-lg sm:rounded-xl text-xs sm:text-sm font-bold transition-all whitespace-nowrap flex items-center gap-2", activeTab === 'drainage' ? "bg-white text-black shadow-sm" : "text-zinc-500 hover:text-black")}>
+            Drainage <span className="hidden sm:inline">Pending</span> <span className={cn("px-1.5 sm:px-2 py-0.5 rounded-full text-[9px] sm:text-[10px]", activeTab === 'drainage' ? "bg-zinc-100 text-zinc-900" : "bg-zinc-200 text-zinc-500")}>{drainageTickets.length}</span>
           </button>
           <button onClick={() => setActiveTab('completed')} className={cn("px-4 sm:px-6 py-2.5 sm:py-3 rounded-lg sm:rounded-xl text-xs sm:text-sm font-bold transition-all whitespace-nowrap flex items-center gap-2", activeTab === 'completed' ? "bg-white text-black shadow-sm" : "text-zinc-500 hover:text-black")}>
             Completed <span className={cn("px-1.5 sm:px-2 py-0.5 rounded-full text-[9px] sm:text-[10px]", activeTab === 'completed' ? "bg-zinc-100 text-zinc-900" : "bg-zinc-200 text-zinc-500")}>{completedTickets.length}</span>
