@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { supabase, logActivity } from '../supabase';
+import { supabase, logActivity, notifyLinkedUsers } from '../supabase'; // NEW: Added notifyLinkedUsers
 import { AuditTicket, Distributor, UserProfile, DateProposal } from '../types';
 import { Calendar as CalendarIcon, Plus, Store, MapPin, CheckCircle2, X, Send, AlertCircle, MessageSquare, Filter, Trash2, CalendarCheck, ChevronLeft, ChevronRight, Clock, Edit2, Search } from 'lucide-react';
 import { cn, useAuth } from '../App';
@@ -182,6 +182,10 @@ export function SchedulerModule() {
       }
 
       logActivity(user, profile, "Audit Scheduled", `${profile?.role.toUpperCase()} scheduled audit for ${dist?.name} on ${createData.proposedDate}`);
+      
+      // 💥 NEW: Send Personal Notification
+      notifyLinkedUsers(createData.distributorId, "Audit Scheduled", `An audit has been scheduled for ${dist?.name} on ${createData.proposedDate}.`);
+
       setIsCreateModalOpen(false);
       setCreateData({ distributorId: '', proposedDate: '', auditDays: 1 });
       setCreateAseId('');
@@ -203,6 +207,9 @@ export function SchedulerModule() {
 
       const dist = distMap[editingActiveTicket.distributorId];
       logActivity(user, profile, "Audit Re-scheduled/Assigned", `${profile?.role.toUpperCase()} modified the schedule/auditors for ${dist?.name}`);
+
+      // 💥 NEW: Send Personal Notification
+      notifyLinkedUsers(editingActiveTicket.distributorId, "Schedule Updated", `The audit schedule and/or auditors for ${dist?.name} have been updated.`);
 
       setEditingActiveTicket(null);
       setAuditorSearch('');
@@ -235,6 +242,10 @@ export function SchedulerModule() {
         await supabase.from('auditTickets').insert([newTicket]);
         logActivity(user, profile, "Date Requested", `Admin requested a date proposal from ASE for ${dist?.name}`);
       }
+
+      // 💥 NEW: Send Personal Notification
+      notifyLinkedUsers(negDistId, "Date Requested", `Admin requested a date proposal for ${distMap[negDistId]?.name}.`);
+
       setProposalData({ date: '', remarks: '' });
     } catch (error) { console.error("Error requesting date:", error); }
   };
@@ -310,12 +321,14 @@ export function SchedulerModule() {
         logActivity(user, profile, "Date Proposed", `${profile?.role.toUpperCase()} initiated a date proposal for ${dist?.name}`);
       }
 
+      // 💥 NEW: Send Personal Notification
+      notifyLinkedUsers(finalTargetDistId, "New Message / Proposal", `${profile.name} has submitted a new date proposal or message for ${distMap[finalTargetDistId]?.name}.`);
+
       setProposalData({ date: '', remarks: '' });
       setNegDistId(finalTargetDistId); 
     } catch (error) { console.error("Error submitting proposal:", error); }
   };
 
-  // --- 🚨 NEW: LATE CANCELLATION FLOW ---
   const cancelAssignment = async () => {
     if (!currentNegTicket || !user || !profile) return;
     
@@ -348,6 +361,9 @@ export function SchedulerModule() {
       const dist = distMap[currentNegTicket.distributorId];
       logActivity(user, profile, "Audit Cancelled", `ASE cancelled the audit for ${dist?.name} past 12 PM on execution day. Reason: "${cancelReason}"`);
 
+      // 💥 NEW: Send Personal Notification
+      notifyLinkedUsers(currentNegTicket.distributorId, "Audit Cancelled", `The audit for ${dist?.name} was cancelled late by ${profile.name}. Reason: "${cancelReason}"`);
+
       setIsNegotiationModalOpen(false);
       setNegDistId('');
       alert("Audit has been cancelled and returned to the Admin for review.");
@@ -363,6 +379,10 @@ export function SchedulerModule() {
       await supabase.from('auditTickets').update({ status: 'scheduled', scheduledDate: proposalDate, auditDays: approvalAuditDays, updatedAt: new Date().toISOString() }).eq('id', currentNegTicket.id);
       const dist = distMap[currentNegTicket.distributorId];
       logActivity(user, profile, "Date Approved", `${profile?.role.toUpperCase()} approved date proposal for ${dist?.name} on ${proposalDate}`);
+      
+      // 💥 NEW: Send Personal Notification
+      notifyLinkedUsers(currentNegTicket.distributorId, "Schedule Approved", `The audit schedule for ${dist?.name} has been approved for ${proposalDate}.`);
+
       setIsNegotiationModalOpen(false);
       setNegDistId('');
       setApprovalAuditDays(1);
@@ -424,7 +444,6 @@ export function SchedulerModule() {
     }
   }, [actionRequiredTickets.length, waitingTickets.length, pendingTab]);
 
-  // --- LATE CANCELLATION DATE/TIME CHECK ---
   const todayObj = new Date();
   const localOffset = todayObj.getTimezoneOffset();
   const localToday = new Date(todayObj.getTime() - (localOffset * 60000));
@@ -809,7 +828,7 @@ export function SchedulerModule() {
                     </div>
                   </form>
                   
-                  {/* 🚨 NEW: CANCEL TODAY'S AUDIT (LATE CANCELLATION) 🚨 */}
+                  {/* 🚨 LATE CANCELLATION BUTTON 🚨 */}
                   {canCancelToday && (
                     <div className="mt-4 pt-4 border-t border-zinc-100">
                       <button type="button" onClick={cancelAssignment} className="w-full py-2.5 bg-red-50 text-red-600 font-bold rounded-xl border border-red-200 hover:bg-red-100 transition-colors flex justify-center items-center gap-2">
@@ -875,12 +894,10 @@ export function SchedulerModule() {
               <div className="p-5 sm:p-6 border-t border-zinc-100 shrink-0">
                 <button type="submit" form="force-schedule-form" className="w-full py-3 sm:py-4 bg-black text-white rounded-xl sm:rounded-2xl font-bold hover:bg-zinc-800 transition-all shadow-md sm:shadow-xl sm:shadow-black/10 active:scale-95 text-sm sm:text-base">Schedule Audit</button>
               </div>
-
             </motion.div>
           </div>
         )}
       </AnimatePresence>
-
     </div>
   );
 }

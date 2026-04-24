@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { supabase, logActivity } from '../supabase';
 import { Distributor, SignOff, AuditTicket as BaseTicket, AuditLineItem as BaseItem } from '../types';
-import { ClipboardCheck, Plus, Store, MapPin, CheckCircle2, ArrowLeft, AlertCircle, MessageSquare, PackageSearch, Lock, Trash2, Send, RotateCcw, CalendarClock, FileText, Upload, Loader2, User as UserIcon, X, Droplets } from 'lucide-react';
+import { ClipboardCheck, Plus, Store, MapPin, CheckCircle2, ArrowLeft, AlertCircle, MessageSquare, PackageSearch, Lock, Trash2, Send, RotateCcw, CalendarClock, FileText, Upload, Loader2, User as UserIcon, X, Droplets, SplitSquareHorizontal, Search } from 'lucide-react';
 import { cn, useAuth } from '../App';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -36,6 +36,9 @@ export function ExecutionModule() {
   const [activeTicket, setActiveTicket] = useState<AuditTicket | null>(null);
   const [items, setItems] = useState<AuditLineItem[]>([]);
   const [availableDumpItems, setAvailableDumpItems] = useState<CombinedDumpItem[]>([]);
+  
+  // NEW: Search State for the Line Items Table
+  const [itemSearchQuery, setItemSearchQuery] = useState('');
   
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isChatOpen, setIsChatOpen] = useState(false);
@@ -139,9 +142,10 @@ export function ExecutionModule() {
       fetchItems(activeTicket.id);
       const dist = distributors.find(d => d.id === activeTicket.distributorId);
       if (dist) loadDumpData(dist.code);
+      setItemSearchQuery(''); // Reset search when opening a new ticket
       const channel = supabase.channel(`items-${activeTicket.id}`).on('postgres_changes', { event: '*', schema: 'public', table: 'auditLineItems', filter: `ticketId=eq.${activeTicket.id}` }, () => fetchItems(activeTicket.id)).subscribe();
       return () => { supabase.removeChannel(channel); };
-    } else { setItems([]); setAvailableDumpItems([]); }
+    } else { setItems([]); setAvailableDumpItems([]); setItemSearchQuery(''); }
   }, [activeTicket?.id, distributors]); 
 
   useEffect(() => {
@@ -246,6 +250,38 @@ export function ExecutionModule() {
     try {
       await supabase.from('auditLineItems').delete().eq('id', item.id);
     } catch (error) { console.error(error); }
+  };
+
+  const duplicateItem = async (itemToDuplicate: AuditLineItem) => {
+    if (!activeTicket) return;
+    try {
+      const newItemId = Math.random().toString(36).substring(7);
+      
+      const newItem = {
+        ...itemToDuplicate,
+        id: newItemId,
+        qtyNonSaleable: 0,
+        qtyBBD: 0,
+        qtyDamaged: 0,
+        quantity: 0,
+        totalValue: 0,
+        mfgDate: null,
+        expDate: null,
+        productLife: '-',
+        bbdApprovalStatus: 'none',
+        qtyDrained: 0
+      };
+
+      const cleanItem = Object.fromEntries(Object.entries(newItem).filter(([_, v]) => v !== undefined));
+
+      const { error } = await supabase.from('auditLineItems').insert([cleanItem]);
+      if (error) throw error;
+      
+      fetchItems(activeTicket.id);
+    } catch (error) {
+      console.error("Error splitting row:", error);
+      alert("Failed to split the row.");
+    }
   };
 
   const handleInlineChange = (id: string, field: 'qtyNonSaleable' | 'qtyBBD' | 'qtyDamaged' | 'mfgDate' | 'expDate', value: any, e?: React.ChangeEvent<HTMLInputElement>) => {
@@ -439,15 +475,14 @@ export function ExecutionModule() {
     try {
       const rejectionMessage = `🚨 Audit Rejected by ASE: ${reason || 'No reason provided.'}`;
       
-      // Inject rejection with multiple keys to ensure the Chat Modal reads it regardless of how it's structured
       const newComment = {
         id: Math.random().toString(36).substring(7),
         userId: user.id,
         userName: profile.name,
         role: profile.role,
         text: rejectionMessage,
-        message: rejectionMessage, // Added to fix rendering
-        content: rejectionMessage, // Added to fix rendering
+        message: rejectionMessage,
+        content: rejectionMessage, 
         timestamp: new Date().toISOString()
       };
 
@@ -514,6 +549,17 @@ export function ExecutionModule() {
 
     setActiveTicket(null); alert("Drainage completed! The audit is now fully Closed.");
   };
+
+  // --- ITEM FILTER LOGIC ---
+  const filteredItems = useMemo(() => {
+    if (!itemSearchQuery.trim()) return items;
+    const lowerQuery = itemSearchQuery.toLowerCase();
+    return items.filter(item => 
+      (item.articleNumber && item.articleNumber.toLowerCase().includes(lowerQuery)) ||
+      (item.description && item.description.toLowerCase().includes(lowerQuery))
+    );
+  }, [items, itemSearchQuery]);
+
 
   if (activeTicket) {
     const dist = distMap[activeTicket.distributorId];
@@ -688,16 +734,30 @@ export function ExecutionModule() {
 
           <div className="space-y-6 sm:space-y-8 w-full min-w-0">
             <div className="w-full min-w-0">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4 mb-4 w-full">
-                <h4 className="font-bold text-base sm:text-lg flex items-center gap-2"><ClipboardCheck className="text-zinc-400" size={20} /> Audit Line Items</h4>
+              
+              {/* --- UPDATED HEADER WITH SEARCH BAR --- */}
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 md:gap-4 mb-4 w-full">
+                <h4 className="font-bold text-base sm:text-lg flex items-center gap-2 shrink-0"><ClipboardCheck className="text-zinc-400" size={20} /> Audit Line Items</h4>
                 
-                <button 
-                  onClick={() => setIsAddModalOpen(true)} 
-                  disabled={!canEditItems || isMaxedOut}
-                  className={cn("w-full sm:w-auto flex justify-center items-center gap-2 px-6 py-3 sm:py-2.5 rounded-xl text-sm font-bold transition-all shadow-md active:scale-95 whitespace-nowrap", (canEditItems && !isMaxedOut) ? "bg-black text-white hover:bg-zinc-800" : "bg-zinc-200 text-zinc-400 cursor-not-allowed")}
-                >
-                  <Plus size={18} /> Add Item
-                </button>
+                <div className="flex flex-col sm:flex-row items-center gap-3 w-full md:w-auto flex-1 md:justify-end">
+                  <div className="relative w-full sm:w-64 md:w-72">
+                    <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-400" size={16} />
+                    <input 
+                      type="text" 
+                      placeholder="Search article no or desc..." 
+                      className="w-full pl-9 pr-3 py-2 sm:py-2.5 bg-zinc-50 border border-zinc-200 rounded-xl text-xs sm:text-sm font-medium focus:ring-2 focus:ring-black outline-none transition-all shadow-sm"
+                      value={itemSearchQuery}
+                      onChange={(e) => setItemSearchQuery(e.target.value)}
+                    />
+                  </div>
+                  <button 
+                    onClick={() => setIsAddModalOpen(true)} 
+                    disabled={!canEditItems || isMaxedOut}
+                    className={cn("w-full sm:w-auto flex justify-center items-center gap-2 px-6 py-2.5 sm:py-2.5 rounded-xl text-sm font-bold transition-all shadow-md active:scale-95 whitespace-nowrap", (canEditItems && !isMaxedOut) ? "bg-black text-white hover:bg-zinc-800" : "bg-zinc-200 text-zinc-400 cursor-not-allowed")}
+                  >
+                    <Plus size={18} /> Add Item
+                  </button>
+                </div>
               </div>
               
               {/* --- RESPONSIVE TABLE WRAPPER --- */}
@@ -723,36 +783,47 @@ export function ExecutionModule() {
 
                         <th className="px-4 py-3 sm:py-4 text-right font-bold text-zinc-500">Rate</th>
                         <th className="px-4 py-3 sm:py-4 text-right font-bold text-zinc-500">Total Value</th>
-                        {canEditItems && <th className="px-3 py-3 sm:py-4"></th>}
+                        {canEditItems && <th className="px-3 py-3 sm:py-4 text-center font-bold text-zinc-500">Actions</th>}
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-zinc-100 relative">
-                      {items.map(item => {
+                      {filteredItems.map((item, index) => {
                         const dumpMatch = dumpItemMap[item.articleNumber];
                         const systemQty = dumpMatch ? dumpMatch.expectedQty : 0;
+                        
+                        const isFirstInstance = filteredItems.findIndex(i => i.articleNumber === item.articleNumber) === index;
+
                         return (
                           <tr key={item.id} className="hover:bg-zinc-50/50 transition-colors group">
                             <td className="px-4 py-3 sm:py-4 sticky left-0 bg-white group-hover:bg-zinc-50/50 z-10 border-r sm:border-r-0 border-zinc-100">
                               <p className="font-bold text-zinc-900">{item.articleNumber}</p>
                               <p className="text-[9px] sm:text-[10px] text-zinc-500 truncate max-w-[120px] sm:max-w-[150px]">{item.description}</p>
                             </td>
-                            <td className="px-3 py-3 sm:py-4 text-center bg-zinc-50/50 border-x border-zinc-100"><span className="font-mono text-zinc-500">{systemQty}</span></td>
+                            
+                            <td className="px-3 py-3 sm:py-4 text-center bg-zinc-50/50 border-x border-zinc-100">
+                              {isFirstInstance ? (
+                                <span className="font-mono text-zinc-500">{systemQty}</span>
+                              ) : (
+                                <span className="font-mono text-zinc-300 font-bold" title="Split Row">↳</span>
+                              )}
+                            </td>
                             
                             <td className="px-3 py-3 sm:py-4 text-center bg-purple-50/30 border-r border-purple-100">
-                              {canEditItems ? <input type="number" min="0" value={item.qtyDamaged} onChange={(e) => handleInlineChange(item.id, 'qtyDamaged', e.target.value, e)} onBlur={() => saveInlineEdit(item)} className="w-12 text-center bg-white border text-xs font-bold rounded px-1 py-2 sm:py-1 focus:ring-2 focus:ring-purple-500 outline-none text-purple-700 border-purple-200" /> : <span className="font-bold text-purple-700">{item.qtyDamaged}</span>}
+                              {canEditItems ? <input type="number" min="0" value={item.qtyDamaged || ''} onChange={(e) => handleInlineChange(item.id, 'qtyDamaged', e.target.value, e)} onBlur={() => saveInlineEdit(item)} className="w-12 text-center bg-white border text-xs font-bold rounded px-1 py-2 sm:py-1 focus:ring-2 focus:ring-purple-500 outline-none text-purple-700 border-purple-200" placeholder="0" /> : <span className="font-bold text-purple-700">{item.qtyDamaged}</span>}
                             </td>
 
                             <td className="px-3 py-3 sm:py-4 text-center bg-red-50/30 border-r border-red-100">
-                              {canEditItems ? <input type="number" min="0" value={item.qtyNonSaleable} onChange={(e) => handleInlineChange(item.id, 'qtyNonSaleable', e.target.value, e)} onBlur={() => saveInlineEdit(item)} className="w-12 text-center bg-white border text-xs font-bold rounded px-1 py-2 sm:py-1 focus:ring-2 focus:ring-red-500 outline-none text-red-700 border-red-200" /> : <span className="font-bold text-red-700">{item.qtyNonSaleable}</span>}
+                              {canEditItems ? <input type="number" min="0" value={item.qtyNonSaleable || ''} onChange={(e) => handleInlineChange(item.id, 'qtyNonSaleable', e.target.value, e)} onBlur={() => saveInlineEdit(item)} className="w-12 text-center bg-white border text-xs font-bold rounded px-1 py-2 sm:py-1 focus:ring-2 focus:ring-red-500 outline-none text-red-700 border-red-200" placeholder="0" /> : <span className="font-bold text-red-700">{item.qtyNonSaleable}</span>}
                             </td>
                             
                             <td className="px-3 py-3 sm:py-4 text-center bg-amber-50/30 border-r border-amber-100 relative align-top">
                               {canEditItems ? (
                                  <input 
-                                    type="number" min="0" value={item.qtyBBD} 
+                                    type="number" min="0" value={item.qtyBBD || ''} 
                                     onChange={(e) => handleInlineChange(item.id, 'qtyBBD', e.target.value, e)} 
                                     onBlur={() => saveInlineEdit(item)} 
                                     className={cn("w-12 text-center bg-white border text-xs font-bold rounded px-1 py-2 sm:py-1 focus:outline-none transition-colors", item.bbdApprovalStatus === 'pending' ? "border-red-400 ring-2 ring-red-400 text-red-700" : "border-amber-200 focus:ring-2 focus:ring-amber-500 text-amber-700")} 
+                                    placeholder="0"
                                  />
                               ) : (
                                  <span className="font-bold text-amber-700">{item.qtyBBD}</span>
@@ -828,7 +899,15 @@ export function ExecutionModule() {
                             <td className="px-4 py-3 sm:py-4 text-right text-zinc-500 text-[10px] sm:text-xs">₹{item.unitValue.toFixed(2)}</td>
                             <td className="px-4 py-3 sm:py-4 text-right font-black text-zinc-900">₹{item.totalValue.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</td>
 
-                            {canEditItems && <td className="px-3 py-3 sm:py-4 text-right"><button onClick={() => deleteItem(item)} className="p-2 text-zinc-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button></td>}
+                            {canEditItems && (
+                              <td className="px-2 py-3 sm:py-4 text-center align-middle">
+                                <div className="flex items-center justify-center opacity-100 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity">
+                                  <button onClick={() => deleteItem(item)} className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg transition-colors" title="Delete Row">
+                                    <Trash2 size={16} />
+                                  </button>
+                                </div>
+                              </td>
+                            )}
                           </tr>
                         )
                       })}
@@ -837,6 +916,14 @@ export function ExecutionModule() {
                           <td colSpan={canEditItems ? 13 : 12} className="px-4 py-12 text-center text-zinc-400">
                             <PackageSearch size={32} className="mx-auto mb-3 opacity-30" />
                             <p className="font-bold text-sm text-zinc-600">No items counted yet.</p>
+                          </td>
+                        </tr>
+                      )}
+                      {items.length > 0 && filteredItems.length === 0 && (
+                        <tr>
+                          <td colSpan={canEditItems ? 13 : 12} className="px-4 py-12 text-center text-zinc-400">
+                            <Search size={32} className="mx-auto mb-3 opacity-30" />
+                            <p className="font-bold text-sm text-zinc-600">No items match your search.</p>
                           </td>
                         </tr>
                       )}

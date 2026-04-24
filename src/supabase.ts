@@ -23,3 +23,35 @@ export const logActivity = async (user: any, profile: any, action: string, detai
     console.error("Failed to log activity:", error);
   }
 };
+
+// --- PERSONAL NOTIFICATIONS SENDER ---
+export const notifyLinkedUsers = async (distributorId: string, title: string, message: string) => {
+  try {
+    // 1. Fetch the distributor to get their linked users
+    const { data: dist } = await supabase.from('distributors').select('*').eq('id', distributorId).single();
+    if (!dist) return;
+
+    // 2. Collect all linked user IDs (Using a Set to prevent duplicate notifications to the same person)
+    const linkedIds = new Set<string>();
+    ['hoIds', 'dmIds', 'smIds', 'asmIds', 'aseIds'].forEach(role => {
+      if (dist[role] && Array.isArray(dist[role])) {
+        dist[role].forEach((id: string) => linkedIds.add(id));
+      }
+    });
+
+    // 3. Prepare the notifications payload
+    const notifications = Array.from(linkedIds).map(userId => ({
+      recipient_id: userId,
+      title,
+      message,
+      is_read: false
+    }));
+
+    // 4. Send them to the database so the Bell Icon updates!
+    if (notifications.length > 0) {
+      await supabase.from('notifications').insert(notifications);
+    }
+  } catch (error) {
+    console.error("Error sending notifications:", error);
+  }
+};

@@ -2,7 +2,7 @@ import React, { createContext, useContext, useEffect, useState, useMemo } from '
 import { supabase, logActivity } from './supabase';
 import { User } from '@supabase/supabase-js';
 import { UserProfile, ActivityLog } from './types';
-import { LayoutDashboard, Users, Store, CalendarClock, PlaySquare, FileBarChart, LogOut, Menu, X, Database, Bell, Trash2, ShieldAlert, Search } from 'lucide-react';
+import { LayoutDashboard, Users, Store, CalendarClock, PlaySquare, FileBarChart, LogOut, Menu, X, Database, Bell, Trash2, ShieldAlert, Search, CheckCheck } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { isToday, isThisWeek, isThisMonth } from 'date-fns';
 
@@ -78,9 +78,14 @@ export default function App() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [needsPasswordSetup, setNeedsPasswordSetup] = useState(false);
 
-  // --- LOG DRAWER STATE & FILTERS ---
+  // --- LOG & NOTIFICATION DRAWER STATE ---
   const [isActivityOpen, setIsActivityOpen] = useState(false);
+  const [drawerTab, setDrawerTab] = useState<'alerts' | 'activity'>('alerts');
+  
   const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
+  const [notifications, setNotifications] = useState<any[]>([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+
   const [logSearch, setLogSearch] = useState('');
   const [logTimeFilter, setLogTimeFilter] = useState<'all' | 'today' | 'week' | 'month'>('all');
 
@@ -100,9 +105,11 @@ export default function App() {
     return () => subscription.unsubscribe();
   }, []);
 
+  // Fetch Logs & Notifications
   useEffect(() => {
     if (!user) return;
     
+    // 1. Fetch Global Activity
     const fetchLogs = async () => {
       const { data } = await supabase.from('activityLogs').select('*').order('timestamp', { ascending: false }).limit(100);
       if (data) {
@@ -115,12 +122,37 @@ export default function App() {
     };
     fetchLogs();
 
-    const channel = supabase.channel('global-activity')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'activityLogs' }, fetchLogs)
-      .subscribe();
+    // 2. Fetch Personal Notifications
+    const fetchNotifications = async () => {
+      const { data } = await supabase.from('notifications').select('*').eq('recipient_id', user.id).order('created_at', { ascending: false }).limit(50);
+      if (data) {
+        setNotifications(data);
+        setUnreadCount(data.filter((n: any) => !n.is_read).length);
+      }
+    };
+    fetchNotifications();
 
-    return () => { supabase.removeChannel(channel); };
+    const channel1 = supabase.channel('global-activity')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'activityLogs' }, fetchLogs).subscribe();
+
+    const channel2 = supabase.channel('personal-notifications')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications', filter: `recipient_id=eq.${user.id}` }, fetchNotifications).subscribe();
+
+    return () => { supabase.removeChannel(channel1); supabase.removeChannel(channel2); };
   }, [user]);
+
+  const markAllAsRead = async () => {
+    if (!user) return;
+    await supabase.from('notifications').update({ is_read: true }).eq('recipient_id', user.id).eq('is_read', false);
+    setUnreadCount(0);
+    setNotifications(prev => prev.map(n => ({ ...n, is_read: true })));
+  };
+
+  const markAsRead = async (id: string) => {
+    await supabase.from('notifications').update({ is_read: true }).eq('id', id);
+    setNotifications(prev => prev.map(n => n.id === id ? { ...n, is_read: true } : n));
+    setUnreadCount(prev => Math.max(0, prev - 1));
+  };
 
   // --- FILTER ENGINE ---
   const filteredLogs = useMemo(() => {
@@ -350,7 +382,12 @@ export default function App() {
           <div className="flex items-center gap-2 sm:gap-3">
             <button onClick={() => setIsActivityOpen(true)} className="p-2 text-zinc-600 hover:bg-zinc-100 rounded-lg relative">
               <Bell size={20} />
-              {activityLogs.length > 0 && <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white"></span>}
+              {/* MOBILE BELL NOTIFICATION BADGE */}
+              {unreadCount > 0 && (
+                <span className="absolute top-1 right-1 w-4 h-4 bg-red-500 rounded-full border-2 border-white flex items-center justify-center text-[9px] font-bold text-white">
+                  {unreadCount > 9 ? '9+' : unreadCount}
+                </span>
+              )}
             </button>
             <button onClick={() => setIsMobileMenuOpen(true)} className="p-2 text-black bg-zinc-100 rounded-lg hover:bg-zinc-200 transition-colors"><Menu size={20} /></button>
           </div>
@@ -417,9 +454,14 @@ export default function App() {
             </div>
             <div className="flex items-center gap-4">
               
-              <button onClick={() => setIsActivityOpen(true)} className="relative p-3 bg-zinc-100 hover:bg-zinc-200 text-zinc-700 rounded-full transition-colors" title="System Activity Logs">
+              <button onClick={() => setIsActivityOpen(true)} className="relative p-3 bg-zinc-100 hover:bg-zinc-200 text-zinc-700 rounded-full transition-colors" title="Notifications & Activity">
                 <Bell size={20} />
-                {activityLogs.length > 0 && <span className="absolute top-1 right-1 w-3 h-3 bg-red-500 rounded-full border-2 border-white" />}
+                {/* DESKTOP BELL NOTIFICATION BADGE */}
+                {unreadCount > 0 && (
+                  <span className="absolute top-0 right-0 w-5 h-5 bg-red-500 rounded-full border-2 border-white flex items-center justify-center text-[10px] font-bold text-white">
+                    {unreadCount > 9 ? '9+' : unreadCount}
+                  </span>
+                )}
               </button>
 
               <div className="flex items-center gap-3 bg-zinc-50 pl-2 pr-4 py-2 rounded-full border border-zinc-200">
@@ -442,7 +484,7 @@ export default function App() {
         </main>
       </div>
 
-      {/* ACTIVITY LOG DRAWER */}
+      {/* NOTIFICATIONS & ACTIVITY DRAWER */}
       <AnimatePresence>
         {isActivityOpen && (
           <>
@@ -455,67 +497,98 @@ export default function App() {
               <div className="p-4 sm:p-6 border-b border-zinc-100 flex items-center justify-between shrink-0 bg-zinc-50">
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 bg-black text-white rounded-xl flex items-center justify-center shadow-md shrink-0"><Bell size={20} /></div>
-                  <div><h3 className="font-bold text-base sm:text-lg">System Activity</h3><p className="text-[10px] sm:text-xs text-zinc-500">Live global assignment logs</p></div>
+                  <div><h3 className="font-bold text-base sm:text-lg">Notifications</h3><p className="text-[10px] sm:text-xs text-zinc-500">Alerts and System Activity</p></div>
                 </div>
                 <div className="flex items-center gap-2">
-                  {profile.role === 'superadmin' && activityLogs.length > 0 && <button onClick={clearAllLogs} className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors" title="Clear All Logs"><Trash2 size={18} /></button>}
                   <button onClick={() => setIsActivityOpen(false)} className="p-2 hover:bg-zinc-200 rounded-xl transition-colors"><X size={20} /></button>
                 </div>
               </div>
 
-              {/* NEW FILTERS SECTION */}
-              <div className="p-4 border-b border-zinc-100 space-y-3 bg-white shrink-0">
-                <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" size={16} />
-                  <input 
-                    type="text" 
-                    placeholder="Search logs, distributors, users..." 
-                    className="w-full pl-9 pr-3 py-2 bg-zinc-50 border border-zinc-200 rounded-lg text-sm focus:ring-2 focus:ring-black outline-none transition-all"
-                    value={logSearch}
-                    onChange={(e) => setLogSearch(e.target.value)}
-                  />
-                </div>
-                <div className="flex items-center gap-2">
-                  <select 
-                    className="w-full p-2 bg-zinc-50 border border-zinc-200 rounded-lg text-sm font-medium focus:ring-2 focus:ring-black outline-none transition-all cursor-pointer text-zinc-700"
-                    value={logTimeFilter}
-                    onChange={(e) => setLogTimeFilter(e.target.value as any)}
-                  >
-                    <option value="all">All Time</option>
-                    <option value="today">Today</option>
-                    <option value="week">This Week</option>
-                    <option value="month">This Month</option>
-                  </select>
-                </div>
+              {/* TABS */}
+              <div className="flex px-4 pt-4 border-b border-zinc-100 shrink-0">
+                <button 
+                  onClick={() => setDrawerTab('alerts')} 
+                  className={cn("flex-1 pb-3 text-sm font-bold border-b-2 transition-all relative flex items-center justify-center gap-2", drawerTab === 'alerts' ? "border-black text-black" : "border-transparent text-zinc-400 hover:text-zinc-600")}
+                >
+                  My Alerts
+                  {unreadCount > 0 && <span className="px-1.5 py-0.5 bg-red-500 text-white rounded-full text-[9px]">{unreadCount}</span>}
+                </button>
+                <button 
+                  onClick={() => setDrawerTab('activity')} 
+                  className={cn("flex-1 pb-3 text-sm font-bold border-b-2 transition-all", drawerTab === 'activity' ? "border-black text-black" : "border-transparent text-zinc-400 hover:text-zinc-600")}
+                >
+                  Global Activity
+                </button>
               </div>
 
-              <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar bg-zinc-50/50">
-                {filteredLogs.length === 0 ? (
-                  <div className="text-center py-12 text-zinc-400 flex flex-col items-center"><Bell size={32} className="mb-3 opacity-20" /><p className="font-bold">No activity found</p><p className="text-xs mt-1">Try adjusting your search or filters.</p></div>
-                ) : (
-                  filteredLogs.map(log => {
-                    const style = getLogStyle(log.action);
-                    return (
-                      <div key={log.id} className={cn("p-4 sm:p-5 rounded-2xl border shadow-sm relative group transition-all", style.bg, style.border)}>
-                        <div className="flex items-start justify-between mb-2 gap-3 sm:gap-4">
-                          <div className="min-w-0 flex-1">
-                            <p className={cn("text-xs sm:text-sm leading-snug break-words", style.text)}>
-                              <span className="font-black block text-sm sm:text-base mb-0.5">{log.action}</span>
-                              <span className="font-bold">{log.userName}</span>
-                            </p>
-                            {log.details && <p className={cn("text-[10px] sm:text-xs mt-2 font-medium opacity-90 break-words", style.text)}>"{log.details}"</p>}
-                          </div>
-                          {profile.role === 'superadmin' && (
-                            <button onClick={() => deleteActivityLog(log.id)} className="text-zinc-400 hover:text-red-500 bg-white/50 p-1.5 rounded-lg transition-colors opacity-100 lg:opacity-0 lg:group-hover:opacity-100 shrink-0"><Trash2 size={14} /></button>
-                          )}
-                        </div>
-                        <div className="flex flex-wrap items-center gap-2 mt-3 sm:mt-4 text-[9px] sm:text-[10px] font-black uppercase tracking-wider">
-                          <span className={cn("px-2 py-1 rounded shadow-sm", style.tag)}>{log.userRole}</span>
-                          <span className={cn("opacity-70", style.text)}>{new Date(log.timestamp).toLocaleString()}</span>
-                        </div>
+              <div className="flex-1 overflow-y-auto custom-scrollbar bg-zinc-50/50 flex flex-col">
+                {drawerTab === 'alerts' ? (
+                  <div className="p-4 space-y-3">
+                    {unreadCount > 0 && (
+                      <div className="flex justify-end mb-2">
+                        <button onClick={markAllAsRead} className="text-xs font-bold text-blue-600 hover:underline flex items-center gap-1"><CheckCheck size={14}/> Mark all read</button>
                       </div>
-                    );
-                  })
+                    )}
+                    {notifications.length === 0 ? (
+                      <div className="text-center py-12 text-zinc-400 flex flex-col items-center"><Bell size={32} className="mb-3 opacity-20" /><p className="font-bold">All caught up!</p><p className="text-xs mt-1">You have no personal alerts.</p></div>
+                    ) : (
+                      notifications.map(n => (
+                        <div key={n.id} onClick={() => markAsRead(n.id)} className={cn("p-4 rounded-2xl border shadow-sm transition-all cursor-pointer", n.is_read ? "bg-white border-zinc-200 opacity-70" : "bg-blue-50 border-blue-200")}>
+                          <div className="flex justify-between items-start mb-1">
+                            <h4 className={cn("font-bold text-sm", n.is_read ? "text-zinc-700" : "text-blue-900")}>{n.title}</h4>
+                            {!n.is_read && <span className="w-2 h-2 rounded-full bg-blue-600 mt-1 shrink-0"></span>}
+                          </div>
+                          <p className={cn("text-xs leading-relaxed", n.is_read ? "text-zinc-500" : "text-blue-800")}>{n.message}</p>
+                          <p className="text-[10px] font-bold text-zinc-400 mt-3">{new Date(n.created_at).toLocaleString()}</p>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                ) : (
+                  <div className="flex flex-col h-full">
+                    <div className="p-4 border-b border-zinc-100 space-y-3 bg-white shrink-0">
+                      <div className="relative">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" size={16} />
+                        <input type="text" placeholder="Search logs, distributors, users..." className="w-full pl-9 pr-3 py-2 bg-zinc-50 border border-zinc-200 rounded-lg text-sm focus:ring-2 focus:ring-black outline-none transition-all" value={logSearch} onChange={(e) => setLogSearch(e.target.value)} />
+                      </div>
+                      <select className="w-full p-2 bg-zinc-50 border border-zinc-200 rounded-lg text-sm font-medium focus:ring-2 focus:ring-black outline-none transition-all cursor-pointer text-zinc-700" value={logTimeFilter} onChange={(e) => setLogTimeFilter(e.target.value as any)}>
+                        <option value="all">All Time</option>
+                        <option value="today">Today</option>
+                        <option value="week">This Week</option>
+                        <option value="month">This Month</option>
+                      </select>
+                    </div>
+
+                    <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar">
+                      {filteredLogs.length === 0 ? (
+                        <div className="text-center py-12 text-zinc-400 flex flex-col items-center"><Bell size={32} className="mb-3 opacity-20" /><p className="font-bold">No activity found</p></div>
+                      ) : (
+                        filteredLogs.map(log => {
+                          const style = getLogStyle(log.action);
+                          return (
+                            <div key={log.id} className={cn("p-4 rounded-2xl border shadow-sm transition-all", style.bg, style.border)}>
+                              <div className="flex items-start justify-between mb-2 gap-3 sm:gap-4">
+                                <div className="min-w-0 flex-1">
+                                  <p className={cn("text-xs sm:text-sm leading-snug break-words", style.text)}>
+                                    <span className="font-black block text-sm sm:text-base mb-0.5">{log.action}</span>
+                                    <span className="font-bold">{log.userName}</span>
+                                  </p>
+                                  {log.details && <p className={cn("text-[10px] sm:text-xs mt-2 font-medium opacity-90 break-words", style.text)}>"{log.details}"</p>}
+                                </div>
+                                {profile.role === 'superadmin' && (
+                                  <button onClick={() => deleteActivityLog(log.id)} className="text-zinc-400 hover:text-red-500 bg-white/50 p-1.5 rounded-lg transition-colors opacity-100 lg:opacity-0 lg:group-hover:opacity-100 shrink-0"><Trash2 size={14} /></button>
+                                )}
+                              </div>
+                              <div className="flex flex-wrap items-center gap-2 mt-3 sm:mt-4 text-[9px] sm:text-[10px] font-black uppercase tracking-wider">
+                                <span className={cn("px-2 py-1 rounded shadow-sm", style.tag)}>{log.userRole}</span>
+                                <span className={cn("opacity-70", style.text)}>{new Date(log.timestamp).toLocaleString()}</span>
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
                 )}
               </div>
             </motion.div>

@@ -247,13 +247,17 @@ export function DistributorsModule() {
       asmIds: dist.asmIds || [], 
       aseIds: dist.aseIds || [], 
       anchorName: dist.anchorName || '', 
-      region: dist.region || '' 
+      region: dist.region || '',
+      address: dist.address || '',
+      city: dist.city || '',
+      state: dist.state || ''
     });
     setIsModalOpen(true);
   };
 
+  // --- UPDATED CSV EXPORT TEMPLATE ---
   const downloadTemplate = () => {
-    const csvContent = "Code,AnchorName,Name,ApprovedValue,HO_Emails,DM_Emails,SM_Emails,ASM_Emails,ASE_Emails,Region,City,State\nDIST-001,Reliance,Reliance Smart Point,500000,ho@comp.com,,sm1@comp.com;sm2@comp.com,asm@comp.com,ase1@comp.com;ase2@comp.com,North,Delhi,Delhi";
+    const csvContent = "Code,AnchorName,Name,ApprovedValue,HO_Emails,DM_Emails,SM_Emails,ASM_Emails,ASE_Emails,Region,City,State,Address\nDIST-001,Reliance,Reliance Smart Point,500000,ho@comp.com,,sm1@comp.com;sm2@comp.com,asm@comp.com,ase1@comp.com;ase2@comp.com,North,Delhi,Delhi,123 Main Street Sector 4";
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = "Distributor_Import_Template.csv"; link.click();
   };
@@ -269,10 +273,8 @@ export function DistributorsModule() {
       try {
         const text = event.target?.result as string;
         
-        // 1. Split by newlines, handling both Windows (\r\n) and Mac/Linux (\n)
         const lines = text.split(/\r?\n/).filter(line => line.trim() !== '');
         
-        // 2. Robust CSV Row Parser (Handles Excel's invisible quote wrapping)
         const parseCSVRow = (str: string) => {
           const result = [];
           let cur = '';
@@ -283,7 +285,7 @@ export function DistributorsModule() {
             else cur += str[i];
           }
           result.push(cur.trim());
-          return result.map(s => s.replace(/^"|"$/g, '').trim()); // Strip wrapping quotes
+          return result.map(s => s.replace(/^"|"$/g, '').trim()); 
         };
 
         const findUserIds = (emailStr: string, role: string) => {
@@ -296,10 +298,11 @@ export function DistributorsModule() {
         const newDistributors = lines.slice(1).map(line => {
           const cols = parseCSVRow(line);
           
-          // Ensure we have enough columns before destructuring
+          // Ensure we have at least 4 columns to process
           if (cols.length < 4) return null; 
 
-          const [code, anchorName, name, approvedValue, hoEmails, dmEmails, smEmails, asmEmails, aseEmails, region, city, state] = cols;
+          // --- UPDATED CSV IMPORTER TO MAP 13TH COLUMN (ADDRESS) ---
+          const [code, anchorName, name, approvedValue, hoEmails, dmEmails, smEmails, asmEmails, aseEmails, region, city, state, address] = cols;
           if (!code || !name) return null;
           
           return {
@@ -316,13 +319,14 @@ export function DistributorsModule() {
             region: region || '', 
             city: city || '', 
             state: state || '', 
+            address: address || '', // Saves the new address field
             active: true
           };
         }).filter(Boolean);
 
         if (newDistributors.length > 0) {
           const { error } = await supabase.from('distributors').insert(newDistributors);
-          if (error) throw error; // Catch DB errors (like missing array columns)
+          if (error) throw error; 
           
           logActivity(user!, profile!, "Distributors Imported", `Bulk imported ${newDistributors.length} distributors via CSV`);
           alert(`Successfully imported ${newDistributors.length} distributors!`);
@@ -382,7 +386,7 @@ export function DistributorsModule() {
         <div className="flex flex-col md:flex-row gap-4 flex-1">
           <div className="relative flex-1 max-w-md group">
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-400 group-focus-within:text-black transition-colors" size={18} />
-            <input type="text" placeholder="Search distributors..." className="w-full pl-12 pr-4 py-4 bg-white border border-zinc-200 rounded-2xl focus:ring-0 focus:border-black transition-all shadow-sm" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
+            <input type="text" placeholder="Search distributors..." className="w-full pl-12 pr-4 py-4 bg-white border border-zinc-200 rounded-2xl focus:focus:border-black transition-all shadow-sm outline-none" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
           </div>
 
           {profile?.role !== 'ase' && (
@@ -415,7 +419,10 @@ export function DistributorsModule() {
               )}
             </AnimatePresence>
             <button onClick={downloadTemplate} className="flex items-center justify-center gap-2 px-4 py-4 bg-white border border-zinc-200 text-zinc-900 rounded-2xl font-bold hover:bg-zinc-50 transition-all active:scale-95 whitespace-nowrap" title="Download Template"><Download size={18} /></button>
-            <button onClick={() => setIsImportModalOpen(true)} className="flex items-center justify-center gap-2 px-6 py-4 bg-zinc-100 text-zinc-900 rounded-2xl font-bold hover:bg-zinc-200 transition-all active:scale-95 whitespace-nowrap"><Upload size={20} /> Import</button>
+            <div className="relative">
+               <input type="file" accept=".csv" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" onChange={handleImport} title="Upload CSV" />
+               <button className="flex items-center justify-center gap-2 px-6 py-4 bg-zinc-100 text-zinc-900 rounded-2xl font-bold hover:bg-zinc-200 transition-all active:scale-95 whitespace-nowrap pointer-events-none"><Upload size={20} /> Import</button>
+            </div>
             <button onClick={() => { resetForm(); setIsModalOpen(true); }} className="flex items-center justify-center gap-2 px-6 py-4 bg-black text-white rounded-2xl font-bold hover:bg-zinc-800 transition-all shadow-xl shadow-black/10 active:scale-95 whitespace-nowrap"><Plus size={20} /> Add</button>
           </div>
         )}
@@ -476,7 +483,7 @@ export function DistributorsModule() {
                   <td className="px-8 py-5">
                     <div className="flex flex-col gap-1">
                       {dist.region && <span className="text-xs font-bold text-zinc-900">{dist.region}</span>}
-                      <div className="flex items-center gap-1.5 text-sm text-zinc-500">
+                      <div className="flex items-center gap-1.5 text-sm text-zinc-500" title={dist.address || ''}>
                         <MapPin size={12} className="shrink-0" />
                         <span className="truncate max-w-[150px]">{dist.city || 'No City'}{dist.state ? `, ${dist.state}` : ''}</span>
                       </div>
@@ -651,11 +658,17 @@ export function DistributorsModule() {
 
                   <div className="bg-white p-6 rounded-[2rem] border border-zinc-100 shadow-sm">
                     <h5 className="text-sm font-bold uppercase tracking-wider text-zinc-900 mb-4 flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-blue-500"></span> Financials & Location</h5>
-                    <div className="grid grid-cols-1 md:grid-cols-4 gap-5">
-                      <div className="space-y-2"><label className="text-xs font-bold uppercase tracking-wider text-zinc-400 ml-1">Budget Limit (₹) *</label><input required type="number" min="0" className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-blue-500 transition-all font-medium" value={formData.approvedValue} onChange={(e) => setFormData({ ...formData, approvedValue: parseFloat(e.target.value) })} /></div>
-                      <div className="space-y-2"><label className="text-xs font-bold uppercase tracking-wider text-zinc-400 ml-1">Region</label><input className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black transition-all" value={formData.region} onChange={(e) => setFormData({ ...formData, region: e.target.value })} placeholder="North" /></div>
-                      <div className="space-y-2"><label className="text-xs font-bold uppercase tracking-wider text-zinc-400 ml-1">City</label><input className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black transition-all" value={formData.city} onChange={(e) => setFormData({ ...formData, city: e.target.value })} /></div>
-                      <div className="space-y-2"><label className="text-xs font-bold uppercase tracking-wider text-zinc-400 ml-1">State</label><input className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black transition-all" value={formData.state} onChange={(e) => setFormData({ ...formData, state: e.target.value })} /></div>
+                    <div className="space-y-4">
+                      <div className="grid grid-cols-1 md:grid-cols-4 gap-5">
+                        <div className="space-y-2"><label className="text-xs font-bold uppercase tracking-wider text-zinc-400 ml-1">Budget Limit (₹) *</label><input required type="number" min="0" className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-blue-500 transition-all font-medium" value={formData.approvedValue} onChange={(e) => setFormData({ ...formData, approvedValue: parseFloat(e.target.value) })} /></div>
+                        <div className="space-y-2"><label className="text-xs font-bold uppercase tracking-wider text-zinc-400 ml-1">Region</label><input className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black transition-all" value={formData.region} onChange={(e) => setFormData({ ...formData, region: e.target.value })} placeholder="North" /></div>
+                        <div className="space-y-2"><label className="text-xs font-bold uppercase tracking-wider text-zinc-400 ml-1">City</label><input className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black transition-all" value={formData.city} onChange={(e) => setFormData({ ...formData, city: e.target.value })} /></div>
+                        <div className="space-y-2"><label className="text-xs font-bold uppercase tracking-wider text-zinc-400 ml-1">State</label><input className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black transition-all" value={formData.state} onChange={(e) => setFormData({ ...formData, state: e.target.value })} /></div>
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 ml-1">Full Address</label>
+                        <textarea className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black transition-all resize-none custom-scrollbar" rows={2} value={formData.address || ''} onChange={(e) => setFormData({ ...formData, address: e.target.value })} placeholder="Complete street address..."></textarea>
+                      </div>
                     </div>
                   </div>
 
