@@ -93,55 +93,28 @@ export default function App() {
 
   // --- ROBUST AUTHENTICATION HANDLER ---
   useEffect(() => {
-    const initAuth = async () => {
-      try {
-        const queryParams = new URLSearchParams(window.location.search);
-        const hashParams = new URLSearchParams(window.location.hash.substring(1));
-        
-        // 1. Check for PKCE Flow
-        const code = queryParams.get('code');
-        if (code) {
-          const { error } = await supabase.auth.exchangeCodeForSession(code);
-          if (error) {
-            setAuthError("This setup link is invalid or has expired. Please request a new one.");
-            setLoading(false);
-            return;
-          }
-          window.history.replaceState({}, document.title, window.location.pathname);
-        }
+    // 1. Immediately catch URL flags if the user clicked an email link
+    const hashParams = new URLSearchParams(window.location.hash.substring(1));
+    const queryParams = new URLSearchParams(window.location.search);
+    if (hashParams.get('type') === 'recovery' || queryParams.get('type') === 'recovery') {
+       setNeedsPasswordSetup(true);
+    }
 
-        // 2. Check for Implicit Flow Errors
-        if (hashParams.get('error')) {
-          setAuthError(hashParams.get('error_description')?.replace(/\+/g, ' ') || 'Authentication error.');
-          setLoading(false);
-          window.history.replaceState({}, document.title, window.location.pathname);
-          return;
-        }
-
-        // 3. Normal Session Check
-        const { data: { session } } = await supabase.auth.getSession();
-        setUser(session?.user ?? null);
-        
-        if (session?.user) {
-          if (hashParams.get('type') === 'recovery' || queryParams.get('type') === 'recovery') {
-             setNeedsPasswordSetup(true);
-          }
-          fetchProfile(session.user.id);
-        } else {
-          setLoading(false);
-        }
-      } catch (err) {
-        console.error("Auth Init Error:", err);
+    // 2. Fetch Initial Session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user ?? null);
+      if (session?.user) {
+        fetchProfile(session.user.id);
+      } else {
         setLoading(false);
       }
-    };
+    });
 
-    initAuth();
-
-    // 4. Live Auth Listener
+    // 3. Listen for Background Authentication Events (Like the secure code exchanging itself)
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       setUser(session?.user ?? null);
       
+      // If Supabase natively detects a password reset link was used
       if (event === 'PASSWORD_RECOVERY') {
          setNeedsPasswordSetup(true);
       }
@@ -163,7 +136,6 @@ export default function App() {
     
     const isPrivileged = ['superadmin', 'admin', 'ho'].includes(profile.role);
 
-    // 1. Fetch Global Activity
     const fetchLogs = async () => {
       if (!isPrivileged) return;
       const { data } = await supabase.from('activityLogs').select('*').order('timestamp', { ascending: false }).limit(100);
@@ -178,7 +150,6 @@ export default function App() {
     
     if (isPrivileged) fetchLogs();
 
-    // 2. Fetch Personal Notifications
     const fetchNotifications = async () => {
       const { data } = await supabase.from('notifications').select('*').eq('recipient_id', user.id).order('created_at', { ascending: false }).limit(50);
       if (data) {
@@ -284,6 +255,7 @@ export default function App() {
         return;
       }
       
+      // Secondary check: Database flag
       if (data.active === true && data.password_setup_required === true) {
          setNeedsPasswordSetup(true);
       }
@@ -336,6 +308,8 @@ export default function App() {
     }
   };
 
+  // --- RENDER PIPELINE ---
+
   if (loading) {
     return (
       <div className="min-h-screen bg-zinc-50 flex items-center justify-center p-4">
@@ -348,7 +322,16 @@ export default function App() {
     );
   }
 
-  // --- LOGIN SCREEN ---
+  // 1. PASSWORD SETUP INTERCEPTION (Must be placed before Login Screen)
+  // If the URL or DB flags a setup, and they have an active session, show this page!
+  if (needsPasswordSetup && user) {
+     return <ForcePasswordSetup user={user} onComplete={() => {
+        setNeedsPasswordSetup(false);
+        fetchProfile(user.id);
+     }} />;
+  }
+
+  // 2. LOGIN SCREEN
   if (!user || !profile) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-zinc-50 to-zinc-100 flex items-center justify-center p-4 sm:p-6 md:p-8 relative overflow-hidden">
@@ -393,10 +376,7 @@ export default function App() {
     );
   }
 
-  if (needsPasswordSetup) {
-     return <ForcePasswordSetup user={user} onComplete={() => setNeedsPasswordSetup(false)} />;
-  }
-
+  // 3. MAIN APPLICATION ROUTING
   const renderModule = () => {
     switch (activeModuleState) {
       case 'dashboard': return <DashboardModule />;
