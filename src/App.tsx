@@ -31,7 +31,6 @@ export function cn(...classes: (string | undefined | null | false)[]) {
   return classes.filter(Boolean).join(' ');
 }
 
-// --- COLOR ENGINE FOR ACTIVITY LOGS ---
 const getLogStyle = (action: string) => {
   const a = action.toLowerCase();
   if (a.includes('scheduled')) return { bg: 'bg-blue-50', border: 'border-blue-200', text: 'text-blue-900', tag: 'bg-blue-100 text-blue-700' };
@@ -78,10 +77,8 @@ export default function App() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [needsPasswordSetup, setNeedsPasswordSetup] = useState(false);
 
-  // --- LOG & NOTIFICATION DRAWER STATE ---
   const [isActivityOpen, setIsActivityOpen] = useState(false);
   const [drawerTab, setDrawerTab] = useState<'alerts' | 'activity'>('alerts');
-  
   const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
   const [notifications, setNotifications] = useState<any[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
@@ -93,32 +90,28 @@ export default function App() {
 
   // --- ROBUST AUTHENTICATION HANDLER ---
   useEffect(() => {
-    // 1. Instantly check if this URL is from an email recovery link
     if (window.location.href.includes('type=recovery')) {
        setNeedsPasswordSetup(true);
     }
 
-    // 2. Fetch Initial Session (Supabase automatically handles the URL secure code here)
     supabase.auth.getSession().then(({ data: { session } }) => {
       setUser(session?.user ?? null);
       if (session?.user) {
-        fetchProfile(session.user.id);
+        fetchProfile(session.user);
       } else {
         setLoading(false);
       }
     });
 
-    // 3. Listen for Background Authentication Events
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       setUser(session?.user ?? null);
       
-      // If Supabase natively detects a password reset link was successfully consumed
       if (event === 'PASSWORD_RECOVERY') {
          setNeedsPasswordSetup(true);
       }
 
       if (session?.user) {
-        fetchProfile(session.user.id);
+        fetchProfile(session.user);
       } else {
         setProfile(null);
         setLoading(false);
@@ -128,7 +121,6 @@ export default function App() {
     return () => subscription.unsubscribe();
   }, []);
 
-  // Fetch Logs & Notifications
   useEffect(() => {
     if (!user || !profile) return;
     
@@ -185,7 +177,6 @@ export default function App() {
     setUnreadCount(prev => Math.max(0, prev - 1));
   };
 
-  // --- FILTER ENGINE ---
   const filteredLogs = useMemo(() => {
     return activityLogs.filter(log => {
       let matchesTime = true;
@@ -235,17 +226,30 @@ export default function App() {
     }
   }, [profile, activeModuleState]); 
 
-  const fetchProfile = async (userId: string) => {
+  // --- THE AUTO-HEALING PROFILE FETCHER ---
+  const fetchProfile = async (authUser: User) => {
     try {
-      const { data, error } = await supabase.from('users').select('*').eq('uid', userId).single();
+      // 1. Try exact UID match (using maybeSingle to prevent ugly PGRST116 crash)
+      let { data } = await supabase.from('users').select('*').eq('uid', authUser.id).maybeSingle();
       
-      if (error) {
-        console.error("Database fetch error:", error);
-        if (error.code === 'PGRST116') {
-          await supabase.auth.signOut();
-          setAuthError("No authorized profile found for this user. (Check Database Permissions)");
+      // 2. AUTO-HEAL: If Supabase issued a fake UID during creation, catch them by email and fix the DB row!
+      if (!data && authUser.email) {
+        const { data: emailMatch } = await supabase.from('users').select('*').eq('email', authUser.email).maybeSingle();
+        
+        if (emailMatch) {
+          console.log("Auto-healing UID mismatch for user:", authUser.email);
+          await supabase.from('users').update({ uid: authUser.id }).eq('email', authUser.email);
+          data = { ...emailMatch, uid: authUser.id }; // Update local state so it proceeds normally
         }
-        throw error;
+      }
+
+      // 3. If STILL no data, they truly don't exist in your table.
+      if (!data) {
+        console.error("No profile found in public.users for:", authUser.email);
+        await supabase.auth.signOut();
+        setAuthError(`Account error. No profile found for ${authUser.email}.`);
+        setLoading(false);
+        return;
       }
       
       if (!data.active) {
@@ -307,6 +311,8 @@ export default function App() {
     }
   };
 
+  // --- RENDER PIPELINE ---
+
   if (loading) {
     return (
       <div className="min-h-screen bg-zinc-50 flex items-center justify-center p-4">
@@ -319,11 +325,11 @@ export default function App() {
     );
   }
 
-  // 1. PASSWORD SETUP INTERCEPTION (Must be placed before Login Screen)
+  // 1. PASSWORD SETUP INTERCEPTION
   if (needsPasswordSetup && user) {
      return <ForcePasswordSetup user={user} onComplete={() => {
         setNeedsPasswordSetup(false);
-        fetchProfile(user.id);
+        fetchProfile(user);
      }} />;
   }
 
