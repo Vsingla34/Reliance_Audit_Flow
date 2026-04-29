@@ -93,14 +93,12 @@ export default function App() {
 
   // --- ROBUST AUTHENTICATION HANDLER ---
   useEffect(() => {
-    // 1. Immediately catch URL flags if the user clicked an email link
-    const hashParams = new URLSearchParams(window.location.hash.substring(1));
-    const queryParams = new URLSearchParams(window.location.search);
-    if (hashParams.get('type') === 'recovery' || queryParams.get('type') === 'recovery') {
+    // 1. Instantly check if this URL is from an email recovery link
+    if (window.location.href.includes('type=recovery')) {
        setNeedsPasswordSetup(true);
     }
 
-    // 2. Fetch Initial Session
+    // 2. Fetch Initial Session (Supabase automatically handles the URL secure code here)
     supabase.auth.getSession().then(({ data: { session } }) => {
       setUser(session?.user ?? null);
       if (session?.user) {
@@ -110,11 +108,11 @@ export default function App() {
       }
     });
 
-    // 3. Listen for Background Authentication Events (Like the secure code exchanging itself)
+    // 3. Listen for Background Authentication Events
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       setUser(session?.user ?? null);
       
-      // If Supabase natively detects a password reset link was used
+      // If Supabase natively detects a password reset link was successfully consumed
       if (event === 'PASSWORD_RECOVERY') {
          setNeedsPasswordSetup(true);
       }
@@ -240,10 +238,12 @@ export default function App() {
   const fetchProfile = async (userId: string) => {
     try {
       const { data, error } = await supabase.from('users').select('*').eq('uid', userId).single();
+      
       if (error) {
+        console.error("Database fetch error:", error);
         if (error.code === 'PGRST116') {
           await supabase.auth.signOut();
-          setAuthError("No authorized profile found for this user.");
+          setAuthError("No authorized profile found for this user. (Check Database Permissions)");
         }
         throw error;
       }
@@ -255,7 +255,6 @@ export default function App() {
         return;
       }
       
-      // Secondary check: Database flag
       if (data.active === true && data.password_setup_required === true) {
          setNeedsPasswordSetup(true);
       }
@@ -308,8 +307,6 @@ export default function App() {
     }
   };
 
-  // --- RENDER PIPELINE ---
-
   if (loading) {
     return (
       <div className="min-h-screen bg-zinc-50 flex items-center justify-center p-4">
@@ -323,7 +320,6 @@ export default function App() {
   }
 
   // 1. PASSWORD SETUP INTERCEPTION (Must be placed before Login Screen)
-  // If the URL or DB flags a setup, and they have an active session, show this page!
   if (needsPasswordSetup && user) {
      return <ForcePasswordSetup user={user} onComplete={() => {
         setNeedsPasswordSetup(false);
