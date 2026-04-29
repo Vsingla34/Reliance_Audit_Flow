@@ -134,8 +134,9 @@ export function UsersModule() {
         if (dbError) throw dbError;
 
         // 5. Fire the Password Generation/Reset Email automatically and explicitly set the live redirect URL
+       // 5. Fire the Password Generation/Reset Email automatically
         const { error: resetError } = await adminAuthClient.auth.resetPasswordForEmail(formData.email!, {
-          redirectTo: `${window.location.origin}/`,
+          redirectTo: 'https://reliance-audit-flow.vercel.app/',
         });
         
         if (resetError) {

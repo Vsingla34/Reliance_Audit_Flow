@@ -2,7 +2,7 @@ import React, { createContext, useContext, useEffect, useState, useMemo } from '
 import { supabase, logActivity } from './supabase';
 import { User } from '@supabase/supabase-js';
 import { UserProfile, ActivityLog } from './types';
-import { LayoutDashboard, Users, Store, CalendarClock, PlaySquare, FileBarChart, LogOut, Menu, X, Database, Bell, Trash2, ShieldAlert, Search, CheckCheck } from 'lucide-react';
+import { LayoutDashboard, Users, Store, CalendarClock, PlaySquare, FileBarChart, LogOut, Menu, X, Database, Bell, Trash2, ShieldAlert, Search, CheckCheck, Loader2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { isToday, isThisWeek, isThisMonth } from 'date-fns';
 
@@ -91,29 +91,79 @@ export default function App() {
 
   const isAdminOrHO = ['superadmin', 'admin', 'ho'].includes(profile?.role || '');
 
+  // --- ROBUST AUTHENTICATION HANDLER ---
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setUser(session?.user ?? null);
-      if (session?.user) fetchProfile(session.user.id);
-      else setLoading(false);
-    });
+    const initAuth = async () => {
+      try {
+        const queryParams = new URLSearchParams(window.location.search);
+        const hashParams = new URLSearchParams(window.location.hash.substring(1));
+        
+        // 1. Check for PKCE Flow
+        const code = queryParams.get('code');
+        if (code) {
+          const { error } = await supabase.auth.exchangeCodeForSession(code);
+          if (error) {
+            setAuthError("This setup link is invalid or has expired. Please request a new one.");
+            setLoading(false);
+            return;
+          }
+          window.history.replaceState({}, document.title, window.location.pathname);
+        }
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+        // 2. Check for Implicit Flow Errors
+        if (hashParams.get('error')) {
+          setAuthError(hashParams.get('error_description')?.replace(/\+/g, ' ') || 'Authentication error.');
+          setLoading(false);
+          window.history.replaceState({}, document.title, window.location.pathname);
+          return;
+        }
+
+        // 3. Normal Session Check
+        const { data: { session } } = await supabase.auth.getSession();
+        setUser(session?.user ?? null);
+        
+        if (session?.user) {
+          if (hashParams.get('type') === 'recovery' || queryParams.get('type') === 'recovery') {
+             setNeedsPasswordSetup(true);
+          }
+          fetchProfile(session.user.id);
+        } else {
+          setLoading(false);
+        }
+      } catch (err) {
+        console.error("Auth Init Error:", err);
+        setLoading(false);
+      }
+    };
+
+    initAuth();
+
+    // 4. Live Auth Listener
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       setUser(session?.user ?? null);
-      if (session?.user) fetchProfile(session.user.id);
-      else { setProfile(null); setLoading(false); }
+      
+      if (event === 'PASSWORD_RECOVERY') {
+         setNeedsPasswordSetup(true);
+      }
+
+      if (session?.user) {
+        fetchProfile(session.user.id);
+      } else {
+        setProfile(null);
+        setLoading(false);
+      }
     });
 
     return () => subscription.unsubscribe();
   }, []);
 
-  // Fetch Logs & Notifications (SECURED)
+  // Fetch Logs & Notifications
   useEffect(() => {
     if (!user || !profile) return;
     
     const isPrivileged = ['superadmin', 'admin', 'ho'].includes(profile.role);
 
-    // 1. Fetch Global Activity (ONLY FOR ADMINS & HO)
+    // 1. Fetch Global Activity
     const fetchLogs = async () => {
       if (!isPrivileged) return;
       const { data } = await supabase.from('activityLogs').select('*').order('timestamp', { ascending: false }).limit(100);
@@ -126,11 +176,9 @@ export default function App() {
       }
     };
     
-    if (isPrivileged) {
-      fetchLogs();
-    }
+    if (isPrivileged) fetchLogs();
 
-    // 2. Fetch Personal Notifications (FOR EVERYONE)
+    // 2. Fetch Personal Notifications
     const fetchNotifications = async () => {
       const { data } = await supabase.from('notifications').select('*').eq('recipient_id', user.id).order('created_at', { ascending: false }).limit(50);
       if (data) {
@@ -238,8 +286,6 @@ export default function App() {
       
       if (data.active === true && data.password_setup_required === true) {
          setNeedsPasswordSetup(true);
-      } else {
-         setNeedsPasswordSetup(false);
       }
 
       setProfile(data as UserProfile);
@@ -302,29 +348,44 @@ export default function App() {
     );
   }
 
+  // --- LOGIN SCREEN ---
   if (!user || !profile) {
     return (
-      <div className="min-h-screen bg-zinc-50 flex items-center justify-center p-4 sm:p-6 md:p-8">
-        <div className="max-w-md w-full bg-white p-6 sm:p-8 rounded-[2rem] sm:rounded-[2.5rem] shadow-2xl border border-zinc-100">
-          <div className="w-14 h-14 sm:w-16 sm:h-16 bg-black rounded-2xl flex items-center justify-center mb-6 sm:mb-8 mx-auto shadow-lg">
-            <ShieldAlert className="text-white" size={28} />
+      <div className="min-h-screen bg-gradient-to-br from-zinc-50 to-zinc-100 flex items-center justify-center p-4 sm:p-6 md:p-8 relative overflow-hidden">
+        <div className="absolute top-0 left-0 w-full h-full overflow-hidden z-0 pointer-events-none">
+          <div className="absolute -top-40 -right-40 w-96 h-96 bg-blue-100 rounded-full blur-3xl opacity-50"></div>
+          <div className="absolute -bottom-40 -left-40 w-96 h-96 bg-indigo-100 rounded-full blur-3xl opacity-50"></div>
+        </div>
+
+        <div className="max-w-[420px] w-full bg-white/80 backdrop-blur-2xl p-8 sm:p-10 rounded-[2rem] sm:rounded-[2.5rem] shadow-2xl border border-white/60 relative z-10">
+          <div className="flex justify-center mb-6">
+            <div className="w-14 h-14 sm:w-16 sm:h-16 bg-black rounded-2xl flex items-center justify-center shadow-lg">
+              <ShieldAlert className="text-white" size={28} />
+            </div>
           </div>
-          <h2 className="text-xl sm:text-2xl font-bold text-center tracking-tight mb-2">Audit Portal Access</h2>
-          <p className="text-center text-zinc-500 mb-6 sm:mb-8 text-xs sm:text-sm">Sign in to your enterprise account.</p>
           
-          {authError && <div className="mb-6 p-4 bg-red-50 text-red-600 text-sm font-bold rounded-xl text-center border border-red-100">{authError}</div>}
+          <div className="text-center mb-8">
+            <h2 className="text-2xl font-bold tracking-tight text-zinc-900">Welcome Back</h2>
+            <p className="text-zinc-500 text-sm mt-2">Sign in to your enterprise auditing portal.</p>
+          </div>
           
-          <form onSubmit={handleLogin} className="space-y-4">
+          {authError && (
+            <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mb-6 p-4 bg-red-50/80 text-red-600 text-sm font-bold rounded-2xl text-center border border-red-100">
+              {authError}
+            </motion.div>
+          )}
+          
+          <form onSubmit={handleLogin} className="space-y-5">
             <div>
-              <label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-400 ml-1">Email Address</label>
-              <input type="email" required className="w-full mt-1 px-4 py-3 sm:py-3.5 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black outline-none transition-all text-sm sm:text-base" value={email} onChange={(e) => setEmail(e.target.value)} />
+              <label className="text-[11px] font-bold uppercase tracking-wider text-zinc-500 ml-2">Email Address</label>
+              <input type="email" required className="w-full mt-1.5 px-5 py-4 bg-white/50 border border-zinc-200 rounded-2xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-sm shadow-sm" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@company.com" />
             </div>
             <div>
-              <label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-400 ml-1">Password</label>
-              <input type="password" required className="w-full mt-1 px-4 py-3 sm:py-3.5 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black outline-none transition-all text-sm sm:text-base" value={password} onChange={(e) => setPassword(e.target.value)} />
+              <label className="text-[11px] font-bold uppercase tracking-wider text-zinc-500 ml-2">Password</label>
+              <input type="password" required className="w-full mt-1.5 px-5 py-4 bg-white/50 border border-zinc-200 rounded-2xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-sm shadow-sm" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" />
             </div>
-            <button type="submit" disabled={isLoggingIn} className="w-full mt-6 py-3.5 sm:py-4 bg-black text-white rounded-xl font-bold hover:bg-zinc-800 transition-all shadow-xl shadow-black/10 active:scale-95 disabled:opacity-70 flex justify-center items-center text-sm sm:text-base">
-              {isLoggingIn ? <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div> : 'Secure Sign In'}
+            <button type="submit" disabled={isLoggingIn} className="w-full mt-8 py-4 bg-gradient-to-r from-blue-700 to-blue-900 text-white rounded-2xl font-bold hover:from-blue-800 hover:to-black transition-all shadow-xl shadow-blue-900/20 active:scale-95 disabled:opacity-70 flex justify-center items-center text-sm sm:text-base">
+              {isLoggingIn ? <Loader2 size={20} className="animate-spin text-white/70" /> : 'Secure Sign In'}
             </button>
           </form>
         </div>
@@ -351,59 +412,63 @@ export default function App() {
 
   return (
     <AuthContext.Provider value={{ user, profile, signOut }}>
-      <div className="min-h-screen bg-[#F8F9FA] flex flex-col w-full overflow-x-hidden">
+      <div className="min-h-screen bg-[#F4F5F7] flex flex-col w-full overflow-x-hidden font-sans">
         
         {/* DESKTOP SIDEBAR */}
-        <aside className="hidden lg:flex flex-col w-72 bg-white border-r border-zinc-200 fixed h-full z-40">
+        <aside className="hidden lg:flex flex-col w-72 bg-white/70 backdrop-blur-3xl border-r border-zinc-200/60 fixed h-full z-40 shadow-[4px_0_24px_rgba(0,0,0,0.02)]">
           <div className="p-8 pb-6 flex items-center gap-3">
             <div className="w-10 h-10 bg-black rounded-xl flex items-center justify-center shadow-lg"><ShieldAlert className="text-white" size={20} /></div>
-            <div><h1 className="font-black text-xl tracking-tight leading-none">Audit<br/><span className="text-zinc-400">Pro</span></h1></div>
+            <div><h1 className="font-black text-xl tracking-tight leading-none">Reliance<br/><span className="text-zinc-400">Audit</span></h1></div>
           </div>
           
           <nav className="flex-1 px-4 space-y-1.5 overflow-y-auto custom-scrollbar mt-4">
-            <div className="px-4 mb-2 text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Main Menu</div>
+            <div className="px-4 mb-3 text-[10px] font-black text-zinc-400 uppercase tracking-widest">Main Menu</div>
             {allowedNavItems.map(item => {
               const Icon = item.icon;
               const isActive = activeModuleState === item.id;
               return (
-                <button key={item.id} onClick={() => setActiveModule(item.id)} className={cn("w-full flex items-center gap-3 px-4 py-3.5 rounded-2xl font-bold text-sm transition-all group relative overflow-hidden", isActive ? "bg-black text-white shadow-md" : "text-zinc-500 hover:bg-zinc-100 hover:text-black")}>
-                  {isActive && <motion.div layoutId="active-nav" className="absolute inset-0 bg-black -z-10" />}
-                  <Icon size={18} className={cn("z-10", isActive ? "text-white" : "text-zinc-400 group-hover:text-black")} />
+                <button key={item.id} onClick={() => setActiveModule(item.id)} className={cn(
+                  "w-full flex items-center gap-3 px-4 py-3.5 rounded-2xl font-bold text-sm transition-all group relative overflow-hidden",
+                  isActive ? "text-blue-700 shadow-sm border border-blue-100" : "text-zinc-500 hover:bg-white hover:text-zinc-900 border border-transparent"
+                )}>
+                  {isActive && <motion.div layoutId="active-nav" className="absolute inset-0 bg-gradient-to-r from-blue-50 to-blue-100/50 -z-10" />}
+                  <Icon size={18} className={cn("z-10 transition-colors", isActive ? "text-blue-600" : "text-zinc-400 group-hover:text-zinc-600")} />
                   <span className="z-10">{item.label}</span>
                 </button>
               );
             })}
           </nav>
 
-          <div className="p-6 border-t border-zinc-100">
-            <div className="bg-zinc-50 p-4 rounded-2xl border border-zinc-200/50 mb-3">
-              <p className="font-bold text-sm truncate">{profile.name}</p>
-              <p className={cn("text-[10px] font-black uppercase tracking-wider mt-0.5 w-fit px-1.5 rounded", profile.role === 'superadmin' ? "bg-purple-100 text-purple-700" : "bg-blue-50 text-blue-600")}>
+          <div className="p-6 border-t border-zinc-200/60 bg-white/50">
+            <div className="bg-white p-4 rounded-2xl border border-zinc-100 shadow-sm mb-3">
+              <p className="font-bold text-sm text-zinc-900 truncate">{profile.name}</p>
+              <p className={cn("text-[9px] font-black uppercase tracking-wider mt-1 w-fit px-1.5 py-0.5 rounded", profile.role === 'superadmin' ? "bg-purple-100 text-purple-700" : "bg-blue-50 text-blue-600")}>
                 {profile.role}
               </p>
             </div>
-            <button onClick={signOut} className="w-full flex items-center gap-2 px-4 py-3 text-red-600 font-bold text-sm rounded-xl hover:bg-red-50 transition-colors"><LogOut size={16} /> Sign Out</button>
+            <button onClick={signOut} className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-white text-zinc-600 hover:text-red-600 hover:bg-red-50 border border-zinc-100 hover:border-red-100 font-bold text-sm rounded-xl transition-all shadow-sm active:scale-95">
+              <LogOut size={16} /> Sign Out
+            </button>
           </div>
         </aside>
 
         {/* MOBILE HEADER */}
-        <div className="lg:hidden fixed top-0 w-full bg-white/90 backdrop-blur-md border-b border-zinc-200 z-40 px-4 py-3 flex items-center justify-between shadow-sm">
+        <div className="lg:hidden fixed top-0 w-full bg-white/80 backdrop-blur-2xl border-b border-zinc-200/60 z-40 px-4 py-3 flex items-center justify-between shadow-sm">
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 bg-black rounded-lg flex items-center justify-center shadow-md"><ShieldAlert className="text-white" size={16} /></div>
-            <span className="font-black text-lg tracking-tight">Audit<span className="text-zinc-400">Pro</span></span>
+            <span className="font-black text-lg tracking-tight">Reliance<span className="text-zinc-400">Audit</span></span>
           </div>
           
           <div className="flex items-center gap-2 sm:gap-3">
-            <button onClick={() => setIsActivityOpen(true)} className="p-2 text-zinc-600 hover:bg-zinc-100 rounded-lg relative">
+            <button onClick={() => setIsActivityOpen(true)} className="p-2 text-zinc-600 hover:bg-white rounded-xl relative shadow-sm border border-transparent hover:border-zinc-200 transition-all">
               <Bell size={20} />
-              {/* MOBILE BELL NOTIFICATION BADGE */}
               {unreadCount > 0 && (
                 <span className="absolute top-1 right-1 w-4 h-4 bg-red-500 rounded-full border-2 border-white flex items-center justify-center text-[9px] font-bold text-white">
                   {unreadCount > 9 ? '9+' : unreadCount}
                 </span>
               )}
             </button>
-            <button onClick={() => setIsMobileMenuOpen(true)} className="p-2 text-black bg-zinc-100 rounded-lg hover:bg-zinc-200 transition-colors"><Menu size={20} /></button>
+            <button onClick={() => setIsMobileMenuOpen(true)} className="p-2 text-zinc-600 hover:bg-white rounded-xl shadow-sm border border-transparent hover:border-zinc-200 transition-all"><Menu size={20} /></button>
           </div>
         </div>
 
@@ -419,17 +484,18 @@ export default function App() {
               <motion.div 
                 initial={{ x: '-100%' }} animate={{ x: 0 }} exit={{ x: '-100%' }} 
                 transition={{ type: 'spring', damping: 25, stiffness: 200 }} 
-                className="fixed top-0 left-0 w-[80%] max-w-[320px] h-full bg-white shadow-2xl z-50 flex flex-col lg:hidden border-r border-zinc-200"
+                className="fixed top-0 left-0 w-[85%] max-w-[340px] h-full bg-white/95 backdrop-blur-3xl shadow-2xl z-50 flex flex-col lg:hidden border-r border-zinc-200/60"
               >
                 <div className="p-6 flex items-center justify-between border-b border-zinc-100">
                   <div className="flex items-center gap-2">
                     <div className="w-8 h-8 bg-black rounded-lg flex items-center justify-center"><ShieldAlert className="text-white" size={16} /></div>
-                    <span className="font-black text-lg tracking-tight">AuditPro</span>
+                    <span className="font-black text-lg tracking-tight">RelianceAudit</span>
                   </div>
-                  <button onClick={() => setIsMobileMenuOpen(false)} className="p-2 bg-zinc-100 text-zinc-600 rounded-lg hover:bg-zinc-200"><X size={20} /></button>
+                  <button onClick={() => setIsMobileMenuOpen(false)} className="p-2 bg-zinc-100 text-zinc-600 rounded-xl hover:bg-zinc-200"><X size={20} /></button>
                 </div>
                 
                 <nav className="flex-1 px-4 py-6 space-y-2 overflow-y-auto custom-scrollbar">
+                  <div className="px-4 mb-3 text-[10px] font-black text-zinc-400 uppercase tracking-widest">Main Menu</div>
                   {allowedNavItems.map(item => {
                     const Icon = item.icon;
                     const isActive = activeModuleState === item.id;
@@ -437,21 +503,24 @@ export default function App() {
                       <button 
                         key={item.id} 
                         onClick={() => { setActiveModule(item.id); setIsMobileMenuOpen(false); }} 
-                        className={cn("w-full flex items-center gap-3 px-4 py-4 rounded-xl font-bold text-sm transition-all", isActive ? "bg-black text-white shadow-md" : "text-zinc-600 hover:bg-zinc-50 hover:text-black")}
+                        className={cn(
+                          "w-full flex items-center gap-3 px-4 py-4 rounded-2xl font-bold text-sm transition-all",
+                          isActive ? "bg-gradient-to-r from-blue-50 to-blue-100/50 text-blue-700 border border-blue-100 shadow-sm" : "text-zinc-500 hover:bg-zinc-50 hover:text-zinc-900 border border-transparent"
+                        )}
                       >
-                        <Icon size={18} className={isActive ? "text-white" : "text-zinc-400"} />
+                        <Icon size={18} className={isActive ? "text-blue-600" : "text-zinc-400"} />
                         {item.label}
                       </button>
                     );
                   })}
                 </nav>
 
-                <div className="p-6 border-t border-zinc-100 bg-zinc-50">
-                  <div className="mb-4">
+                <div className="p-6 border-t border-zinc-100 bg-white/50">
+                  <div className="bg-white p-4 rounded-2xl border border-zinc-100 shadow-sm mb-4">
                     <p className="font-bold text-sm text-zinc-900 truncate">{profile.name}</p>
-                    <p className={cn("text-[10px] font-black uppercase tracking-wider mt-1", profile.role === 'superadmin' ? "text-purple-600" : "text-blue-600")}>{profile.role}</p>
+                    <p className={cn("text-[9px] font-black uppercase tracking-wider mt-1 w-fit px-1.5 py-0.5 rounded", profile.role === 'superadmin' ? "bg-purple-100 text-purple-700" : "bg-blue-50 text-blue-600")}>{profile.role}</p>
                   </div>
-                  <button onClick={signOut} className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-white border border-red-100 text-red-600 font-bold text-sm rounded-xl shadow-sm active:scale-95 transition-all"><LogOut size={16} /> Sign Out</button>
+                  <button onClick={signOut} className="w-full flex items-center justify-center gap-2 px-4 py-3.5 bg-white border border-zinc-200 text-zinc-600 hover:text-red-600 hover:border-red-100 hover:bg-red-50 font-bold text-sm rounded-xl shadow-sm active:scale-95 transition-all"><LogOut size={16} /> Sign Out</button>
                 </div>
               </motion.div>
             </>
@@ -459,30 +528,29 @@ export default function App() {
         </AnimatePresence>
 
         {/* MAIN CONTENT AREA */}
-        <main className="flex-1 lg:pl-72 flex flex-col min-h-screen pt-16 lg:pt-0 w-full relative">
+        <main className="flex-1 lg:pl-72 flex flex-col min-h-screen pt-16 lg:pt-0 w-full relative z-10">
           
-          <header className="hidden lg:flex bg-white/80 backdrop-blur-md border-b border-zinc-200 sticky top-0 z-30 px-8 py-5 items-center justify-between w-full">
+          <header className="hidden lg:flex bg-white/60 backdrop-blur-2xl border-b border-zinc-200/60 sticky top-0 z-30 px-8 py-4 items-center justify-between w-full shadow-[0_4px_24px_rgba(0,0,0,0.02)]">
             <div>
-              <h2 className="text-2xl font-bold tracking-tight capitalize">{activeModuleState.replace('_', ' ')}</h2>
-              <p className="text-sm text-zinc-500 mt-0.5">Manage your audit execution and tracking.</p>
+              <h2 className="text-2xl font-black tracking-tight text-zinc-900 capitalize">{activeModuleState.replace('_', ' ')}</h2>
+              <p className="text-xs font-medium text-zinc-500 mt-1 uppercase tracking-widest">Enterprise Management Portal</p>
             </div>
             <div className="flex items-center gap-4">
               
-              <button onClick={() => setIsActivityOpen(true)} className="relative p-3 bg-zinc-100 hover:bg-zinc-200 text-zinc-700 rounded-full transition-colors" title="Notifications & Activity">
+              <button onClick={() => setIsActivityOpen(true)} className="relative p-3 bg-white border border-zinc-200 hover:border-blue-200 hover:bg-blue-50 text-zinc-600 hover:text-blue-600 rounded-xl transition-all shadow-sm" title="Notifications & Activity">
                 <Bell size={20} />
-                {/* DESKTOP BELL NOTIFICATION BADGE */}
                 {unreadCount > 0 && (
-                  <span className="absolute top-0 right-0 w-5 h-5 bg-red-500 rounded-full border-2 border-white flex items-center justify-center text-[10px] font-bold text-white">
+                  <span className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-red-500 rounded-full border-2 border-white flex items-center justify-center text-[10px] font-bold text-white shadow-sm">
                     {unreadCount > 9 ? '9+' : unreadCount}
                   </span>
                 )}
               </button>
 
-              <div className="flex items-center gap-3 bg-zinc-50 pl-2 pr-4 py-2 rounded-full border border-zinc-200">
-                <div className={cn("w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm shrink-0", profile.role === 'superadmin' ? "bg-purple-100 text-purple-700" : "bg-blue-100 text-blue-700")}>{profile.name.charAt(0)}</div>
+              <div className="flex items-center gap-3 bg-white pl-2 pr-4 py-2 rounded-2xl border border-zinc-200 shadow-sm">
+                <div className={cn("w-9 h-9 rounded-xl flex items-center justify-center font-black text-sm shrink-0", profile.role === 'superadmin' ? "bg-purple-100 text-purple-700" : "bg-blue-100 text-blue-700")}>{profile.name.charAt(0)}</div>
                 <div className="hidden sm:block">
                   <p className="text-sm font-bold text-zinc-900 leading-none truncate max-w-[150px]">{profile.name}</p>
-                  <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider mt-1">{profile.role}</p>
+                  <p className="text-[9px] font-black text-zinc-400 uppercase tracking-widest mt-1">{profile.role}</p>
                 </div>
               </div>
             </div>
@@ -490,7 +558,8 @@ export default function App() {
 
           <div className="flex-1 p-4 sm:p-6 md:p-8 max-w-7xl mx-auto w-full min-w-0">
             <div className="lg:hidden mb-6 mt-2">
-              <h2 className="text-xl font-bold tracking-tight capitalize">{activeModuleState.replace('_', ' ')}</h2>
+              <h2 className="text-2xl font-black tracking-tight text-zinc-900 capitalize">{activeModuleState.replace('_', ' ')}</h2>
+              <p className="text-[10px] font-bold text-zinc-400 mt-1 uppercase tracking-widest">Enterprise Portal</p>
             </div>
             
             {renderModule()}
@@ -510,7 +579,7 @@ export default function App() {
             >
               <div className="p-4 sm:p-6 border-b border-zinc-100 flex items-center justify-between shrink-0 bg-zinc-50">
                 <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 bg-black text-white rounded-xl flex items-center justify-center shadow-md shrink-0"><Bell size={20} /></div>
+                  <div className="w-10 h-10 bg-blue-600 text-white rounded-xl flex items-center justify-center shadow-md shrink-0"><Bell size={20} /></div>
                   <div><h3 className="font-bold text-base sm:text-lg">Notifications</h3><p className="text-[10px] sm:text-xs text-zinc-500">Alerts and System Activity</p></div>
                 </div>
                 <div className="flex items-center gap-2">
@@ -524,7 +593,7 @@ export default function App() {
                   onClick={() => setDrawerTab('alerts')} 
                   className={cn(
                     "pb-3 text-sm font-bold border-b-2 transition-all relative flex items-center justify-center gap-2", 
-                    drawerTab === 'alerts' ? "border-black text-black" : "border-transparent text-zinc-400 hover:text-zinc-600",
+                    drawerTab === 'alerts' ? "border-blue-600 text-blue-700" : "border-transparent text-zinc-400 hover:text-zinc-600",
                     isAdminOrHO ? "flex-1" : "w-full"
                   )}
                 >
@@ -535,7 +604,7 @@ export default function App() {
                 {isAdminOrHO && (
                   <button 
                     onClick={() => setDrawerTab('activity')} 
-                    className={cn("flex-1 pb-3 text-sm font-bold border-b-2 transition-all", drawerTab === 'activity' ? "border-black text-black" : "border-transparent text-zinc-400 hover:text-zinc-600")}
+                    className={cn("flex-1 pb-3 text-sm font-bold border-b-2 transition-all", drawerTab === 'activity' ? "border-blue-600 text-blue-700" : "border-transparent text-zinc-400 hover:text-zinc-600")}
                   >
                     Global Activity
                   </button>
@@ -570,9 +639,9 @@ export default function App() {
                     <div className="p-4 border-b border-zinc-100 space-y-3 bg-white shrink-0">
                       <div className="relative">
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" size={16} />
-                        <input type="text" placeholder="Search logs, distributors, users..." className="w-full pl-9 pr-3 py-2 bg-zinc-50 border border-zinc-200 rounded-lg text-sm focus:ring-2 focus:ring-black outline-none transition-all" value={logSearch} onChange={(e) => setLogSearch(e.target.value)} />
+                        <input type="text" placeholder="Search logs, distributors, users..." className="w-full pl-9 pr-3 py-2 bg-zinc-50 border border-zinc-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all" value={logSearch} onChange={(e) => setLogSearch(e.target.value)} />
                       </div>
-                      <select className="w-full p-2 bg-zinc-50 border border-zinc-200 rounded-lg text-sm font-medium focus:ring-2 focus:ring-black outline-none transition-all cursor-pointer text-zinc-700" value={logTimeFilter} onChange={(e) => setLogTimeFilter(e.target.value as any)}>
+                      <select className="w-full p-2 bg-zinc-50 border border-zinc-200 rounded-lg text-sm font-medium focus:ring-2 focus:ring-blue-500 outline-none transition-all cursor-pointer text-zinc-700" value={logTimeFilter} onChange={(e) => setLogTimeFilter(e.target.value as any)}>
                         <option value="all">All Time</option>
                         <option value="today">Today</option>
                         <option value="week">This Week</option>
