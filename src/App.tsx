@@ -31,6 +31,7 @@ export function cn(...classes: (string | undefined | null | false)[]) {
   return classes.filter(Boolean).join(' ');
 }
 
+// --- COLOR ENGINE FOR ACTIVITY LOGS ---
 const getLogStyle = (action: string) => {
   const a = action.toLowerCase();
   if (a.includes('scheduled')) return { bg: 'bg-blue-50', border: 'border-blue-200', text: 'text-blue-900', tag: 'bg-blue-100 text-blue-700' };
@@ -77,8 +78,10 @@ export default function App() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [needsPasswordSetup, setNeedsPasswordSetup] = useState(false);
 
+  // --- LOG & NOTIFICATION DRAWER STATE ---
   const [isActivityOpen, setIsActivityOpen] = useState(false);
   const [drawerTab, setDrawerTab] = useState<'alerts' | 'activity'>('alerts');
+  
   const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
   const [notifications, setNotifications] = useState<any[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
@@ -90,10 +93,12 @@ export default function App() {
 
   // --- ROBUST AUTHENTICATION HANDLER ---
   useEffect(() => {
+    // 1. Instantly check if this URL is from an email recovery link
     if (window.location.href.includes('type=recovery')) {
        setNeedsPasswordSetup(true);
     }
 
+    // 2. Fetch Initial Session (Supabase automatically handles the URL secure code here)
     supabase.auth.getSession().then(({ data: { session } }) => {
       setUser(session?.user ?? null);
       if (session?.user) {
@@ -103,9 +108,11 @@ export default function App() {
       }
     });
 
+    // 3. Listen for Background Authentication Events
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       setUser(session?.user ?? null);
       
+      // If Supabase natively detects a password reset link was successfully consumed
       if (event === 'PASSWORD_RECOVERY') {
          setNeedsPasswordSetup(true);
       }
@@ -121,6 +128,7 @@ export default function App() {
     return () => subscription.unsubscribe();
   }, []);
 
+  // Fetch Logs & Notifications
   useEffect(() => {
     if (!user || !profile) return;
     
@@ -177,6 +185,7 @@ export default function App() {
     setUnreadCount(prev => Math.max(0, prev - 1));
   };
 
+  // --- FILTER ENGINE ---
   const filteredLogs = useMemo(() => {
     return activityLogs.filter(log => {
       let matchesTime = true;
@@ -510,7 +519,8 @@ export default function App() {
         </AnimatePresence>
 
         {/* MAIN CONTENT AREA */}
-        <main className="flex-1 lg:pl-72 flex flex-col min-h-screen pt-16 lg:pt-0 w-full relative z-10">
+        {/* CHANGED FROM "relative z-10" to just "w-full" to fix Stacking Context Overlap Bug! */}
+        <main className="flex-1 lg:pl-72 flex flex-col min-h-screen pt-16 lg:pt-0 w-full">
           
           <header className="hidden lg:flex bg-white/60 backdrop-blur-2xl border-b border-zinc-200/60 sticky top-0 z-30 px-8 py-4 items-center justify-between w-full shadow-[0_4px_24px_rgba(0,0,0,0.02)]">
             <div>

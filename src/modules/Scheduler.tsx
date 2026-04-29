@@ -1,10 +1,18 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { supabase, logActivity, notifyLinkedUsers } from '../supabase'; // NEW: Added notifyLinkedUsers
+import { supabase, logActivity, notifyLinkedUsers } from '../supabase';
 import { AuditTicket, Distributor, UserProfile, DateProposal } from '../types';
 import { Calendar as CalendarIcon, Plus, Store, MapPin, CheckCircle2, X, Send, AlertCircle, MessageSquare, Filter, Trash2, CalendarCheck, ChevronLeft, ChevronRight, Clock, Edit2, Search } from 'lucide-react';
 import { cn, useAuth } from '../App';
 import { motion, AnimatePresence } from 'motion/react';
 import { format, startOfMonth, endOfMonth, eachDayOfInterval, addMonths, subMonths, isToday } from 'date-fns';
+
+// --- AUTO AUDIT DAYS CALCULATOR ---
+const calculateAuditDays = (approvedValue: number) => {
+  if (!approvedValue) return 1;
+  if (approvedValue <= 150000) return 1;
+  if (approvedValue <= 300000) return 2;
+  return Math.ceil(approvedValue / 150000); // Scales infinitely (e.g. 4.5L = 3 days)
+};
 
 export function SchedulerModule() {
   const { user, profile } = useAuth();
@@ -26,16 +34,15 @@ export function SchedulerModule() {
   const [isHeaderSearchOpen, setIsHeaderSearchOpen] = useState(false);
 
   const [editingActiveTicket, setEditingActiveTicket] = useState<AuditTicket | null>(null);
-  const [editTicketData, setEditTicketData] = useState({ scheduledDate: '', auditorIds: [] as string[], auditDays: 1 });
+  const [editTicketData, setEditTicketData] = useState({ scheduledDate: '', auditorIds: [] as string[] });
 
   const [pendingTab, setPendingTab] = useState<'action' | 'waiting'>('action');
   const [pendingFilterAse, setPendingFilterAse] = useState<string>('all');
 
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [createAseId, setCreateAseId] = useState('');
-  const [createData, setCreateData] = useState({ distributorId: '', proposedDate: '', auditDays: 1 });
+  const [createData, setCreateData] = useState({ distributorId: '', proposedDate: '' });
   
-  const [approvalAuditDays, setApprovalAuditDays] = useState(1);
   const [auditorSearch, setAuditorSearch] = useState('');
 
   const isAdminOrHO = ['superadmin', 'admin', 'ho'].includes(profile?.role || '');
@@ -149,13 +156,15 @@ export function SchedulerModule() {
       const dist = distMap[createData.distributorId];
       if (!dist) return;
 
+      // Auto-calculate the required days based on value
+      const autoAuditDays = calculateAuditDays(dist.approvedValue);
       const existingTicket = tickets.find(t => t.distributorId === createData.distributorId && t.status === 'tentative');
 
       if (existingTicket) {
         await supabase.from('auditTickets').update({
           proposedDate: createData.proposedDate,
           scheduledDate: createData.proposedDate,
-          auditDays: createData.auditDays,
+          auditDays: autoAuditDays,
           status: 'scheduled',
           updatedAt: new Date().toISOString()
         }).eq('id', existingTicket.id);
@@ -165,7 +174,7 @@ export function SchedulerModule() {
           distributorId: createData.distributorId,
           proposedDate: createData.proposedDate,
           auditorIds: [], 
-          auditDays: createData.auditDays,
+          auditDays: autoAuditDays,
           approvedValue: dist.approvedValue,
           maxAllowedValue: dist.approvedValue * 1.05,
           status: 'scheduled', 
@@ -181,13 +190,11 @@ export function SchedulerModule() {
         await supabase.from('auditTickets').insert([newTicket]);
       }
 
-      logActivity(user, profile, "Audit Scheduled", `${profile?.role.toUpperCase()} scheduled audit for ${dist?.name} on ${createData.proposedDate}`);
-      
-      // 💥 NEW: Send Personal Notification
+      logActivity(user, profile, "Audit Scheduled", `${profile?.role.toUpperCase()} scheduled audit for ${dist?.name} on ${createData.proposedDate} (${autoAuditDays} Days)`);
       notifyLinkedUsers(createData.distributorId, "Audit Scheduled", `An audit has been scheduled for ${dist?.name} on ${createData.proposedDate}.`);
 
       setIsCreateModalOpen(false);
-      setCreateData({ distributorId: '', proposedDate: '', auditDays: 1 });
+      setCreateData({ distributorId: '', proposedDate: '' });
       setCreateAseId('');
     } catch (error) { console.error("Error creating audit ticket:", error); }
   };
@@ -197,18 +204,18 @@ export function SchedulerModule() {
     if (!editingActiveTicket) return;
 
     try {
+      const dist = distMap[editingActiveTicket.distributorId];
+      const autoAuditDays = calculateAuditDays(dist?.approvedValue || 0);
+
       await supabase.from('auditTickets').update({
         scheduledDate: editTicketData.scheduledDate,
         proposedDate: editTicketData.scheduledDate,
         auditorIds: editTicketData.auditorIds,
-        auditDays: editTicketData.auditDays,
+        auditDays: autoAuditDays,
         updatedAt: new Date().toISOString()
       }).eq('id', editingActiveTicket.id);
 
-      const dist = distMap[editingActiveTicket.distributorId];
       logActivity(user, profile, "Audit Re-scheduled/Assigned", `${profile?.role.toUpperCase()} modified the schedule/auditors for ${dist?.name}`);
-
-      // 💥 NEW: Send Personal Notification
       notifyLinkedUsers(editingActiveTicket.distributorId, "Schedule Updated", `The audit schedule and/or auditors for ${dist?.name} have been updated.`);
 
       setEditingActiveTicket(null);
@@ -237,15 +244,13 @@ export function SchedulerModule() {
       } else {
         const dist = distMap[negDistId];
         const newTicket: Partial<AuditTicket> = {
-          id: Math.random().toString(36).substring(7), distributorId: negDistId, proposedDate: null, auditorIds: [], auditDays: 1, approvedValue: dist.approvedValue, maxAllowedValue: dist.approvedValue * 1.05, status: 'tentative', scheduledDate: null, verifiedTotal: 0, presenceLogs: [], signOffs: {}, media: [], dateProposals: [newProposal], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
+          id: Math.random().toString(36).substring(7), distributorId: negDistId, proposedDate: null, auditorIds: [], auditDays: calculateAuditDays(dist.approvedValue), approvedValue: dist.approvedValue, maxAllowedValue: dist.approvedValue * 1.05, status: 'tentative', scheduledDate: null, verifiedTotal: 0, presenceLogs: [], signOffs: {}, media: [], dateProposals: [newProposal], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
         };
         await supabase.from('auditTickets').insert([newTicket]);
         logActivity(user, profile, "Date Requested", `Admin requested a date proposal from ASE for ${dist?.name}`);
       }
 
-      // 💥 NEW: Send Personal Notification
       notifyLinkedUsers(negDistId, "Date Requested", `Admin requested a date proposal for ${distMap[negDistId]?.name}.`);
-
       setProposalData({ date: '', remarks: '' });
     } catch (error) { console.error("Error requesting date:", error); }
   };
@@ -315,13 +320,12 @@ export function SchedulerModule() {
       } else {
         const dist = distMap[finalTargetDistId];
         const newTicket: Partial<AuditTicket> = {
-          id: Math.random().toString(36).substring(7), distributorId: finalTargetDistId, proposedDate: proposalData.date || null, auditorIds: [], auditDays: 1, approvedValue: dist.approvedValue, maxAllowedValue: dist.approvedValue * 1.05, status: 'tentative', scheduledDate: null, verifiedTotal: 0, presenceLogs: [], signOffs: {}, media: [], dateProposals: [newProposal], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
+          id: Math.random().toString(36).substring(7), distributorId: finalTargetDistId, proposedDate: proposalData.date || null, auditorIds: [], auditDays: calculateAuditDays(dist.approvedValue), approvedValue: dist.approvedValue, maxAllowedValue: dist.approvedValue * 1.05, status: 'tentative', scheduledDate: null, verifiedTotal: 0, presenceLogs: [], signOffs: {}, media: [], dateProposals: [newProposal], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
         };
         await supabase.from('auditTickets').insert([newTicket]);
         logActivity(user, profile, "Date Proposed", `${profile?.role.toUpperCase()} initiated a date proposal for ${dist?.name}`);
       }
 
-      // 💥 NEW: Send Personal Notification
       notifyLinkedUsers(finalTargetDistId, "New Message / Proposal", `${profile.name} has submitted a new date proposal or message for ${distMap[finalTargetDistId]?.name}.`);
 
       setProposalData({ date: '', remarks: '' });
@@ -360,8 +364,6 @@ export function SchedulerModule() {
       
       const dist = distMap[currentNegTicket.distributorId];
       logActivity(user, profile, "Audit Cancelled", `ASE cancelled the audit for ${dist?.name} past 12 PM on execution day. Reason: "${cancelReason}"`);
-
-      // 💥 NEW: Send Personal Notification
       notifyLinkedUsers(currentNegTicket.distributorId, "Audit Cancelled", `The audit for ${dist?.name} was cancelled late by ${profile.name}. Reason: "${cancelReason}"`);
 
       setIsNegotiationModalOpen(false);
@@ -376,16 +378,21 @@ export function SchedulerModule() {
   const approveAndSchedule = async (proposalDate: string) => {
     if (!currentNegTicket) return;
     try {
-      await supabase.from('auditTickets').update({ status: 'scheduled', scheduledDate: proposalDate, auditDays: approvalAuditDays, updatedAt: new Date().toISOString() }).eq('id', currentNegTicket.id);
       const dist = distMap[currentNegTicket.distributorId];
-      logActivity(user, profile, "Date Approved", `${profile?.role.toUpperCase()} approved date proposal for ${dist?.name} on ${proposalDate}`);
+      const autoAuditDays = calculateAuditDays(dist?.approvedValue || 0);
+
+      await supabase.from('auditTickets').update({ 
+        status: 'scheduled', 
+        scheduledDate: proposalDate, 
+        auditDays: autoAuditDays, 
+        updatedAt: new Date().toISOString() 
+      }).eq('id', currentNegTicket.id);
       
-      // 💥 NEW: Send Personal Notification
+      logActivity(user, profile, "Date Approved", `${profile?.role.toUpperCase()} approved date proposal for ${dist?.name} on ${proposalDate}`);
       notifyLinkedUsers(currentNegTicket.distributorId, "Schedule Approved", `The audit schedule for ${dist?.name} has been approved for ${proposalDate}.`);
 
       setIsNegotiationModalOpen(false);
       setNegDistId('');
-      setApprovalAuditDays(1);
     } catch (error) { console.error("Error approving schedule:", error); }
   };
 
@@ -610,7 +617,7 @@ export function SchedulerModule() {
                               } else if (ticket.status === 'scheduled') {
                                 if (isAdminOrHO) {
                                   setEditingActiveTicket(ticket);
-                                  setEditTicketData({ scheduledDate: ticket.scheduledDate || '', auditorIds: ticket.auditorIds || [], auditDays: ticket.auditDays || 1 });
+                                  setEditTicketData({ scheduledDate: ticket.scheduledDate || '', auditorIds: ticket.auditorIds || [] });
                                 } else if (profile?.role === 'ase') {
                                   openNegotiationModal(ticket.distributorId);
                                 }
@@ -656,17 +663,9 @@ export function SchedulerModule() {
               </div>
               <div className="overflow-y-auto custom-scrollbar flex-1 pr-2">
                 <form id="edit-ticket-form" onSubmit={handleEditActiveTicketSubmit} className="space-y-4">
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-                    <div>
-                      <label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-400">Start Date</label>
-                      <input required type="date" className="w-full mt-1 px-3 sm:px-4 py-2.5 sm:py-3 bg-zinc-50 border border-zinc-200 sm:border-none rounded-xl focus:ring-2 focus:ring-black transition-all cursor-pointer text-sm" value={editTicketData.scheduledDate} onChange={e => setEditTicketData({...editTicketData, scheduledDate: e.target.value})} />
-                    </div>
-                    <div>
-                      <label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-400">Duration</label>
-                      <select required className="w-full mt-1 px-3 sm:px-4 py-2.5 sm:py-3 bg-zinc-50 border border-zinc-200 sm:border-none rounded-xl focus:ring-2 focus:ring-black transition-all cursor-pointer text-sm" value={editTicketData.auditDays} onChange={e => setEditTicketData({...editTicketData, auditDays: parseInt(e.target.value)})}>
-                        {[1,2,3,4,5].map(n => <option key={n} value={n}>{n} Day{n>1?'s':''}</option>)}
-                      </select>
-                    </div>
+                  <div>
+                    <label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-400">Start Date</label>
+                    <input required type="date" className="w-full mt-1 px-3 sm:px-4 py-2.5 sm:py-3 bg-zinc-50 border border-zinc-200 sm:border-none rounded-xl focus:ring-2 focus:ring-black transition-all cursor-pointer text-sm" value={editTicketData.scheduledDate} onChange={e => setEditTicketData({...editTicketData, scheduledDate: e.target.value})} />
                   </div>
 
                   <div>
@@ -787,9 +786,6 @@ export function SchedulerModule() {
                         {isAdminOrHO && prop.date && currentNegTicket.status === 'tentative' && (
                           <div className="pt-3 mt-2 border-t border-zinc-100 flex flex-col gap-2">
                             <div className="flex flex-col sm:flex-row sm:items-center gap-2">
-                              <select className="w-full sm:w-28 text-xs p-2 rounded-lg bg-white border border-zinc-200 focus:ring-2 focus:ring-black cursor-pointer" value={approvalAuditDays} onChange={(e) => setApprovalAuditDays(parseInt(e.target.value))}>
-                                {[1,2,3,4,5].map(n => <option key={n} value={n}>{n} Day{n>1?'s':''}</option>)}
-                              </select>
                               <button onClick={() => approveAndSchedule(prop.date)} type="button" className="w-full sm:w-auto flex justify-center items-center gap-1.5 px-4 py-2 bg-emerald-500 text-white text-xs font-bold rounded-lg hover:bg-emerald-600 transition-colors">
                                 <CheckCircle2 size={14} /> Approve Schedule
                               </button>
@@ -802,7 +798,7 @@ export function SchedulerModule() {
                 )}
               </div>
 
-              {/* Form is only shown to ASEs, OR to Admins if the ticket already has history. If it's a blank ticket, Admin uses the big button above. */}
+              {/* Form is only shown to ASEs, OR to Admins if the ticket already has history. */}
               {(!isAdminOrHO || (isAdminOrHO && currentNegTicket)) && (
                 <div className="p-4 sm:p-5 md:p-6 bg-white border-t border-zinc-100 shrink-0">
                   <form onSubmit={submitProposal} className="space-y-3">
@@ -876,17 +872,9 @@ export function SchedulerModule() {
                     </select>
                   </div>
                   
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-                    <div>
-                      <label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-400">Start Date</label>
-                      <input required type="date" min={new Date().toISOString().split('T')[0]} className="w-full mt-1 px-3 sm:px-4 py-2.5 sm:py-3 bg-zinc-50 border border-zinc-200 sm:border-none rounded-xl focus:ring-2 focus:ring-black transition-all cursor-pointer text-sm" value={createData.proposedDate} onChange={e => setCreateData({...createData, proposedDate: e.target.value})} />
-                    </div>
-                    <div>
-                      <label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-400">Duration</label>
-                      <select required className="w-full mt-1 px-3 sm:px-4 py-2.5 sm:py-3 bg-zinc-50 border border-zinc-200 sm:border-none rounded-xl focus:ring-2 focus:ring-black transition-all cursor-pointer text-sm" value={createData.auditDays} onChange={e => setCreateData({...createData, auditDays: parseInt(e.target.value)})}>
-                        {[1,2,3,4,5].map(n => <option key={n} value={n}>{n} Day{n>1?'s':''}</option>)}
-                      </select>
-                    </div>
+                  <div>
+                    <label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-400">Start Date</label>
+                    <input required type="date" min={new Date().toISOString().split('T')[0]} className="w-full mt-1 px-3 sm:px-4 py-2.5 sm:py-3 bg-zinc-50 border border-zinc-200 sm:border-none rounded-xl focus:ring-2 focus:ring-black transition-all cursor-pointer text-sm" value={createData.proposedDate} onChange={e => setCreateData({...createData, proposedDate: e.target.value})} />
                   </div>
                 </form>
               </div>
@@ -894,10 +882,12 @@ export function SchedulerModule() {
               <div className="p-5 sm:p-6 border-t border-zinc-100 shrink-0">
                 <button type="submit" form="force-schedule-form" className="w-full py-3 sm:py-4 bg-black text-white rounded-xl sm:rounded-2xl font-bold hover:bg-zinc-800 transition-all shadow-md sm:shadow-xl sm:shadow-black/10 active:scale-95 text-sm sm:text-base">Schedule Audit</button>
               </div>
+
             </motion.div>
           </div>
         )}
       </AnimatePresence>
+
     </div>
   );
 }
