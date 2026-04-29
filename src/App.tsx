@@ -89,6 +89,8 @@ export default function App() {
   const [logSearch, setLogSearch] = useState('');
   const [logTimeFilter, setLogTimeFilter] = useState<'all' | 'today' | 'week' | 'month'>('all');
 
+  const isAdminOrHO = ['superadmin', 'admin', 'ho'].includes(profile?.role || '');
+
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setUser(session?.user ?? null);
@@ -105,12 +107,15 @@ export default function App() {
     return () => subscription.unsubscribe();
   }, []);
 
-  // Fetch Logs & Notifications
+  // Fetch Logs & Notifications (SECURED)
   useEffect(() => {
-    if (!user) return;
+    if (!user || !profile) return;
     
-    // 1. Fetch Global Activity
+    const isPrivileged = ['superadmin', 'admin', 'ho'].includes(profile.role);
+
+    // 1. Fetch Global Activity (ONLY FOR ADMINS & HO)
     const fetchLogs = async () => {
+      if (!isPrivileged) return;
       const { data } = await supabase.from('activityLogs').select('*').order('timestamp', { ascending: false }).limit(100);
       if (data) {
         const filteredLogs = (data as ActivityLog[]).filter(log => 
@@ -120,9 +125,12 @@ export default function App() {
         setActivityLogs(filteredLogs);
       }
     };
-    fetchLogs();
+    
+    if (isPrivileged) {
+      fetchLogs();
+    }
 
-    // 2. Fetch Personal Notifications
+    // 2. Fetch Personal Notifications (FOR EVERYONE)
     const fetchNotifications = async () => {
       const { data } = await supabase.from('notifications').select('*').eq('recipient_id', user.id).order('created_at', { ascending: false }).limit(50);
       if (data) {
@@ -132,14 +140,20 @@ export default function App() {
     };
     fetchNotifications();
 
-    const channel1 = supabase.channel('global-activity')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'activityLogs' }, fetchLogs).subscribe();
+    let channel1: any;
+    if (isPrivileged) {
+      channel1 = supabase.channel('global-activity')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'activityLogs' }, fetchLogs).subscribe();
+    }
 
     const channel2 = supabase.channel('personal-notifications')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications', filter: `recipient_id=eq.${user.id}` }, fetchNotifications).subscribe();
 
-    return () => { supabase.removeChannel(channel1); supabase.removeChannel(channel2); };
-  }, [user]);
+    return () => { 
+      if (channel1) supabase.removeChannel(channel1); 
+      supabase.removeChannel(channel2); 
+    };
+  }, [user, profile]);
 
   const markAllAsRead = async () => {
     if (!user) return;
@@ -504,21 +518,28 @@ export default function App() {
                 </div>
               </div>
 
-              {/* TABS */}
+              {/* TABS (DYNAMIC) */}
               <div className="flex px-4 pt-4 border-b border-zinc-100 shrink-0">
                 <button 
                   onClick={() => setDrawerTab('alerts')} 
-                  className={cn("flex-1 pb-3 text-sm font-bold border-b-2 transition-all relative flex items-center justify-center gap-2", drawerTab === 'alerts' ? "border-black text-black" : "border-transparent text-zinc-400 hover:text-zinc-600")}
+                  className={cn(
+                    "pb-3 text-sm font-bold border-b-2 transition-all relative flex items-center justify-center gap-2", 
+                    drawerTab === 'alerts' ? "border-black text-black" : "border-transparent text-zinc-400 hover:text-zinc-600",
+                    isAdminOrHO ? "flex-1" : "w-full"
+                  )}
                 >
-                  My Alerts
+                  {isAdminOrHO ? 'My Alerts' : 'My Activity & Alerts'}
                   {unreadCount > 0 && <span className="px-1.5 py-0.5 bg-red-500 text-white rounded-full text-[9px]">{unreadCount}</span>}
                 </button>
-                <button 
-                  onClick={() => setDrawerTab('activity')} 
-                  className={cn("flex-1 pb-3 text-sm font-bold border-b-2 transition-all", drawerTab === 'activity' ? "border-black text-black" : "border-transparent text-zinc-400 hover:text-zinc-600")}
-                >
-                  Global Activity
-                </button>
+                
+                {isAdminOrHO && (
+                  <button 
+                    onClick={() => setDrawerTab('activity')} 
+                    className={cn("flex-1 pb-3 text-sm font-bold border-b-2 transition-all", drawerTab === 'activity' ? "border-black text-black" : "border-transparent text-zinc-400 hover:text-zinc-600")}
+                  >
+                    Global Activity
+                  </button>
+                )}
               </div>
 
               <div className="flex-1 overflow-y-auto custom-scrollbar bg-zinc-50/50 flex flex-col">

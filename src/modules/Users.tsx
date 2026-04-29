@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { supabase, logActivity } from '../supabase';
 import { UserProfile } from '../types';
-import { Plus, Search, Edit2, Trash2, X, Shield, Mail, MapPin, User as UserIcon, Filter, CheckCircle2, Lock } from 'lucide-react';
+import { Plus, Search, Edit2, Trash2, X, Shield, Mail, MapPin, User as UserIcon, Filter, CheckCircle2, Lock, Phone, Loader2 } from 'lucide-react';
 import { cn, useAuth } from '../App';
 import { motion, AnimatePresence } from 'motion/react';
+import { createClient } from '@supabase/supabase-js';
 
 export function UsersModule() {
   const { profile, user } = useAuth();
@@ -13,9 +14,10 @@ export function UsersModule() {
   
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<UserProfile | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   
   const [formData, setFormData] = useState<Partial<UserProfile>>({
-    name: '', email: '', role: 'auditor', region: '', active: true
+    name: '', email: '', phone: '', role: 'auditor', region: '', active: true
   });
 
   const isMeSuperadmin = profile?.role === 'superadmin';
@@ -48,6 +50,7 @@ export function UsersModule() {
   const filteredUsers = usersList.filter(u => {
     const matchesSearch = u.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
                           u.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                          (u.phone?.toLowerCase() || '').includes(searchTerm.toLowerCase()) ||
                           (u.region?.toLowerCase() || '').includes(searchTerm.toLowerCase());
     const matchesRole = filterRole === 'all' || u.role === filterRole;
     return matchesSearch && matchesRole;
@@ -55,7 +58,7 @@ export function UsersModule() {
 
   const openAddModal = () => {
     setEditingUser(null);
-    setFormData({ name: '', email: '', role: 'auditor', region: '', active: true });
+    setFormData({ name: '', email: '', phone: '', role: 'auditor', region: '', active: true });
     setIsModalOpen(true);
   };
 
@@ -80,26 +83,76 @@ export function UsersModule() {
     e.preventDefault();
     if (!canManageUsers) return;
 
-    // Security check: Prevent Admin from accidentally forcing a superadmin save
     if (isMeAdmin && formData.role === 'superadmin') {
       return alert("Action Denied: You do not have permission to assign the Super Admin role.");
     }
 
+    setIsSubmitting(true);
+
     try {
       if (editingUser) {
+        // UPDATE EXISTING USER
         const { error } = await supabase.from('users').update(formData).eq('uid', editingUser.uid);
         if (error) throw error;
         logActivity(user, profile, "User Updated", `Updated details/role for ${formData.name}`);
+        
+        setIsModalOpen(false);
+        fetchData();
+        
       } else {
-        const newUid = Math.random().toString(36).substring(7);
-        const { error } = await supabase.from('users').insert([{ ...formData, uid: newUid }]);
-        if (error) throw error;
+        // CREATE NEW USER + SEND PASSWORD EMAIL
+        
+        // 1. Create a secondary Supabase client that DOES NOT save the session. 
+        // This prevents the Admin from being logged out when creating a new user.
+        const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+        const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+        const adminAuthClient = createClient(supabaseUrl, supabaseKey, { 
+          auth: { persistSession: false, autoRefreshToken: false } 
+        });
+        
+        // 2. Generate a secure, random temporary password just to fulfill Supabase requirements
+        const tempPassword = Math.random().toString(36).slice(-10) + 'A1!@';
+        
+        // 3. Register the user in Supabase Auth
+        const { data: authData, error: authError } = await adminAuthClient.auth.signUp({
+          email: formData.email!,
+          password: tempPassword,
+        });
+        
+        if (authError) throw authError;
+        
+        const newUid = authData.user?.id;
+        if (!newUid) throw new Error("Failed to generate user ID from Authentication service.");
+
+        // 4. Insert the new profile into the public users table
+        const { error: dbError } = await supabase.from('users').insert([{ 
+          ...formData, 
+          uid: newUid,
+          password_setup_required: true 
+        }]);
+        
+        if (dbError) throw dbError;
+
+        // 5. Fire the Password Generation/Reset Email automatically and explicitly set the live redirect URL
+        const { error: resetError } = await adminAuthClient.auth.resetPasswordForEmail(formData.email!, {
+          redirectTo: `${window.location.origin}/`,
+        });
+        
+        if (resetError) {
+          console.error("Failed to trigger password email:", resetError);
+          alert("User was created successfully, but the password generation email failed to send. Please check your Supabase email settings.");
+        } else {
+          alert(`Success! An email has been sent to ${formData.email} for password generation.`);
+        }
+
         logActivity(user, profile, "User Added", `Created new user account for ${formData.name} as ${formData.role.toUpperCase()}`);
+        setIsModalOpen(false);
+        fetchData();
       }
-      setIsModalOpen(false);
-      fetchData();
     } catch (error: any) {
       alert(`Failed to save user: ${error.message}`);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -122,7 +175,7 @@ export function UsersModule() {
         <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 flex-1">
           <div className="relative flex-1 max-w-md group">
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-400 group-focus-within:text-black transition-colors" size={18} />
-            <input type="text" placeholder="Search users by name, email..." className="w-full pl-11 pr-4 py-3 sm:py-3.5 bg-white border border-zinc-200 rounded-xl sm:rounded-2xl focus:ring-2 focus:ring-black outline-none transition-all shadow-sm text-sm" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
+            <input type="text" placeholder="Search users by name, email, or phone..." className="w-full pl-11 pr-4 py-3 sm:py-3.5 bg-white border border-zinc-200 rounded-xl sm:rounded-2xl focus:ring-2 focus:ring-black outline-none transition-all shadow-sm text-sm" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
           </div>
 
           <div className="relative group min-w-[160px]">
@@ -157,7 +210,6 @@ export function UsersModule() {
             <tbody className="divide-y divide-zinc-100">
               {filteredUsers.map(u => {
                 const isTargetSuperadmin = u.role === 'superadmin';
-                // Only superadmins can manage other superadmins. Admins can manage anyone else.
                 const canEditThisUser = isMeSuperadmin || (isMeAdmin && !isTargetSuperadmin);
 
                 return (
@@ -170,6 +222,7 @@ export function UsersModule() {
                         <div>
                           <p className="font-bold text-zinc-900 text-sm">{u.name}</p>
                           <p className="text-xs text-zinc-500 flex items-center gap-1 mt-0.5"><Mail size={12}/> {u.email}</p>
+                          {u.phone && <p className="text-xs text-zinc-500 flex items-center gap-1 mt-0.5"><Phone size={12}/> {u.phone}</p>}
                         </div>
                       </div>
                     </td>
@@ -227,7 +280,7 @@ export function UsersModule() {
       <AnimatePresence>
         {isModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6">
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsModalOpen(false)} className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => !isSubmitting && setIsModalOpen(false)} className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
             <motion.div initial={{ opacity: 0, scale: 0.9, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9, y: 20 }} className="relative w-full max-w-lg bg-white rounded-[1.5rem] sm:rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
               
               <div className="p-5 sm:p-6 md:p-8 border-b border-zinc-100 flex items-center justify-between shrink-0 bg-white">
@@ -238,7 +291,7 @@ export function UsersModule() {
                     <p className="text-[10px] sm:text-xs text-zinc-500">Configure profile details and system access.</p>
                   </div>
                 </div>
-                <button onClick={() => setIsModalOpen(false)} className="p-1.5 sm:p-2 hover:bg-zinc-100 rounded-lg transition-colors"><X size={18}/></button>
+                <button onClick={() => !isSubmitting && setIsModalOpen(false)} className="p-1.5 sm:p-2 hover:bg-zinc-100 rounded-lg transition-colors"><X size={18}/></button>
               </div>
               
               <div className="p-5 sm:p-6 md:p-8 overflow-y-auto bg-zinc-50/30 flex-1 custom-scrollbar min-h-0">
@@ -251,6 +304,12 @@ export function UsersModule() {
                     <label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-500 ml-1">Email Address *</label>
                     <input required type="email" placeholder="jane@company.com" disabled={!!editingUser} className="w-full mt-1.5 px-3 sm:px-4 py-2.5 sm:py-3 bg-white border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black outline-none transition-all shadow-sm text-sm disabled:bg-zinc-100 disabled:text-zinc-500" value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})} />
                     {editingUser && <p className="text-[10px] text-amber-600 font-medium mt-1 ml-1">Email cannot be changed after creation.</p>}
+                    {!editingUser && <p className="text-[10px] text-blue-600 font-medium mt-1 ml-1">An email will be sent automatically to generate a password.</p>}
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-500 ml-1">Phone Number</label>
+                    <input type="tel" placeholder="+91 9876543210" className="w-full mt-1.5 px-3 sm:px-4 py-2.5 sm:py-3 bg-white border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black outline-none transition-all shadow-sm text-sm" value={formData.phone || ''} onChange={e => setFormData({...formData, phone: e.target.value})} />
                   </div>
                   
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -263,7 +322,6 @@ export function UsersModule() {
                         onChange={e => setFormData({...formData, role: e.target.value})}
                       >
                         {roleOptions.map(r => {
-                          // STRICT GATE: Hide 'superadmin' option if the logged-in user is not a superadmin
                           if (r.requiresSuperAdmin && !isMeSuperadmin) return null;
                           return <option key={r.value} value={r.value}>{r.label}</option>;
                         })}
@@ -290,8 +348,9 @@ export function UsersModule() {
               </div>
 
               <div className="p-4 sm:p-6 border-t border-zinc-100 shrink-0 bg-white">
-                <button type="submit" form="user-form" className="w-full py-3 sm:py-4 bg-black text-white rounded-xl sm:rounded-2xl font-bold hover:bg-zinc-800 transition-all shadow-md active:scale-95 text-sm sm:text-base">
-                  {editingUser ? 'Save Changes' : 'Create User Account'}
+                <button type="submit" form="user-form" disabled={isSubmitting} className="w-full py-3 sm:py-4 bg-black text-white rounded-xl sm:rounded-2xl font-bold hover:bg-zinc-800 transition-all shadow-md active:scale-95 text-sm sm:text-base flex justify-center items-center gap-2 disabled:opacity-70">
+                  {isSubmitting && <Loader2 size={18} className="animate-spin" />}
+                  {editingUser ? 'Save Changes' : (isSubmitting ? 'Creating & Sending Email...' : 'Create User & Send Email')}
                 </button>
               </div>
 
