@@ -2,7 +2,7 @@ import React, { createContext, useContext, useEffect, useState, useMemo } from '
 import { supabase, logActivity } from './supabase';
 import { User } from '@supabase/supabase-js';
 import { UserProfile, ActivityLog } from './types';
-import { LayoutDashboard, Users, Store, CalendarClock, PlaySquare, FileBarChart, LogOut, Menu, X, Database, Bell, Trash2, ShieldAlert, Search, CheckCheck, Loader2 } from 'lucide-react';
+import { LayoutDashboard, Users, Store, CalendarClock, PlaySquare, FileBarChart, LogOut, Menu, X, Database, Bell, Trash2, ShieldAlert, Search, CheckCheck, Loader2, CalendarDays } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { isToday, isThisWeek, isThisMonth } from 'date-fns';
 
@@ -14,6 +14,7 @@ import { SchedulerModule } from './modules/Scheduler';
 import { ExecutionModule } from './modules/Execution';
 import { MastersModule } from './modules/Masters';
 import { ReportsModule } from './modules/Reports';
+import { TodayAssignmentsModule } from './modules/TodayAssignments';
 
 // Setup Force Password
 import { ForcePasswordSetup } from './components/ForcePasswordSetup';
@@ -93,12 +94,10 @@ export default function App() {
 
   // --- ROBUST AUTHENTICATION HANDLER ---
   useEffect(() => {
-    // 1. Instantly check if this URL is from an email recovery link
     if (window.location.href.includes('type=recovery')) {
        setNeedsPasswordSetup(true);
     }
 
-    // 2. Fetch Initial Session (Supabase automatically handles the URL secure code here)
     supabase.auth.getSession().then(({ data: { session } }) => {
       setUser(session?.user ?? null);
       if (session?.user) {
@@ -108,11 +107,9 @@ export default function App() {
       }
     });
 
-    // 3. Listen for Background Authentication Events
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       setUser(session?.user ?? null);
       
-      // If Supabase natively detects a password reset link was successfully consumed
       if (event === 'PASSWORD_RECOVERY') {
          setNeedsPasswordSetup(true);
       }
@@ -208,6 +205,7 @@ export default function App() {
 
   const navItems = [
     { id: 'dashboard', label: 'Overview', icon: LayoutDashboard, roles: ['superadmin', 'admin', 'ho'] },
+    { id: 'today', label: 'Today\'s Audits', icon: CalendarDays, roles: ['superadmin', 'admin', 'ho', 'dm', 'sm', 'asm', 'ase', 'auditor'] },
     { id: 'masters', label: 'Data Masters', icon: Database, roles: ['superadmin', 'admin', 'ho'] },
     { id: 'users', label: 'Team', icon: Users, roles: ['superadmin', 'admin'] },
     { id: 'distributors', label: 'Distributors', icon: Store, roles: ['superadmin', 'admin', 'ho', 'dm', 'sm', 'asm', 'ase'] },
@@ -238,21 +236,18 @@ export default function App() {
   // --- THE AUTO-HEALING PROFILE FETCHER ---
   const fetchProfile = async (authUser: User) => {
     try {
-      // 1. Try exact UID match (using maybeSingle to prevent ugly PGRST116 crash)
       let { data } = await supabase.from('users').select('*').eq('uid', authUser.id).maybeSingle();
       
-      // 2. AUTO-HEAL: If Supabase issued a fake UID during creation, catch them by email and fix the DB row!
       if (!data && authUser.email) {
         const { data: emailMatch } = await supabase.from('users').select('*').eq('email', authUser.email).maybeSingle();
         
         if (emailMatch) {
           console.log("Auto-healing UID mismatch for user:", authUser.email);
           await supabase.from('users').update({ uid: authUser.id }).eq('email', authUser.email);
-          data = { ...emailMatch, uid: authUser.id }; // Update local state so it proceeds normally
+          data = { ...emailMatch, uid: authUser.id }; 
         }
       }
 
-      // 3. If STILL no data, they truly don't exist in your table.
       if (!data) {
         console.error("No profile found in public.users for:", authUser.email);
         await supabase.auth.signOut();
@@ -319,8 +314,6 @@ export default function App() {
       } catch (error) { console.error("Failed to clear logs:", error); }
     }
   };
-
-  // --- RENDER PIPELINE ---
 
   if (loading) {
     return (
@@ -391,6 +384,7 @@ export default function App() {
   const renderModule = () => {
     switch (activeModuleState) {
       case 'dashboard': return <DashboardModule />;
+      case 'today': return <TodayAssignmentsModule />; // <-- NEW ROUTE
       case 'users': return <UsersModule />;
       case 'distributors': return <DistributorsModule />;
       case 'scheduler': return <SchedulerModule />;
@@ -519,7 +513,6 @@ export default function App() {
         </AnimatePresence>
 
         {/* MAIN CONTENT AREA */}
-        {/* CHANGED FROM "relative z-10" to just "w-full" to fix Stacking Context Overlap Bug! */}
         <main className="flex-1 lg:pl-72 flex flex-col min-h-screen pt-16 lg:pt-0 w-full">
           
           <header className="hidden lg:flex bg-white/60 backdrop-blur-2xl border-b border-zinc-200/60 sticky top-0 z-30 px-8 py-4 items-center justify-between w-full shadow-[0_4px_24px_rgba(0,0,0,0.02)]">

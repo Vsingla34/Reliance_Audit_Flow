@@ -156,7 +156,6 @@ export function SchedulerModule() {
       const dist = distMap[createData.distributorId];
       if (!dist) return;
 
-      // Auto-calculate the required days based on value
       const autoAuditDays = calculateAuditDays(dist.approvedValue);
       const existingTicket = tickets.find(t => t.distributorId === createData.distributorId && t.status === 'tentative');
 
@@ -207,6 +206,7 @@ export function SchedulerModule() {
       const dist = distMap[editingActiveTicket.distributorId];
       const autoAuditDays = calculateAuditDays(dist?.approvedValue || 0);
 
+      // Note: We deliberately do not change the status here so 'in_progress' tickets stay 'in_progress'
       await supabase.from('auditTickets').update({
         scheduledDate: editTicketData.scheduledDate,
         proposedDate: editTicketData.scheduledDate,
@@ -614,11 +614,12 @@ export function SchedulerModule() {
                             onClick={() => {
                               if (ticket.status === 'tentative') {
                                 openNegotiationModal(ticket.distributorId);
-                              } else if (ticket.status === 'scheduled') {
+                              } else {
+                                // For ALL non-tentative statuses (scheduled, in_progress, completed)
                                 if (isAdminOrHO) {
                                   setEditingActiveTicket(ticket);
                                   setEditTicketData({ scheduledDate: ticket.scheduledDate || '', auditorIds: ticket.auditorIds || [] });
-                                } else if (profile?.role === 'ase') {
+                                } else if (profile?.role === 'ase' && ticket.status === 'scheduled') {
                                   openNegotiationModal(ticket.distributorId);
                                 }
                               }

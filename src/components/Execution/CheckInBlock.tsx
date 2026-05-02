@@ -1,7 +1,7 @@
 import React, { useRef, useState } from 'react';
 import { supabase, logActivity } from '../../supabase';
 import { AuditTicket } from '../../types';
-import { Camera, Image as ImageIcon, CheckCircle2, Clock, ThumbsDown, ThumbsUp, X, Send, Trash2, Loader2, AlertCircle, Calendar } from 'lucide-react';
+import { Camera, Image as ImageIcon, CheckCircle2, X, Send, Trash2, Loader2, AlertCircle, Calendar } from 'lucide-react';
 import { cn } from '../../App';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -88,14 +88,31 @@ export function CheckInBlock({ activeTicket, setActiveTicket, user, profile, isA
     try {
       const targetStatus = action === 'approve' ? 'approved' : 'rejected';
       const logs = [...(activeTicket.presenceLogs || [])];
-      const lastPhotoIndex = logs.map((l:any) => !!l.photoUrl && (l.dayIndex === dayIndex || (dayIndex === 0 && l.dayIndex === undefined))).lastIndexOf(true);
-
-      if (lastPhotoIndex !== -1) {
-        logs[lastPhotoIndex] = { ...logs[lastPhotoIndex], status: targetStatus, rejectReason: action === 'reject' ? rejectReason : undefined };
+      
+      // Bulletproof search: Find the exact last log for this specific day
+      let targetIndex = -1;
+      for (let i = logs.length - 1; i >= 0; i--) {
+        if (logs[i].dayIndex === dayIndex || (dayIndex === 0 && logs[i].dayIndex === undefined)) {
+          targetIndex = i;
+          break;
+        }
       }
+
+      if (targetIndex === -1) {
+        alert("Error: Could not locate the photo record in the database.");
+        return;
+      }
+
+      // Safely update that specific log
+      logs[targetIndex] = { 
+        ...logs[targetIndex], 
+        status: targetStatus, 
+        rejectReason: action === 'reject' ? rejectReason : undefined 
+      };
       
       const newStatus = action === 'reject' ? 'scheduled' : activeTicket.status;
 
+      // Optimistic UI Update
       setActiveTicket({ ...activeTicket, presenceLogs: logs, status: newStatus as any });
       setPreviewPhoto(null);
       setRejectingDay(null);
@@ -106,6 +123,7 @@ export function CheckInBlock({ activeTicket, setActiveTicket, user, profile, isA
         setImageErrors(prev => ({ ...prev, [dayIndex]: false }));
       }
 
+      // Database Update
       const { error } = await supabase.from('auditTickets').update({ 
         presenceLogs: logs,
         status: newStatus, 
@@ -114,7 +132,7 @@ export function CheckInBlock({ activeTicket, setActiveTicket, user, profile, isA
       
       if (error) throw error;
       
-      // LOG THE APPROVAL OR REJECTION
+      // Activity Logging
       logActivity(user, profile, `Selfie ${action === 'approve' ? 'Approved' : 'Rejected'}`, `Admin ${action} check-in selfie for Day ${dayIndex + 1}`);
 
     } catch (error: any) {
@@ -191,7 +209,7 @@ export function CheckInBlock({ activeTicket, setActiveTicket, user, profile, isA
                   </div>
                 </div>
                 {(profile.role === 'auditor' || isAdminOrHO) && (
-                  <button onClick={() => triggerUpload(dayIndex)} disabled={isUploading} className="px-6 py-3 bg-red-600 text-white rounded-xl font-bold hover:bg-red-700 transition-colors shadow-sm whitespace-nowrap">
+                  <button type="button" onClick={() => triggerUpload(dayIndex)} disabled={isUploading} className="px-6 py-3 bg-red-600 text-white rounded-xl font-bold hover:bg-red-700 transition-colors shadow-sm whitespace-nowrap">
                     {isUploading ? "Uploading..." : "Re-Upload Photo"}
                   </button>
                 )}
@@ -209,7 +227,7 @@ export function CheckInBlock({ activeTicket, setActiveTicket, user, profile, isA
                       {hasError && (
                         <div className="flex flex-col items-center justify-center z-10 bg-white/90 backdrop-blur absolute inset-0">
                           <p className="text-sm font-bold text-red-500 text-center px-4 mb-3">Broken URL detected.</p>
-                          <button onClick={(e) => clearBrokenCheckIn(e, dayIndex, log?.photoUrl)} className="px-4 py-2 bg-red-100 text-red-700 rounded-lg font-bold text-xs hover:bg-red-200 transition-colors flex items-center gap-2"><Trash2 size={14} /> Clear Broken Photo</button>
+                          <button type="button" onClick={(e) => clearBrokenCheckIn(e, dayIndex, log?.photoUrl)} className="px-4 py-2 bg-red-100 text-red-700 rounded-lg font-bold text-xs hover:bg-red-200 transition-colors flex items-center gap-2"><Trash2 size={14} /> Clear Broken Photo</button>
                         </div>
                       )}
                     </div>
@@ -235,8 +253,8 @@ export function CheckInBlock({ activeTicket, setActiveTicket, user, profile, isA
                       </form>
                     ) : (
                       <div className="flex w-full sm:w-auto items-center gap-2">
-                        <button onClick={() => setRejectingDay(dayIndex)} className="flex-1 sm:flex-none px-4 py-2 bg-white text-red-600 rounded-lg font-bold text-sm hover:bg-red-50 border border-red-100 transition-colors shadow-sm">Reject</button>
-                        <button onClick={() => handleCheckInAction(dayIndex, 'approve')} className="flex-1 sm:flex-none px-4 py-2 bg-blue-600 text-white rounded-lg font-bold text-sm hover:bg-blue-700 transition-colors shadow-sm">Approve</button>
+                        <button type="button" onClick={() => setRejectingDay(dayIndex)} className="flex-1 sm:flex-none px-4 py-2 bg-white text-red-600 rounded-lg font-bold text-sm hover:bg-red-50 border border-red-100 transition-colors shadow-sm">Reject</button>
+                        <button type="button" onClick={() => handleCheckInAction(dayIndex, 'approve')} className="flex-1 sm:flex-none px-4 py-2 bg-blue-600 text-white rounded-lg font-bold text-sm hover:bg-blue-700 transition-colors shadow-sm">Approve</button>
                       </div>
                     )}
                   </div>
@@ -255,7 +273,7 @@ export function CheckInBlock({ activeTicket, setActiveTicket, user, profile, isA
                     </div>
                   </div>
                   {(profile.role === 'auditor' || isAdminOrHO) && (
-                    <button onClick={() => triggerUpload(dayIndex)} disabled={isUploading || !isActionableDate} className="px-6 py-3 bg-black text-white rounded-xl font-bold hover:bg-zinc-800 transition-all shadow-xl active:scale-95 disabled:opacity-70 flex items-center justify-center gap-2 whitespace-nowrap min-w-[160px]">
+                    <button type="button" onClick={() => triggerUpload(dayIndex)} disabled={isUploading || !isActionableDate} className="px-6 py-3 bg-black text-white rounded-xl font-bold hover:bg-zinc-800 transition-all shadow-xl active:scale-95 disabled:opacity-70 flex items-center justify-center gap-2 whitespace-nowrap min-w-[160px]">
                       {isUploading ? <><Loader2 className="animate-spin" size={18} /> Uploading...</> : <><Camera size={18} /> Upload Photo</>}
                     </button>
                   )}
@@ -272,7 +290,7 @@ export function CheckInBlock({ activeTicket, setActiveTicket, user, profile, isA
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setPreviewPhoto(null)} className="absolute inset-0 bg-black/80 backdrop-blur-sm" />
             <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="relative w-full max-w-4xl bg-transparent flex flex-col items-center">
               <div className="w-full flex justify-end mb-4">
-                <button onClick={() => setPreviewPhoto(null)} className="p-3 bg-white/20 hover:bg-white/40 backdrop-blur text-white rounded-full transition-colors"><X size={24}/></button>
+                <button type="button" onClick={() => setPreviewPhoto(null)} className="p-3 bg-white/20 hover:bg-white/40 backdrop-blur text-white rounded-full transition-colors"><X size={24}/></button>
               </div>
               <img src={previewPhoto} alt="Verification" className="w-full h-auto max-h-[80vh] object-contain rounded-xl shadow-2xl" />
             </motion.div>

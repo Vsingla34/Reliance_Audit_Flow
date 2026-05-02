@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef, useMemo } from 'react';
-import { supabase, logActivity } from '../supabase';
+import { supabase, logActivity, notifyLinkedUsers } from '../supabase';
 import { Distributor, SignOff, AuditTicket as BaseTicket, AuditLineItem as BaseItem } from '../types';
-import { ClipboardCheck, Plus, Store, MapPin, CheckCircle2, ArrowLeft, AlertCircle, MessageSquare, PackageSearch, Lock, Trash2, Send, RotateCcw, CalendarClock, FileText, Upload, Loader2, User as UserIcon, X, Droplets, SplitSquareHorizontal, Search } from 'lucide-react';
+import { ClipboardCheck, Plus, Store, MapPin, CheckCircle2, ArrowLeft, AlertCircle, MessageSquare, PackageSearch, Lock, Trash2, Send, RotateCcw, CalendarClock, FileText, Upload, Loader2, User as UserIcon, X, Droplets, Search } from 'lucide-react';
 import { cn, useAuth } from '../App';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -12,11 +12,7 @@ import { ChatModal } from '../components/Execution/ChatModal';
 const BUCKET_NAME = 'audit-media'; 
 
 export interface AuditTicket extends BaseTicket { 
-  drainageDate?: string; 
-  whatsappMediaApproved?: boolean; 
-  drainageMediaApproved?: boolean; 
-  signoffDocumentUrl?: string;
-  signoffDocumentApproved?: boolean;
+  signOffs?: Record<string, any>;
 }
 
 export interface AuditLineItem extends BaseItem { 
@@ -37,7 +33,6 @@ export function ExecutionModule() {
   const [items, setItems] = useState<AuditLineItem[]>([]);
   const [availableDumpItems, setAvailableDumpItems] = useState<CombinedDumpItem[]>([]);
   
-  // NEW: Search State for the Line Items Table
   const [itemSearchQuery, setItemSearchQuery] = useState('');
   
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -142,7 +137,7 @@ export function ExecutionModule() {
       fetchItems(activeTicket.id);
       const dist = distributors.find(d => d.id === activeTicket.distributorId);
       if (dist) loadDumpData(dist.code);
-      setItemSearchQuery(''); // Reset search when opening a new ticket
+      setItemSearchQuery(''); 
       const channel = supabase.channel(`items-${activeTicket.id}`).on('postgres_changes', { event: '*', schema: 'public', table: 'auditLineItems', filter: `ticketId=eq.${activeTicket.id}` }, () => fetchItems(activeTicket.id)).subscribe();
       return () => { supabase.removeChannel(channel); };
     } else { setItems([]); setAvailableDumpItems([]); setItemSearchQuery(''); }
@@ -179,7 +174,7 @@ export function ExecutionModule() {
     try {
       await supabase.from('auditLineItems').delete().eq('ticketId', activeTicket.id);
       await supabase.from('auditTickets').update({ 
-        status: 'tentative', scheduledDate: null as any, drainageDate: null, whatsappMediaApproved: false, drainageMediaApproved: false, signoffDocumentUrl: null, signoffDocumentApproved: false, auditorId: null as any, auditorIds: [], presenceLogs: [], media: [], signOffs: {}, comments: [], dateProposals: [], verifiedTotal: 0, updatedAt: new Date().toISOString()
+        status: 'tentative', scheduledDate: null as any, signOffs: {}, auditorId: null as any, auditorIds: [], presenceLogs: [], media: [], comments: [], dateProposals: [], verifiedTotal: 0, updatedAt: new Date().toISOString()
       }).eq('id', activeTicket.id);
       
       const dist = distMap[activeTicket.distributorId];
@@ -192,10 +187,12 @@ export function ExecutionModule() {
 
   const toggleWhatsappApproval = async () => {
     if (!activeTicket || !user || !profile) return;
-    const newStatus = !activeTicket.whatsappMediaApproved;
+    const newStatus = !activeTicket.signOffs?.whatsappMediaApproved;
+    const newSignOffs = { ...(activeTicket.signOffs || {}), whatsappMediaApproved: newStatus };
+    
     try {
-      await supabase.from('auditTickets').update({ whatsappMediaApproved: newStatus, updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
-      setActiveTicket({ ...activeTicket, whatsappMediaApproved: newStatus });
+      await supabase.from('auditTickets').update({ signOffs: newSignOffs, updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
+      setActiveTicket({ ...activeTicket, signOffs: newSignOffs });
       
       const dist = distMap[activeTicket.distributorId];
       logActivity(user, profile, "WhatsApp Media Confirmed", `Admin marked WhatsApp audit evidence as ${newStatus ? 'Approved' : 'Pending'} for ${dist?.name}`);
@@ -204,10 +201,12 @@ export function ExecutionModule() {
 
   const toggleDrainageMediaApproval = async () => {
     if (!activeTicket || !user || !profile) return;
-    const newStatus = !activeTicket.drainageMediaApproved;
+    const newStatus = !activeTicket.signOffs?.drainageMediaApproved;
+    const newSignOffs = { ...(activeTicket.signOffs || {}), drainageMediaApproved: newStatus };
+    
     try {
-      await supabase.from('auditTickets').update({ drainageMediaApproved: newStatus, updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
-      setActiveTicket({ ...activeTicket, drainageMediaApproved: newStatus });
+      await supabase.from('auditTickets').update({ signOffs: newSignOffs, updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
+      setActiveTicket({ ...activeTicket, signOffs: newSignOffs });
       
       const dist = distMap[activeTicket.distributorId];
       logActivity(user, profile, "Drainage Media Confirmed", `Admin marked Drainage evidence as ${newStatus ? 'Approved' : 'Pending'} for ${dist?.name}`);
@@ -227,22 +226,74 @@ export function ExecutionModule() {
       if (uploadError) throw new Error(uploadError.message);
       const { data: { publicUrl } } = supabase.storage.from(BUCKET_NAME).getPublicUrl(filePath);
 
-      await supabase.from('auditTickets').update({ signoffDocumentUrl: publicUrl, updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
-      setActiveTicket({ ...activeTicket, signoffDocumentUrl: publicUrl });
+      const newSignOffs = { ...(activeTicket.signOffs || {}), signoffDocumentUrl: publicUrl };
+      await supabase.from('auditTickets').update({ signOffs: newSignOffs, updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
+      setActiveTicket({ ...activeTicket, signOffs: newSignOffs });
     } catch (error: any) { alert(`Upload failed: ${error.message}`); } 
     finally { setIsUploadingSignoff(false); if (signoffFileRef.current) signoffFileRef.current.value = ''; }
   };
 
   const toggleSignoffApproval = async () => {
     if (!activeTicket || !user || !profile) return;
-    const newStatus = !activeTicket.signoffDocumentApproved;
+    const newStatus = !activeTicket.signOffs?.signoffDocumentApproved;
+    const newSignOffs = { ...(activeTicket.signOffs || {}), signoffDocumentApproved: newStatus };
+    
     try {
-      await supabase.from('auditTickets').update({ signoffDocumentApproved: newStatus, updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
-      setActiveTicket({ ...activeTicket, signoffDocumentApproved: newStatus });
+      await supabase.from('auditTickets').update({ signOffs: newSignOffs, updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
+      setActiveTicket({ ...activeTicket, signOffs: newSignOffs });
       
       const dist = distMap[activeTicket.distributorId];
       logActivity(user, profile, "Sign-off Document Confirmed", `Admin marked physical sign-off sheet as ${newStatus ? 'Approved' : 'Pending'} for ${dist?.name}`);
     } catch (error) { console.error("Failed to update Sign-off approval:", error); }
+  };
+
+  const rejectSignoffDocument = async () => {
+    if (!activeTicket || !user || !profile) return;
+    
+    const reason = window.prompt("Please provide a reason for rejecting this sign-off document (this will be logged in the Discussion board):");
+    if (reason === null) return; 
+    if (!reason.trim()) {
+       alert("Cancellation aborted: A reason is required to reject the document.");
+       return;
+    }
+
+    try {
+      const rejectionMessage = `🚨 Sign-off Document Rejected by Admin: ${reason}`;
+      const newComment = {
+        id: Math.random().toString(36).substring(7),
+        userId: user.id,
+        userName: profile.name,
+        role: profile.role,
+        text: rejectionMessage,
+        message: rejectionMessage,
+        content: rejectionMessage, 
+        timestamp: new Date().toISOString()
+      };
+
+      const newSignOffs = { ...(activeTicket.signOffs || {}), signoffDocumentUrl: null, signoffDocumentApproved: false };
+      const updatedComments = [...(activeTicket.comments || []), newComment];
+
+      await supabase.from('auditTickets').update({ 
+        signOffs: newSignOffs,
+        comments: updatedComments,
+        updatedAt: new Date().toISOString() 
+      }).eq('id', activeTicket.id);
+      
+      setActiveTicket({ 
+        ...activeTicket, 
+        signOffs: newSignOffs,
+        comments: updatedComments 
+      });
+      
+      const dist = distMap[activeTicket.distributorId];
+      logActivity(user, profile, "Sign-off Rejected", `Admin rejected physical sign-off sheet for ${dist?.name}. Reason: "${reason}"`);
+      notifyLinkedUsers(activeTicket.distributorId, "Sign-off Rejected", `The Sign-off Document for ${dist?.name} was rejected. Reason: "${reason}". Please upload a new copy.`);
+      
+      alert("Document rejected successfully. The reason has been posted to the discussion board.");
+    } catch (error) { 
+      console.error("Failed to reject Sign-off document:", error); 
+      alert("Failed to reject the document.");
+    }
   };
 
   const deleteItem = async (item: AuditLineItem) => {
@@ -250,38 +301,6 @@ export function ExecutionModule() {
     try {
       await supabase.from('auditLineItems').delete().eq('id', item.id);
     } catch (error) { console.error(error); }
-  };
-
-  const duplicateItem = async (itemToDuplicate: AuditLineItem) => {
-    if (!activeTicket) return;
-    try {
-      const newItemId = Math.random().toString(36).substring(7);
-      
-      const newItem = {
-        ...itemToDuplicate,
-        id: newItemId,
-        qtyNonSaleable: 0,
-        qtyBBD: 0,
-        qtyDamaged: 0,
-        quantity: 0,
-        totalValue: 0,
-        mfgDate: null,
-        expDate: null,
-        productLife: '-',
-        bbdApprovalStatus: 'none',
-        qtyDrained: 0
-      };
-
-      const cleanItem = Object.fromEntries(Object.entries(newItem).filter(([_, v]) => v !== undefined));
-
-      const { error } = await supabase.from('auditLineItems').insert([cleanItem]);
-      if (error) throw error;
-      
-      fetchItems(activeTicket.id);
-    } catch (error) {
-      console.error("Error splitting row:", error);
-      alert("Failed to split the row.");
-    }
   };
 
   const handleInlineChange = (id: string, field: 'qtyNonSaleable' | 'qtyBBD' | 'qtyDamaged' | 'mfgDate' | 'expDate', value: any, e?: React.ChangeEvent<HTMLInputElement>) => {
@@ -420,8 +439,10 @@ export function ExecutionModule() {
 
   const setDrainageDate = async () => {
     if (!activeTicket || !drainageDateInput) return;
-    await supabase.from('auditTickets').update({ drainageDate: drainageDateInput, updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
-    setActiveTicket({ ...activeTicket, drainageDate: drainageDateInput });
+    
+    const newSignOffs = { ...(activeTicket.signOffs || {}), drainageDate: drainageDateInput };
+    await supabase.from('auditTickets').update({ signOffs: newSignOffs, updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
+    setActiveTicket({ ...activeTicket, signOffs: newSignOffs });
     
     const dist = distMap[activeTicket.distributorId];
     logActivity(user, profile, "Drainage Scheduled", `Drainage date set to ${drainageDateInput} for ${dist?.name}`);
@@ -458,6 +479,11 @@ export function ExecutionModule() {
        return;
     }
 
+    if (!activeTicket.signOffs?.whatsappMediaApproved || !activeTicket.signOffs?.signoffDocumentApproved) {
+       alert("WhatsApp Evidence and Physical Sign-off must be approved by an Admin before submitting.");
+       return;
+    }
+
     await supabase.from('auditTickets').update({ status: 'auditor_submitted', updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
     
     const dist = distMap[activeTicket.distributorId];
@@ -471,9 +497,10 @@ export function ExecutionModule() {
     
     const reason = window.prompt("Please provide a reason for rejecting this audit count (this will be logged in the Discussion):");
     if (reason === null) return; 
+    if (!reason.trim()) { alert("A reason is required to reject the audit."); return; }
 
     try {
-      const rejectionMessage = `🚨 Audit Rejected by ASE: ${reason || 'No reason provided.'}`;
+      const rejectionMessage = `🚨 Audit Rejected by ASE: ${reason}`;
       
       const newComment = {
         id: Math.random().toString(36).substring(7),
@@ -494,10 +521,15 @@ export function ExecutionModule() {
         updatedAt: new Date().toISOString() 
       }).eq('id', activeTicket.id);
       
+      setActiveTicket({ 
+        ...activeTicket, 
+        status: 'in_progress',
+        comments: updatedComments 
+      });
+      
       const dist = distMap[activeTicket.distributorId];
-      logActivity(user, profile, "Audit Rejected", `ASE rejected the audit count for ${dist?.name} and returned it to in_progress.`);
+      logActivity(user, profile, "Audit Rejected", `ASE rejected the audit count for ${dist?.name}. Reason: "${reason}"`);
 
-      setActiveTicket(null); 
       alert("Audit rejected! The reason has been posted to the discussion board and returned to the Auditor for corrections.");
     } catch (error) {
       console.error("Error rejecting audit:", error);
@@ -518,8 +550,9 @@ export function ExecutionModule() {
   const signOff = async (roleRequired: 'auditor' | 'ase' | 'distributor') => {
     if (!activeTicket || !user || !profile) return;
     
-    if (profile.role !== roleRequired && !['superadmin', 'admin', 'ho'].includes(profile.role)) { 
-      alert(`Action Denied: Must be an ${roleRequired.toUpperCase()} to sign.`); 
+    // Allow Admins/SuperAdmins to override and sign off for anyone!
+    if (profile.role !== roleRequired && !isAdminOrSuperadmin) { 
+      alert(`Action Denied: Must be an ${roleRequired.toUpperCase()} or Admin to sign.`); 
       return; 
     }
     
@@ -532,11 +565,13 @@ export function ExecutionModule() {
     await supabase.from('auditTickets').update({ signOffs, status: newStatus, updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
     
     const dist = distMap[activeTicket.distributorId];
-    logActivity(user, profile, "Audit Signed Off", `${roleRequired.toUpperCase()} signed off on the audit for ${dist?.name}`);
+    logActivity(user, profile, "Audit Signed Off", `${profile.role.toUpperCase()} signed off on behalf of ${roleRequired.toUpperCase()} for ${dist?.name}`);
 
     if (allSigned) {
       alert("All sign-offs completed! Audit has officially moved to the Drainage phase.");
       setActiveTicket(null);
+    } else {
+      setActiveTicket({ ...activeTicket, signOffs });
     }
   };
 
@@ -550,7 +585,6 @@ export function ExecutionModule() {
     setActiveTicket(null); alert("Drainage completed! The audit is now fully Closed.");
   };
 
-  // --- ITEM FILTER LOGIC ---
   const filteredItems = useMemo(() => {
     if (!itemSearchQuery.trim()) return items;
     const lowerQuery = itemSearchQuery.toLowerCase();
@@ -583,15 +617,18 @@ export function ExecutionModule() {
 
     const canUploadFiles = (isAuditor || isAdminOrHO) && (!isSubmittedPhase && !['auditor_submitted'].includes(activeTicket.status));
     
-    const canEditItems = (isAuditor || isAdminOrSuperadmin) && canUploadFiles && isActionableDate && hasApprovedCheckIn && activeTicket.status === 'in_progress'; 
-    const canEditDrainage = (isAuditor || isAdminOrSuperadmin) && activeTicket.status === 'drainage_pending';
+    const canEditItems = (isAuditor || isAdminOrSuperadmin) && canUploadFiles && isActionableDate && hasApprovedCheckIn && activeTicket.status === 'in_progress' && !isClosedPhase; 
+    const canEditDrainage = (isAuditor || isAdminOrSuperadmin) && activeTicket.status === 'drainage_pending' && !isClosedPhase;
 
     const percentUsed = ((activeTicket.verifiedTotal || 0) / activeTicket.approvedValue) * 100;
     const isOverBudget = (activeTicket.verifiedTotal || 0) > activeTicket.approvedValue;
     const isMaxedOut = (activeTicket.verifiedTotal || 0) >= activeTicket.maxAllowedValue;
     
     const auditDateString = activeTicket.scheduledDate?.split('T')[0] || '';
-    
+
+    // GATEKEEPER LOGIC
+    const canSubmitToAse = activeTicket.signOffs?.whatsappMediaApproved === true && activeTicket.signOffs?.signoffDocumentApproved === true;
+
     return (
       <div className="space-y-4 sm:space-y-6 pb-12 w-full min-w-0">
 
@@ -606,9 +643,10 @@ export function ExecutionModule() {
               <div className="flex items-center gap-2 bg-white border border-zinc-200 px-3 py-2 rounded-xl shadow-sm w-full sm:w-auto">
                 <span className="text-[10px] sm:text-xs font-bold text-zinc-500 uppercase tracking-wider hidden md:inline">Force Status:</span>
                 <select
-                  className="text-xs sm:text-sm font-bold bg-transparent outline-none cursor-pointer text-black w-full"
+                  className="text-xs sm:text-sm font-bold bg-transparent outline-none cursor-pointer text-black w-full disabled:opacity-50"
                   value={activeTicket.status}
                   onChange={(e) => forceUpdateStatus(e.target.value)}
+                  disabled={isClosedPhase}
                 >
                   <option value="scheduled">Active (Scheduled)</option>
                   <option value="in_progress">Active (In Progress)</option>
@@ -621,7 +659,7 @@ export function ExecutionModule() {
             )}
 
             <div className="flex w-full sm:w-auto gap-2 sm:gap-3">
-              {profile?.role === 'superadmin' && (
+              {profile?.role === 'superadmin' && !isClosedPhase && (
                 <button onClick={resetAuditTicket} className="flex-1 sm:flex-none flex justify-center items-center gap-2 px-3 sm:px-4 py-2 bg-red-50 text-red-600 rounded-xl text-xs sm:text-sm font-bold hover:bg-red-100 transition-all border border-red-100"><RotateCcw size={16} /> <span className="hidden sm:inline">Reset</span></button>
               )}
               <button onClick={() => setIsChatOpen(true)} className="flex-1 sm:flex-none flex justify-center items-center gap-2 px-3 sm:px-4 py-2 bg-blue-50 text-blue-600 rounded-xl text-xs sm:text-sm font-bold hover:bg-blue-100 transition-all border border-blue-100"><MessageSquare size={16} /> Discussion {activeTicket.comments?.length ? `(${activeTicket.comments.length})` : ''}</button>
@@ -652,7 +690,7 @@ export function ExecutionModule() {
             </div>
           </div>
 
-          {!isActionableDate && canUploadFiles && (
+          {!isActionableDate && canUploadFiles && !isClosedPhase && (
             <div className="mb-6 sm:mb-8 p-4 sm:p-5 bg-amber-50 border border-amber-100 rounded-xl sm:rounded-2xl flex items-start gap-3 sm:gap-4">
               <Lock className="text-amber-500 shrink-0 mt-0.5" size={20} />
               <div>
@@ -662,7 +700,7 @@ export function ExecutionModule() {
             </div>
           )}
 
-          {isActionableDate && canUploadFiles && !hasApprovedCheckIn && (
+          {isActionableDate && canUploadFiles && !hasApprovedCheckIn && !isClosedPhase && (
             <div className="mb-6 sm:mb-8 p-4 sm:p-5 bg-blue-50 border border-blue-100 rounded-xl sm:rounded-2xl flex items-start gap-3 sm:gap-4">
               <Lock className="text-blue-500 shrink-0 mt-0.5" size={20} />
               <div>
@@ -672,7 +710,7 @@ export function ExecutionModule() {
             </div>
           )}
 
-          {isOverBudget && !isMaxedOut && (
+          {isOverBudget && !isMaxedOut && !isClosedPhase && (
             <div className="mb-6 sm:mb-8 p-4 sm:p-5 bg-amber-50 border border-amber-100 rounded-xl sm:rounded-2xl flex items-start gap-3 sm:gap-4">
               <AlertCircle className="text-amber-500 shrink-0 mt-0.5" size={20} />
               <div>
@@ -682,7 +720,7 @@ export function ExecutionModule() {
             </div>
           )}
 
-          {isMaxedOut && (
+          {isMaxedOut && !isClosedPhase && (
             <div className="mb-6 sm:mb-8 p-4 sm:p-5 bg-red-50 border border-red-100 rounded-xl sm:rounded-2xl flex items-start gap-3 sm:gap-4">
               <Lock className="text-red-500 shrink-0 mt-0.5" size={20} />
               <div>
@@ -692,7 +730,7 @@ export function ExecutionModule() {
             </div>
           )}
 
-          {activeTicket.status === 'auditor_submitted' && (
+          {activeTicket.status === 'auditor_submitted' && !isClosedPhase && (
             <div className="mb-6 sm:mb-8 p-4 sm:p-5 bg-blue-50 border border-blue-100 rounded-xl sm:rounded-2xl flex items-start gap-3 sm:gap-4">
               <AlertCircle className="text-blue-600 shrink-0 mt-0.5" size={20} />
               <div>
@@ -702,7 +740,7 @@ export function ExecutionModule() {
             </div>
           )}
           
-          {activeTicket.status === 'submitted' && (
+          {activeTicket.status === 'submitted' && !isClosedPhase && (
             <div className="mb-6 sm:mb-8 p-4 sm:p-5 bg-amber-50 border border-amber-100 rounded-xl sm:rounded-2xl flex items-start gap-3 sm:gap-4">
               <FileText className="text-amber-600 shrink-0 mt-0.5" size={20} />
               <div>
@@ -712,18 +750,26 @@ export function ExecutionModule() {
             </div>
           )}
 
-          {activeTicket.status === 'drainage_pending' && (
+          {activeTicket.status === 'drainage_pending' && !isClosedPhase && (
             <div className="mb-6 sm:mb-8 p-4 sm:p-5 bg-teal-50 border border-teal-100 rounded-xl sm:rounded-2xl flex items-start gap-3 sm:gap-4">
               <CalendarClock className="text-teal-500 shrink-0 mt-0.5" size={20} />
               <div className="w-full">
                 <h4 className="font-bold text-teal-900 text-sm sm:text-base">Drainage Phase Active</h4>
-                <p className="text-xs sm:text-sm text-teal-800 mt-1 mb-3 sm:mb-4">
-                  Original counts are frozen. The <strong>Drained Qty</strong> column is unlocked. Confirm the scheduled drainage date below to finalize.
-                </p>
-                <div className="flex flex-col sm:flex-row gap-2 sm:gap-3 max-w-sm">
-                  <input type="date" className="w-full sm:flex-1 px-4 py-3 sm:py-2 rounded-xl border border-teal-200 outline-none focus:ring-2 focus:ring-teal-500 text-sm font-bold bg-white" value={drainageDateInput || activeTicket.drainageDate || ''} onChange={(e) => setDrainageDateInput(e.target.value)} />
-                  <button onClick={setDrainageDate} disabled={!drainageDateInput} className="w-full sm:w-auto px-6 py-3 sm:py-2 bg-teal-600 text-white font-bold rounded-xl hover:bg-teal-700 transition-colors disabled:opacity-50">Save Date</button>
-                </div>
+                {isAdminOrSuperadmin ? (
+                  <>
+                    <p className="text-xs sm:text-sm text-teal-800 mt-1 mb-3 sm:mb-4">
+                      Original counts are frozen. The <strong>Drained Qty</strong> column is unlocked. Confirm the scheduled drainage date below to finalize.
+                    </p>
+                    <div className="flex flex-col sm:flex-row gap-2 sm:gap-3 max-w-sm">
+                      <input type="date" className="w-full sm:flex-1 px-4 py-3 sm:py-2 rounded-xl border border-teal-200 outline-none focus:ring-2 focus:ring-teal-500 text-sm font-bold bg-white" value={drainageDateInput || activeTicket.signOffs?.drainageDate || ''} onChange={(e) => setDrainageDateInput(e.target.value)} />
+                      <button onClick={setDrainageDate} disabled={!drainageDateInput} className="w-full sm:w-auto px-6 py-3 sm:py-2 bg-teal-600 text-white font-bold rounded-xl hover:bg-teal-700 transition-colors disabled:opacity-50">Save Date</button>
+                    </div>
+                  </>
+                ) : (
+                  <p className="text-xs sm:text-sm text-teal-800 mt-1 mb-3 sm:mb-4">
+                     Original counts are frozen. <strong>Drainage Date: {activeTicket.signOffs?.drainageDate || 'Pending Admin to schedule'}</strong>
+                  </p>
+                )}
               </div>
             </div>
           )}
@@ -735,7 +781,6 @@ export function ExecutionModule() {
           <div className="space-y-6 sm:space-y-8 w-full min-w-0">
             <div className="w-full min-w-0">
               
-              {/* --- UPDATED HEADER WITH SEARCH BAR --- */}
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 md:gap-4 mb-4 w-full">
                 <h4 className="font-bold text-base sm:text-lg flex items-center gap-2 shrink-0"><ClipboardCheck className="text-zinc-400" size={20} /> Audit Line Items</h4>
                 
@@ -833,7 +878,7 @@ export function ExecutionModule() {
                               {item.bbdApprovalStatus === 'rejected' && <div className="mt-1.5 flex items-center justify-center gap-1 text-[9px] text-red-600 font-black uppercase tracking-wider"><X size={10}/> Rejected</div>}
                               {item.bbdApprovalStatus === 'approved' && <div className="mt-1.5 flex items-center justify-center gap-1 text-[9px] text-emerald-600 font-black uppercase tracking-wider"><CheckCircle2 size={10}/> Approved</div>}
                               
-                              {isAdminOrHO && item.bbdApprovalStatus === 'pending' && (
+                              {isAdminOrHO && item.bbdApprovalStatus === 'pending' && !isClosedPhase && (
                                  <div className="flex gap-1.5 justify-center mt-2.5">
                                     <button onClick={() => approveBBDItem(item)} className="text-emerald-600 bg-white hover:bg-emerald-50 p-1.5 rounded border border-emerald-200 shadow-sm transition-colors" title="Approve Exception"><CheckCircle2 size={12}/></button>
                                     <button onClick={() => rejectBBDItem(item)} className="text-red-600 bg-white hover:bg-red-50 p-1.5 rounded border border-red-200 shadow-sm transition-colors" title="Reject Exception"><X size={12}/></button>
@@ -941,8 +986,8 @@ export function ExecutionModule() {
                 
                 <div className="p-4 sm:p-5 bg-zinc-50 border border-zinc-200 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div className="flex items-center gap-3">
-                    <div className={cn("w-10 h-10 sm:w-12 sm:h-12 rounded-xl flex items-center justify-center shrink-0 shadow-inner", activeTicket.whatsappMediaApproved ? "bg-emerald-100 text-emerald-600" : "bg-zinc-200 text-zinc-500")}>
-                      {activeTicket.whatsappMediaApproved ? <CheckCircle2 size={20} /> : <MessageSquare size={20} />}
+                    <div className={cn("w-10 h-10 sm:w-12 sm:h-12 rounded-xl flex items-center justify-center shrink-0 shadow-inner", activeTicket.signOffs?.whatsappMediaApproved ? "bg-emerald-100 text-emerald-600" : "bg-zinc-200 text-zinc-500")}>
+                      {activeTicket.signOffs?.whatsappMediaApproved ? <CheckCircle2 size={20} /> : <MessageSquare size={20} />}
                     </div>
                     <div>
                       <h5 className="font-bold text-zinc-900 text-xs sm:text-sm">WhatsApp Evidence</h5>
@@ -950,16 +995,16 @@ export function ExecutionModule() {
                     </div>
                   </div>
                   
-                  {isAdminOrHO ? (
+                  {isAdminOrHO && !isClosedPhase ? (
                     <button
                       onClick={toggleWhatsappApproval}
-                      className={cn("w-full sm:w-auto px-4 py-2 text-xs font-bold rounded-xl transition-all active:scale-95", activeTicket.whatsappMediaApproved ? "bg-emerald-600 text-white shadow-lg shadow-emerald-600/20" : "bg-black text-white hover:bg-zinc-800 shadow-md")}
+                      className={cn("w-full sm:w-auto px-4 py-2 text-xs font-bold rounded-xl transition-all active:scale-95", activeTicket.signOffs?.whatsappMediaApproved ? "bg-emerald-600 text-white shadow-lg shadow-emerald-600/20" : "bg-black text-white hover:bg-zinc-800 shadow-md")}
                     >
-                      {activeTicket.whatsappMediaApproved ? 'Approved' : 'Mark Received'}
+                      {activeTicket.signOffs?.whatsappMediaApproved ? 'Approved' : 'Mark Received'}
                     </button>
                   ) : (
-                    <span className={cn("w-full sm:w-auto text-center px-3 py-2 sm:py-1.5 text-[10px] sm:text-xs font-bold rounded-xl", activeTicket.whatsappMediaApproved ? "bg-emerald-50 border border-emerald-200 text-emerald-700" : "bg-zinc-100 text-zinc-500")}>
-                      {activeTicket.whatsappMediaApproved ? 'Approved by Admin' : 'Pending Admin'}
+                    <span className={cn("w-full sm:w-auto text-center px-3 py-2 sm:py-1.5 text-[10px] sm:text-xs font-bold rounded-xl", activeTicket.signOffs?.whatsappMediaApproved ? "bg-emerald-50 border border-emerald-200 text-emerald-700" : "bg-zinc-100 text-zinc-500")}>
+                      {activeTicket.signOffs?.whatsappMediaApproved ? 'Approved by Admin' : 'Pending Admin'}
                     </span>
                   )}
                 </div>
@@ -968,8 +1013,8 @@ export function ExecutionModule() {
                 {isDrainagePhase && (
                   <div className="p-4 sm:p-5 bg-zinc-50 border border-zinc-200 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     <div className="flex items-center gap-3">
-                      <div className={cn("w-10 h-10 sm:w-12 sm:h-12 rounded-xl flex items-center justify-center shrink-0 shadow-inner", activeTicket.drainageMediaApproved ? "bg-emerald-100 text-emerald-600" : "bg-zinc-200 text-zinc-500")}>
-                        {activeTicket.drainageMediaApproved ? <CheckCircle2 size={20} /> : <Droplets size={20} />}
+                      <div className={cn("w-10 h-10 sm:w-12 sm:h-12 rounded-xl flex items-center justify-center shrink-0 shadow-inner", activeTicket.signOffs?.drainageMediaApproved ? "bg-emerald-100 text-emerald-600" : "bg-zinc-200 text-zinc-500")}>
+                        {activeTicket.signOffs?.drainageMediaApproved ? <CheckCircle2 size={20} /> : <Droplets size={20} />}
                       </div>
                       <div>
                         <h5 className="font-bold text-zinc-900 text-xs sm:text-sm">Drainage Evidence</h5>
@@ -977,16 +1022,16 @@ export function ExecutionModule() {
                       </div>
                     </div>
                     
-                    {isAdminOrHO ? (
+                    {isAdminOrHO && !isClosedPhase ? (
                       <button
                         onClick={toggleDrainageMediaApproval}
-                        className={cn("w-full sm:w-auto px-4 py-2 text-xs font-bold rounded-xl transition-all active:scale-95", activeTicket.drainageMediaApproved ? "bg-emerald-600 text-white shadow-lg shadow-emerald-600/20" : "bg-black text-white hover:bg-zinc-800 shadow-md")}
+                        className={cn("w-full sm:w-auto px-4 py-2 text-xs font-bold rounded-xl transition-all active:scale-95", activeTicket.signOffs?.drainageMediaApproved ? "bg-emerald-600 text-white shadow-lg shadow-emerald-600/20" : "bg-black text-white hover:bg-zinc-800 shadow-md")}
                       >
-                        {activeTicket.drainageMediaApproved ? 'Approved' : 'Mark Received'}
+                        {activeTicket.signOffs?.drainageMediaApproved ? 'Approved' : 'Mark Received'}
                       </button>
                     ) : (
-                      <span className={cn("w-full sm:w-auto text-center px-3 py-2 sm:py-1.5 text-[10px] sm:text-xs font-bold rounded-xl", activeTicket.drainageMediaApproved ? "bg-emerald-50 border border-emerald-200 text-emerald-700" : "bg-zinc-100 text-zinc-500")}>
-                        {activeTicket.drainageMediaApproved ? 'Approved by Admin' : 'Pending Admin'}
+                      <span className={cn("w-full sm:w-auto text-center px-3 py-2 sm:py-1.5 text-[10px] sm:text-xs font-bold rounded-xl", activeTicket.signOffs?.drainageMediaApproved ? "bg-emerald-50 border border-emerald-200 text-emerald-700" : "bg-zinc-100 text-zinc-500")}>
+                        {activeTicket.signOffs?.drainageMediaApproved ? 'Approved by Admin' : 'Pending Admin'}
                       </span>
                     )}
                   </div>
@@ -994,13 +1039,13 @@ export function ExecutionModule() {
 
                 <div className="p-4 sm:p-5 bg-zinc-50 border border-zinc-200 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div className="flex items-center gap-3">
-                    <div className={cn("w-10 h-10 sm:w-12 sm:h-12 rounded-xl flex items-center justify-center shrink-0 shadow-inner", activeTicket.signoffDocumentApproved ? "bg-emerald-100 text-emerald-600" : activeTicket.signoffDocumentUrl ? "bg-amber-100 text-amber-600" : "bg-zinc-200 text-zinc-500")}>
-                      {activeTicket.signoffDocumentApproved ? <CheckCircle2 size={20} /> : <FileText size={20} />}
+                    <div className={cn("w-10 h-10 sm:w-12 sm:h-12 rounded-xl flex items-center justify-center shrink-0 shadow-inner", activeTicket.signOffs?.signoffDocumentApproved ? "bg-emerald-100 text-emerald-600" : activeTicket.signOffs?.signoffDocumentUrl ? "bg-amber-100 text-amber-600" : "bg-zinc-200 text-zinc-500")}>
+                      {activeTicket.signOffs?.signoffDocumentApproved ? <CheckCircle2 size={20} /> : <FileText size={20} />}
                     </div>
                     <div>
                       <h5 className="font-bold text-zinc-900 text-xs sm:text-sm">Physical Sign-off</h5>
-                      {activeTicket.signoffDocumentUrl ? (
-                        <a href={activeTicket.signoffDocumentUrl} target="_blank" rel="noreferrer" className="text-[10px] sm:text-xs text-blue-600 hover:underline font-bold flex items-center gap-1 mt-0.5">View Document</a>
+                      {activeTicket.signOffs?.signoffDocumentUrl ? (
+                        <a href={activeTicket.signOffs.signoffDocumentUrl} target="_blank" rel="noreferrer" className="text-[10px] sm:text-xs text-blue-600 hover:underline font-bold flex items-center gap-1 mt-0.5">View Document</a>
                       ) : (
                         <p className="text-[10px] sm:text-xs text-zinc-500">Scanned sheet</p>
                       )}
@@ -1008,7 +1053,7 @@ export function ExecutionModule() {
                   </div>
                   
                   <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
-                    {!activeTicket.signoffDocumentUrl && (isAuditor || isASE || isAdminOrHO) && !isClosedPhase && (
+                    {!activeTicket.signOffs?.signoffDocumentUrl && (isAuditor || isASE || isAdminOrHO) && !isClosedPhase && (
                       <>
                         <input type="file" accept="image/*,application/pdf" capture="environment" className="hidden" ref={signoffFileRef} onChange={handleSignoffUpload} />
                         <button onClick={() => signoffFileRef.current?.click()} disabled={isUploadingSignoff} className="w-full sm:w-auto px-4 py-2 bg-white border border-zinc-200 text-zinc-700 text-xs font-bold rounded-xl hover:bg-zinc-50 transition-all shadow-sm">
@@ -1017,23 +1062,28 @@ export function ExecutionModule() {
                       </>
                     )}
                     
-                    {activeTicket.signoffDocumentUrl && isAdminOrHO ? (
+                    {activeTicket.signOffs?.signoffDocumentUrl && isAdminOrHO && !isClosedPhase ? (
                       <div className="flex items-center gap-2 w-full sm:w-auto">
-                        {!activeTicket.signoffDocumentApproved && (
-                           <button onClick={() => signoffFileRef.current?.click()} className="flex-1 sm:flex-none p-2 text-zinc-400 hover:text-zinc-900 bg-white border border-zinc-200 rounded-xl transition-all flex justify-center" title="Re-upload Document"><Upload size={14}/></button>
+                        {!activeTicket.signOffs?.signoffDocumentApproved && (
+                           <>
+                             <button onClick={rejectSignoffDocument} className="flex-1 sm:flex-none px-3 py-2 text-xs font-bold rounded-xl transition-all active:scale-95 bg-red-50 border border-red-100 text-red-600 hover:bg-red-100 shadow-sm">
+                               Reject
+                             </button>
+                             <button onClick={() => signoffFileRef.current?.click()} className="flex-1 sm:flex-none p-2 text-zinc-400 hover:text-zinc-900 bg-white border border-zinc-200 rounded-xl transition-all flex justify-center" title="Re-upload Document"><Upload size={14}/></button>
+                           </>
                         )}
                         <input type="file" accept="image/*,application/pdf" className="hidden" ref={signoffFileRef} onChange={handleSignoffUpload} />
                         
                         <button
                           onClick={toggleSignoffApproval}
-                          className={cn("flex-1 sm:flex-none px-4 py-2 text-xs font-bold rounded-xl transition-all active:scale-95", activeTicket.signoffDocumentApproved ? "bg-emerald-600 text-white shadow-lg shadow-emerald-600/20" : "bg-black text-white hover:bg-zinc-800 shadow-md")}
+                          className={cn("flex-1 sm:flex-none px-4 py-2 text-xs font-bold rounded-xl transition-all active:scale-95", activeTicket.signOffs?.signoffDocumentApproved ? "bg-emerald-600 text-white shadow-lg shadow-emerald-600/20" : "bg-black text-white hover:bg-zinc-800 shadow-md")}
                         >
-                          {activeTicket.signoffDocumentApproved ? 'Approved' : 'Approve'}
+                          {activeTicket.signOffs?.signoffDocumentApproved ? 'Approved' : 'Approve'}
                         </button>
                       </div>
-                    ) : activeTicket.signoffDocumentUrl && !isAdminOrHO ? (
-                      <span className={cn("w-full sm:w-auto text-center px-3 py-2 sm:py-1.5 text-[10px] sm:text-xs font-bold rounded-xl", activeTicket.signoffDocumentApproved ? "bg-emerald-50 border border-emerald-200 text-emerald-700" : "bg-amber-50 border border-amber-200 text-amber-700")}>
-                        {activeTicket.signoffDocumentApproved ? 'Approved by Admin' : 'Pending Admin'}
+                    ) : activeTicket.signOffs?.signoffDocumentUrl ? (
+                      <span className={cn("w-full sm:w-auto text-center px-3 py-2 sm:py-1.5 text-[10px] sm:text-xs font-bold rounded-xl", activeTicket.signOffs?.signoffDocumentApproved ? "bg-emerald-50 border border-emerald-200 text-emerald-700" : "bg-amber-50 border border-amber-200 text-amber-700")}>
+                        {activeTicket.signOffs?.signoffDocumentApproved ? 'Approved by Admin' : 'Pending Admin'}
                       </span>
                     ) : null}
                   </div>
@@ -1046,12 +1096,12 @@ export function ExecutionModule() {
                   <div className="space-y-2 sm:space-y-3">
                     {['auditor', 'ase', 'distributor'].map((role) => {
                       const signedData = activeTicket.signOffs?.[role as keyof SignOff];
-                      const isMyRole = profile?.role === role || ['superadmin', 'admin', 'ho'].includes(profile?.role || '');
+                      const isMyRole = profile?.role === role || isAdminOrSuperadmin;
                       return (
                         <div key={role} className="flex items-center justify-between p-3 sm:p-4 bg-zinc-50 rounded-xl sm:rounded-2xl border border-zinc-100">
                           <div><span className="text-xs sm:text-sm font-bold uppercase tracking-wider text-zinc-600">{role}</span></div>
                           {signedData ? <span className="flex items-center gap-1 text-[10px] sm:text-xs font-bold text-emerald-600 bg-emerald-50 px-2 sm:px-3 py-1 sm:py-1.5 rounded-lg sm:rounded-xl"><CheckCircle2 size={12} className="sm:w-[14px] sm:h-[14px]" /> Signed</span>
-                           : <button onClick={() => signOff(role as any)} disabled={!isMyRole || activeTicket.status !== 'submitted'} className={cn("px-3 sm:px-4 py-1.5 sm:py-2 text-[10px] sm:text-xs font-bold rounded-lg sm:rounded-xl", (isMyRole && activeTicket.status === 'submitted') ? "bg-black text-white hover:bg-zinc-800" : "bg-zinc-200 text-zinc-400")}>{isMyRole ? 'Sign Off' : 'Awaiting'}</button>}
+                           : <button onClick={() => signOff(role as any)} disabled={!isMyRole || activeTicket.status !== 'submitted' || isClosedPhase} className={cn("px-3 sm:px-4 py-1.5 sm:py-2 text-[10px] sm:text-xs font-bold rounded-lg sm:rounded-xl", (isMyRole && activeTicket.status === 'submitted' && !isClosedPhase) ? "bg-black text-white hover:bg-zinc-800" : "bg-zinc-200 text-zinc-400")}>{isMyRole && !isClosedPhase ? 'Sign Off' : 'Awaiting'}</button>}
                         </div>
                       );
                     })}
@@ -1060,10 +1110,22 @@ export function ExecutionModule() {
               </div>
             </div>
 
-            {/* --- ACTION BUTTONS --- */}
+            {/* --- ACTION BUTTONS WITH NEW COMPLIANCE GATEKEEPER --- */}
             {(isAuditor || isAdminOrSuperadmin) && activeTicket.status === 'in_progress' && items.length > 0 && (
-              <div className="pt-6 sm:pt-8 flex justify-end border-t border-zinc-100 w-full">
-                <button onClick={submitByAuditor} className="w-full sm:w-auto flex justify-center items-center gap-2 px-6 sm:px-8 py-3.5 sm:py-4 bg-black text-white rounded-xl sm:rounded-2xl font-bold hover:bg-zinc-800 transition-all shadow-xl shadow-black/10 active:scale-95 text-sm sm:text-base"><Send size={18} /> Submit Audit to ASE</button>
+              <div className="pt-6 sm:pt-8 flex flex-col items-end border-t border-zinc-100 w-full gap-3">
+                {!canSubmitToAse && (
+                  <div className="flex items-start sm:items-center gap-2 p-3 sm:p-4 bg-amber-50 text-amber-700 rounded-xl border border-amber-200 w-full sm:w-auto text-left sm:text-center text-xs sm:text-sm font-bold">
+                    <AlertCircle size={18} className="shrink-0 mt-0.5 sm:mt-0" />
+                    <p>WhatsApp Evidence and Physical Sign-off must be approved by Admin before submitting.</p>
+                  </div>
+                )}
+                <button 
+                  onClick={submitByAuditor} 
+                  disabled={!canSubmitToAse}
+                  className={cn("w-full sm:w-auto flex justify-center items-center gap-2 px-6 sm:px-8 py-3.5 sm:py-4 rounded-xl sm:rounded-2xl font-bold transition-all shadow-xl active:scale-95 text-sm sm:text-base", canSubmitToAse ? "bg-black text-white hover:bg-zinc-800 shadow-black/10" : "bg-zinc-200 text-zinc-400 cursor-not-allowed shadow-none")}
+                >
+                  <Send size={18} /> Submit Audit to ASE
+                </button>
               </div>
             )}
 
@@ -1082,8 +1144,8 @@ export function ExecutionModule() {
               <div className="pt-6 sm:pt-8 flex justify-end border-t border-zinc-100 w-full">
                 <button 
                   onClick={submitDrainage} 
-                  disabled={!activeTicket.drainageDate}
-                  title={!activeTicket.drainageDate ? "Please set a Drainage Date first" : ""}
+                  disabled={!activeTicket.signOffs?.drainageDate}
+                  title={!activeTicket.signOffs?.drainageDate ? "Please wait for an Admin to set a Drainage Date first" : ""}
                   className="w-full sm:w-auto flex justify-center items-center gap-2 px-6 sm:px-8 py-3.5 sm:py-4 bg-teal-600 text-white rounded-xl sm:rounded-2xl font-bold hover:bg-teal-700 transition-all shadow-xl shadow-teal-600/20 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed text-sm sm:text-base"
                 >
                   <CheckCircle2 size={18} /> Complete Drainage & Close Audit
