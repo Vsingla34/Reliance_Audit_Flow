@@ -2,7 +2,7 @@ import React, { createContext, useContext, useEffect, useState, useMemo } from '
 import { supabase, logActivity } from './supabase';
 import { User } from '@supabase/supabase-js';
 import { UserProfile, ActivityLog } from './types';
-import { LayoutDashboard, Users, Store, CalendarClock, PlaySquare, FileBarChart, LogOut, Menu, X, Database, Bell, Trash2, ShieldAlert, Search, CheckCheck, Loader2, CalendarDays } from 'lucide-react';
+import { LayoutDashboard, Users, Store, CalendarClock, PlaySquare, FileBarChart, LogOut, Menu, X, Database, Bell, Trash2, ShieldAlert, Search, CheckCheck, Loader2, CalendarDays, Download } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { isToday, isThisWeek, isThisMonth } from 'date-fns';
 
@@ -87,8 +87,11 @@ export default function App() {
   const [notifications, setNotifications] = useState<any[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
 
+  // NEW: Advanced Filter States
   const [logSearch, setLogSearch] = useState('');
   const [logTimeFilter, setLogTimeFilter] = useState<'all' | 'today' | 'week' | 'month'>('all');
+  const [logRoleFilter, setLogRoleFilter] = useState('all');
+  const [logActionFilter, setLogActionFilter] = useState('all');
 
   const isAdminOrHO = ['superadmin', 'admin', 'ho'].includes(profile?.role || '');
 
@@ -133,7 +136,7 @@ export default function App() {
 
     const fetchLogs = async () => {
       if (!isPrivileged) return;
-      const { data } = await supabase.from('activityLogs').select('*').order('timestamp', { ascending: false }).limit(100);
+      const { data } = await supabase.from('activityLogs').select('*').order('timestamp', { ascending: false }).limit(200);
       if (data) {
         const filteredLogs = (data as ActivityLog[]).filter(log => 
           !log.action.toLowerCase().includes('logged in') && 
@@ -182,9 +185,17 @@ export default function App() {
     setUnreadCount(prev => Math.max(0, prev - 1));
   };
 
-  // --- FILTER ENGINE ---
+  // --- EXTRACT UNIQUE ACTIONS FOR DROPDOWN ---
+  const uniqueActions = useMemo(() => {
+    const actions = new Set<string>();
+    activityLogs.forEach(log => actions.add(log.action));
+    return Array.from(actions).sort();
+  }, [activityLogs]);
+
+  // --- ADVANCED FILTER ENGINE ---
   const filteredLogs = useMemo(() => {
     return activityLogs.filter(log => {
+      // 1. Time Filter
       let matchesTime = true;
       if (logTimeFilter !== 'all') {
         const logDate = new Date(log.timestamp);
@@ -193,15 +204,63 @@ export default function App() {
         else if (logTimeFilter === 'month') matchesTime = isThisMonth(logDate);
       }
 
+      // 2. Search Filter (Distributor Name, User Name, Details)
       const searchLower = logSearch.toLowerCase().trim();
       const matchesSearch = searchLower === '' || 
         (log.details && log.details.toLowerCase().includes(searchLower)) ||
         (log.action && log.action.toLowerCase().includes(searchLower)) ||
         (log.userName && log.userName.toLowerCase().includes(searchLower));
 
-      return matchesTime && matchesSearch;
+      // 3. Role Filter
+      let matchesRole = true;
+      if (logRoleFilter !== 'all') {
+        if (logRoleFilter === 'admin') {
+           matchesRole = ['superadmin', 'admin', 'ho'].includes(log.userRole.toLowerCase());
+        } else {
+           matchesRole = log.userRole.toLowerCase() === logRoleFilter.toLowerCase();
+        }
+      }
+
+      // 4. Action/Status Filter
+      const matchesAction = logActionFilter === 'all' || log.action === logActionFilter;
+
+      return matchesTime && matchesSearch && matchesRole && matchesAction;
     });
-  }, [activityLogs, logTimeFilter, logSearch]);
+  }, [activityLogs, logTimeFilter, logSearch, logRoleFilter, logActionFilter]);
+
+  // --- EXCEL / CSV EXPORTER ---
+  const downloadLogsCSV = () => {
+    if (filteredLogs.length === 0) {
+      return alert("No logs match the current filters to download.");
+    }
+
+    const headers = ["Date", "Time", "Action Status", "User Name", "User Role", "Log Details"];
+    const csvRows = filteredLogs.map(log => {
+      const d = new Date(log.timestamp);
+      // Clean up details to prevent CSV breaking from commas or quotes
+      const cleanDetails = log.details ? log.details.replace(/"/g, '""') : '';
+      
+      return [
+        d.toLocaleDateString(),
+        d.toLocaleTimeString(),
+        `"${log.action}"`,
+        `"${log.userName}"`,
+        `"${log.userRole}"`,
+        `"${cleanDetails}"`
+      ].join(',');
+    });
+
+    const csvContent = [headers.join(','), ...csvRows].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    
+    link.setAttribute("href", url);
+    link.setAttribute("download", `Reliance_Audit_Logs_${new Date().toISOString().split('T')[0]}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
   const navItems = [
     { id: 'dashboard', label: 'Overview', icon: LayoutDashboard, roles: ['superadmin', 'admin', 'ho'] },
@@ -315,6 +374,8 @@ export default function App() {
     }
   };
 
+  // --- RENDER PIPELINE ---
+
   if (loading) {
     return (
       <div className="min-h-screen bg-zinc-50 flex items-center justify-center p-4">
@@ -384,7 +445,7 @@ export default function App() {
   const renderModule = () => {
     switch (activeModuleState) {
       case 'dashboard': return <DashboardModule />;
-      case 'today': return <TodayAssignmentsModule />; // <-- NEW ROUTE
+      case 'today': return <TodayAssignmentsModule />; 
       case 'users': return <UsersModule />;
       case 'distributors': return <DistributorsModule />;
       case 'scheduler': return <SchedulerModule />;
@@ -560,7 +621,7 @@ export default function App() {
             <motion.div 
               initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }} 
               transition={{ type: 'spring', damping: 25, stiffness: 200 }} 
-              className="fixed top-0 right-0 w-full sm:w-[450px] max-w-[100vw] h-full bg-white shadow-2xl z-50 border-l border-zinc-200 flex flex-col"
+              className="fixed top-0 right-0 w-full sm:w-[480px] max-w-[100vw] h-full bg-white shadow-2xl z-50 border-l border-zinc-200 flex flex-col"
             >
               <div className="p-4 sm:p-6 border-b border-zinc-100 flex items-center justify-between shrink-0 bg-zinc-50">
                 <div className="flex items-center gap-3">
@@ -621,22 +682,47 @@ export default function App() {
                   </div>
                 ) : (
                   <div className="flex flex-col h-full">
-                    <div className="p-4 border-b border-zinc-100 space-y-3 bg-white shrink-0">
+                    {/* --- ADVANCED FILTER PANEL --- */}
+                    <div className="p-4 border-b border-zinc-200 space-y-3 bg-zinc-100/50 shrink-0">
+                      
+                      <div className="flex justify-between items-center mb-1">
+                        <h4 className="text-xs font-bold text-zinc-800 uppercase tracking-wider">Filter Logs</h4>
+                        <button onClick={downloadLogsCSV} className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 text-white text-xs font-bold rounded-lg hover:bg-emerald-700 transition-colors shadow-sm active:scale-95">
+                          <Download size={14}/> Export CSV
+                        </button>
+                      </div>
+
                       <div className="relative">
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" size={16} />
-                        <input type="text" placeholder="Search logs, distributors, users..." className="w-full pl-9 pr-3 py-2 bg-zinc-50 border border-zinc-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all" value={logSearch} onChange={(e) => setLogSearch(e.target.value)} />
+                        <input type="text" placeholder="Search distributors, users, details..." className="w-full pl-9 pr-3 py-2 bg-white border border-zinc-200 rounded-lg text-sm focus:ring-2 focus:ring-black outline-none transition-all shadow-sm" value={logSearch} onChange={(e) => setLogSearch(e.target.value)} />
                       </div>
-                      <select className="w-full p-2 bg-zinc-50 border border-zinc-200 rounded-lg text-sm font-medium focus:ring-2 focus:ring-blue-500 outline-none transition-all cursor-pointer text-zinc-700" value={logTimeFilter} onChange={(e) => setLogTimeFilter(e.target.value as any)}>
-                        <option value="all">All Time</option>
-                        <option value="today">Today</option>
-                        <option value="week">This Week</option>
-                        <option value="month">This Month</option>
+                      
+                      <div className="grid grid-cols-2 gap-2">
+                        <select className="w-full p-2 bg-white border border-zinc-200 rounded-lg text-xs font-medium focus:ring-2 focus:ring-black outline-none transition-all cursor-pointer text-zinc-700 shadow-sm" value={logTimeFilter} onChange={(e) => setLogTimeFilter(e.target.value as any)}>
+                          <option value="all">All Time</option>
+                          <option value="today">Today</option>
+                          <option value="week">This Week</option>
+                          <option value="month">This Month</option>
+                        </select>
+
+                        <select className="w-full p-2 bg-white border border-zinc-200 rounded-lg text-xs font-medium focus:ring-2 focus:ring-black outline-none transition-all cursor-pointer text-zinc-700 shadow-sm" value={logRoleFilter} onChange={(e) => setLogRoleFilter(e.target.value)}>
+                          <option value="all">All Roles</option>
+                          <option value="ase">ASE</option>
+                          <option value="auditor">Auditor</option>
+                          <option value="admin">Admin / Head Office</option>
+                        </select>
+                      </div>
+
+                      <select className="w-full p-2 bg-white border border-zinc-200 rounded-lg text-xs font-medium focus:ring-2 focus:ring-black outline-none transition-all cursor-pointer text-zinc-700 shadow-sm" value={logActionFilter} onChange={(e) => setLogActionFilter(e.target.value)}>
+                         <option value="all">All Statuses / Actions</option>
+                         {uniqueActions.map(action => <option key={action} value={action}>{action}</option>)}
                       </select>
+
                     </div>
 
                     <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar">
                       {filteredLogs.length === 0 ? (
-                        <div className="text-center py-12 text-zinc-400 flex flex-col items-center"><Bell size={32} className="mb-3 opacity-20" /><p className="font-bold">No activity found</p></div>
+                        <div className="text-center py-12 text-zinc-400 flex flex-col items-center"><Bell size={32} className="mb-3 opacity-20" /><p className="font-bold">No activity matches your filters.</p></div>
                       ) : (
                         filteredLogs.map(log => {
                           const style = getLogStyle(log.action);

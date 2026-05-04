@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { supabase } from '../supabase';
 import { AuditTicket, UserProfile } from '../types';
-import { CalendarRange, Store, User as UserIcon, IndianRupee, MapPin, Search, CheckCircle2, Clock, PlayCircle } from 'lucide-react';
+import { CalendarRange, Store, User as UserIcon, IndianRupee, MapPin, Search, CheckCircle2, Clock, PlayCircle, FileSignature } from 'lucide-react';
 import { cn, useAuth } from '../App';
 
 export function TodayAssignmentsModule() {
@@ -130,16 +130,16 @@ export function TodayAssignmentsModule() {
           <p className="text-2xl font-black text-zinc-900 mt-1">{tickets.length}</p>
         </div>
         <div className="bg-white p-4 rounded-2xl border border-zinc-200 shadow-sm flex flex-col justify-center">
-          <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Pending</p>
+          <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Not Started</p>
           <p className="text-2xl font-black text-amber-600 mt-1">{tickets.filter(t => t.status === 'scheduled').length}</p>
         </div>
         <div className="bg-white p-4 rounded-2xl border border-zinc-200 shadow-sm flex flex-col justify-center">
-          <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">In Progress</p>
-          <p className="text-2xl font-black text-blue-600 mt-1">{tickets.filter(t => t.status === 'in_progress').length}</p>
+          <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">In Progress / Review</p>
+          <p className="text-2xl font-black text-blue-600 mt-1">{tickets.filter(t => ['in_progress', 'auditor_submitted', 'submitted', 'drainage_pending'].includes(t.status)).length}</p>
         </div>
         <div className="bg-white p-4 rounded-2xl border border-zinc-200 shadow-sm flex flex-col justify-center">
-          <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Completed</p>
-          <p className="text-2xl font-black text-emerald-600 mt-1">{tickets.filter(t => ['completed', 'verified'].includes(t.status)).length}</p>
+          <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Fully Closed</p>
+          <p className="text-2xl font-black text-emerald-600 mt-1">{tickets.filter(t => t.status === 'closed').length}</p>
         </div>
       </div>
 
@@ -169,12 +169,15 @@ export function TodayAssignmentsModule() {
                   const dist = distMap[ticket.distributorId];
                   const auditorNames = ticket.auditorIds?.map(id => userMap[id]?.name).filter(Boolean) || [];
 
-                  // Determine Status UI
+                  // Determine Advanced Status UI
                   let statusBadge = <span className="flex justify-end items-center gap-1.5 text-xs font-bold text-amber-700 bg-amber-50 px-2.5 py-1 rounded-lg border border-amber-200 w-max ml-auto"><Clock size={14}/> Scheduled</span>;
+                  
                   if (ticket.status === 'in_progress') {
                     statusBadge = <span className="flex justify-end items-center gap-1.5 text-xs font-bold text-blue-700 bg-blue-50 px-2.5 py-1 rounded-lg border border-blue-200 w-max ml-auto"><PlayCircle size={14}/> Occurring Now</span>;
-                  } else if (['completed', 'verified'].includes(ticket.status)) {
-                    statusBadge = <span className="flex justify-end items-center gap-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200 w-max ml-auto"><CheckCircle2 size={14}/> Finished</span>;
+                  } else if (['auditor_submitted', 'submitted', 'drainage_pending'].includes(ticket.status)) {
+                    statusBadge = <span className="flex justify-end items-center gap-1.5 text-xs font-bold text-purple-700 bg-purple-50 px-2.5 py-1 rounded-lg border border-purple-200 w-max ml-auto"><FileSignature size={14}/> Pending Review</span>;
+                  } else if (ticket.status === 'closed' || ticket.status === 'completed') {
+                    statusBadge = <span className="flex justify-end items-center gap-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200 w-max ml-auto"><CheckCircle2 size={14}/> Closed</span>;
                   }
 
                   return (
@@ -191,7 +194,6 @@ export function TodayAssignmentsModule() {
                         </div>
                       </td>
                       
-                      {/* ADDED ADDRESS COLUMN */}
                       <td className="px-6 py-4">
                         <div className="flex flex-col">
                           <p className="text-xs text-zinc-700 max-w-[200px] truncate" title={dist?.address || 'Address not provided'}>

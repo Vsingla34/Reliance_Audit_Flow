@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { supabase, logActivity, notifyLinkedUsers } from '../supabase';
 import { AuditTicket, Distributor, UserProfile, DateProposal } from '../types';
-import { Calendar as CalendarIcon, Plus, Store, MapPin, CheckCircle2, X, Send, AlertCircle, MessageSquare, Filter, Trash2, CalendarCheck, ChevronLeft, ChevronRight, Clock, Edit2, Search } from 'lucide-react';
+import { Calendar as CalendarIcon, Plus, Store, MapPin, CheckCircle2, X, Send, AlertCircle, MessageSquare, Filter, Trash2, CalendarCheck, ChevronLeft, ChevronRight, Clock, Edit2, Search, User as UserIcon, Phone, Mail } from 'lucide-react';
 import { cn, useAuth } from '../App';
 import { motion, AnimatePresence } from 'motion/react';
 import { format, startOfMonth, endOfMonth, eachDayOfInterval, addMonths, subMonths, isToday } from 'date-fns';
@@ -59,6 +59,10 @@ export function SchedulerModule() {
     return map;
   }, [allUsers]);
 
+  // 🔥 GATEKEEPERS: Prevent scheduling an active distributor twice
+  const forceScheduleBlockedIds = useMemo(() => new Set(tickets.filter(t => !['tentative', 'closed'].includes(t.status)).map(t => t.distributorId)), [tickets]);
+  const negotiationBlockedIds = useMemo(() => new Set(tickets.filter(t => !['tentative', 'scheduled', 'closed'].includes(t.status)).map(t => t.distributorId)), [tickets]);
+
   const ticketsByDate = useMemo(() => {
     const map: Record<string, AuditTicket[]> = {};
     tickets.forEach(t => {
@@ -82,12 +86,13 @@ export function SchedulerModule() {
   }, [negDistId, tickets]);
 
   const headerFilteredDistributors = useMemo(() => {
-    if (!headerSearchTerm.trim()) return distributors;
+    if (!headerSearchTerm.trim()) return distributors.filter(d => !negotiationBlockedIds.has(d.id));
     return distributors.filter(d => 
-      d.name.toLowerCase().includes(headerSearchTerm.toLowerCase()) || 
-      d.code.toLowerCase().includes(headerSearchTerm.toLowerCase())
+      !negotiationBlockedIds.has(d.id) &&
+      (d.name.toLowerCase().includes(headerSearchTerm.toLowerCase()) || 
+       d.code.toLowerCase().includes(headerSearchTerm.toLowerCase()))
     );
-  }, [distributors, headerSearchTerm]);
+  }, [distributors, headerSearchTerm, negotiationBlockedIds]);
 
   useEffect(() => { setReplyDistId(negDistId); }, [negDistId]);
 
@@ -152,6 +157,10 @@ export function SchedulerModule() {
     e.preventDefault();
     if (!createData.distributorId) return alert("Please select a distributor.");
 
+    if (forceScheduleBlockedIds.has(createData.distributorId)) {
+        return alert("This distributor already has an active or scheduled audit ticket. Please reset or close the existing ticket before scheduling a new one.");
+    }
+
     try {
       const dist = distMap[createData.distributorId];
       if (!dist) return;
@@ -206,7 +215,6 @@ export function SchedulerModule() {
       const dist = distMap[editingActiveTicket.distributorId];
       const autoAuditDays = calculateAuditDays(dist?.approvedValue || 0);
 
-      // Note: We deliberately do not change the status here so 'in_progress' tickets stay 'in_progress'
       await supabase.from('auditTickets').update({
         scheduledDate: editTicketData.scheduledDate,
         proposedDate: editTicketData.scheduledDate,
@@ -226,6 +234,10 @@ export function SchedulerModule() {
   const handleAdminRequestDate = async () => {
     if (!user || !profile || !negDistId) return;
     
+    if (negotiationBlockedIds.has(negDistId)) {
+        return alert("Cannot request dates for this distributor as they already have an active audit in progress.");
+    }
+
     try {
       const newProposal: DateProposal = {
         id: Math.random().toString(36).substring(7),
@@ -261,6 +273,10 @@ export function SchedulerModule() {
 
     const finalTargetDistId = replyDistId || negDistId;
     if (!finalTargetDistId) return alert("Please select a distributor first.");
+
+    if (negotiationBlockedIds.has(finalTargetDistId)) {
+        return alert("Cannot propose dates for this distributor as they already have an active audit in progress.");
+    }
 
     if (!isAdminOrHO && !proposalData.date) {
       return alert("You must select a proposed date before submitting.");
@@ -606,7 +622,6 @@ export function SchedulerModule() {
                     <div className="space-y-1.5 sm:space-y-2 flex-1 overflow-y-auto custom-scrollbar pr-1">
                       {dayTickets.map(ticket => {
                         const dist = distMap[ticket.distributorId];
-                        const auditorNames = ticket.auditorIds && ticket.auditorIds.length > 0 ? ticket.auditorIds.map(id => userMap[id]?.name.split(' ')[0]).join(', ') : 'Unassigned';
 
                         return (
                           <div 
@@ -632,10 +647,27 @@ export function SchedulerModule() {
                             title={ticket.status === 'tentative' ? 'Click to negotiate dates' : (isAdminOrHO ? 'Click to edit assignment' : (profile?.role === 'ase' ? 'Click to request reschedule' : 'Scheduled'))}
                           >
                             <p className="font-bold text-zinc-900 truncate mb-0.5 sm:mb-1 leading-tight">{dist?.name || 'Unknown'}</p>
+                            
                             {ticket.status === 'tentative' ? (
                               <div className="flex items-center gap-1 text-[9px] sm:text-[10px] font-bold text-amber-600 uppercase"><Clock size={10} /> Needs Approval</div>
                             ) : (
-                              <div className="flex items-center gap-1 text-[9px] sm:text-[10px] font-medium text-emerald-700 bg-emerald-100/50 px-1 sm:px-1.5 py-0.5 rounded"><Store size={10} className="shrink-0" /><span className="truncate">{auditorNames}</span></div>
+                              <div className="flex flex-col gap-1 mt-1">
+                                {ticket.auditorIds && ticket.auditorIds.length > 0 ? (
+                                  ticket.auditorIds.map(id => {
+                                    const u = userMap[id];
+                                    if (!u) return null;
+                                    return (
+                                      <div key={id} className="flex flex-col bg-emerald-100/50 px-1.5 py-1 rounded border border-emerald-100/50 gap-0.5">
+                                        <span className="flex items-center gap-1 text-[9px] sm:text-[10px] font-bold text-emerald-800"><UserIcon size={10} className="shrink-0"/> <span className="truncate">{u.name}</span></span>
+                                        {(u.phone || (u as any).mobile) && <span className="flex items-center gap-1 text-[8px] sm:text-[9px] font-medium text-emerald-600"><Phone size={8} className="shrink-0"/> {u.phone || (u as any).mobile}</span>}
+                                        {u.email && <span className="flex items-center gap-1 text-[8px] sm:text-[9px] font-medium text-emerald-600 truncate"><Mail size={8} className="shrink-0"/> {u.email}</span>}
+                                      </div>
+                                    );
+                                  })
+                                ) : (
+                                  <div className="flex items-center gap-1 text-[9px] sm:text-[10px] font-medium text-emerald-700 bg-emerald-100/50 px-1 sm:px-1.5 py-0.5 rounded"><UserIcon size={10} className="shrink-0" /><span>Unassigned</span></div>
+                                )}
+                              </div>
                             )}
                           </div>
                         );
@@ -738,7 +770,7 @@ export function SchedulerModule() {
                     <label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-500">Select Distributor</label>
                     <select className="w-full mt-1 px-3 py-2.5 bg-white border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black outline-none transition-all cursor-pointer text-xs sm:text-sm font-medium shadow-sm" value={negDistId} onChange={e => setNegDistId(e.target.value)}>
                       <option value="">Choose a distributor...</option>
-                      {distributors.filter(d => d.id === negDistId || (d.active && (!negFilterAseId || (d.aseIds && d.aseIds.includes(negFilterAseId))))).map(d => <option key={d.id} value={d.id}>{d.name} ({d.code})</option>)}
+                      {distributors.filter(d => d.id === negDistId || (d.active && !negotiationBlockedIds.has(d.id) && (!negFilterAseId || (d.aseIds && d.aseIds.includes(negFilterAseId))))).map(d => <option key={d.id} value={d.id}>{d.name} ({d.code})</option>)}
                     </select>
                   </div>
                 </div>
@@ -811,7 +843,7 @@ export function SchedulerModule() {
                       <select disabled={!negDistId} className="w-full px-3 py-2.5 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black outline-none transition-all text-xs font-medium text-zinc-700 cursor-pointer disabled:opacity-50" value={replyDistId} onChange={e => setReplyDistId(e.target.value)}>
                         {negDistId && <option value={negDistId}>{distMap[negDistId]?.name} ({distMap[negDistId]?.code}) - Current</option>}
                         <optgroup label="Counter-Propose Another Distributor">
-                          {distributors.filter(d => d.id !== negDistId && d.active && (!pendingFilterAse || pendingFilterAse === 'all' || (d.aseIds && d.aseIds.includes(profile?.role === 'ase' ? profile.uid : pendingFilterAse)))).map(d => <option key={d.id} value={d.id}>{d.name} ({d.code})</option>)}
+                          {distributors.filter(d => d.id !== negDistId && d.active && !negotiationBlockedIds.has(d.id) && (!pendingFilterAse || pendingFilterAse === 'all' || (d.aseIds && d.aseIds.includes(profile?.role === 'ase' ? profile.uid : pendingFilterAse)))).map(d => <option key={d.id} value={d.id}>{d.name} ({d.code})</option>)}
                         </optgroup>
                       </select>
 
@@ -869,7 +901,7 @@ export function SchedulerModule() {
                     <label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-400">Select Distributor *</label>
                     <select required className="w-full mt-1 px-3 sm:px-4 py-2.5 sm:py-3 bg-zinc-50 border border-zinc-200 sm:border-none rounded-xl focus:ring-2 focus:ring-black transition-all cursor-pointer text-sm" value={createData.distributorId} onChange={e => setCreateData({...createData, distributorId: e.target.value})} disabled={isAdminOrHO && !createAseId && distributors.length > 50}>
                       <option value="">Choose a distributor...</option>
-                      {distributors.filter(d => d.active && (!createAseId || (d.aseIds && d.aseIds.includes(createAseId)))).map(d => <option key={d.id} value={d.id}>{d.name} ({d.code})</option>)}
+                      {distributors.filter(d => d.active && !forceScheduleBlockedIds.has(d.id) && (!createAseId || (d.aseIds && d.aseIds.includes(createAseId)))).map(d => <option key={d.id} value={d.id}>{d.name} ({d.code})</option>)}
                     </select>
                   </div>
                   

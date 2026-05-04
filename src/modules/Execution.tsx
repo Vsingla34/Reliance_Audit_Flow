@@ -550,7 +550,6 @@ export function ExecutionModule() {
   const signOff = async (roleRequired: 'auditor' | 'ase' | 'distributor') => {
     if (!activeTicket || !user || !profile) return;
     
-    // Allow Admins/SuperAdmins to override and sign off for anyone!
     if (profile.role !== roleRequired && !isAdminOrSuperadmin) { 
       alert(`Action Denied: Must be an ${roleRequired.toUpperCase()} or Admin to sign.`); 
       return; 
@@ -618,7 +617,9 @@ export function ExecutionModule() {
     const canUploadFiles = (isAuditor || isAdminOrHO) && (!isSubmittedPhase && !['auditor_submitted'].includes(activeTicket.status));
     
     const canEditItems = (isAuditor || isAdminOrSuperadmin) && canUploadFiles && isActionableDate && hasApprovedCheckIn && activeTicket.status === 'in_progress' && !isClosedPhase; 
-    const canEditDrainage = (isAuditor || isAdminOrSuperadmin) && activeTicket.status === 'drainage_pending' && !isClosedPhase;
+    
+    const isDrainageToday = activeTicket.signOffs?.drainageDate === todayStr;
+    const canEditDrainage = (isAuditor || isAdminOrSuperadmin) && activeTicket.status === 'drainage_pending' && !isClosedPhase && isDrainageToday;
 
     const percentUsed = ((activeTicket.verifiedTotal || 0) / activeTicket.approvedValue) * 100;
     const isOverBudget = (activeTicket.verifiedTotal || 0) > activeTicket.approvedValue;
@@ -764,11 +765,19 @@ export function ExecutionModule() {
                       <input type="date" className="w-full sm:flex-1 px-4 py-3 sm:py-2 rounded-xl border border-teal-200 outline-none focus:ring-2 focus:ring-teal-500 text-sm font-bold bg-white" value={drainageDateInput || activeTicket.signOffs?.drainageDate || ''} onChange={(e) => setDrainageDateInput(e.target.value)} />
                       <button onClick={setDrainageDate} disabled={!drainageDateInput} className="w-full sm:w-auto px-6 py-3 sm:py-2 bg-teal-600 text-white font-bold rounded-xl hover:bg-teal-700 transition-colors disabled:opacity-50">Save Date</button>
                     </div>
+                    {!isDrainageToday && activeTicket.signOffs?.drainageDate && (
+                      <p className="mt-3 text-[11px] sm:text-xs font-bold text-red-600 flex items-center gap-1.5"><AlertCircle size={14} /> Inputs are currently locked. The Drainage Date must be set to today ({todayStr}) to edit quantities.</p>
+                    )}
                   </>
                 ) : (
-                  <p className="text-xs sm:text-sm text-teal-800 mt-1 mb-3 sm:mb-4">
-                     Original counts are frozen. <strong>Drainage Date: {activeTicket.signOffs?.drainageDate || 'Pending Admin to schedule'}</strong>
-                  </p>
+                  <>
+                    <p className="text-xs sm:text-sm text-teal-800 mt-1 mb-3 sm:mb-4">
+                       Original counts are frozen. <strong>Drainage Date: {activeTicket.signOffs?.drainageDate || 'Pending Admin to schedule'}</strong>
+                    </p>
+                    {!isDrainageToday && activeTicket.signOffs?.drainageDate && (
+                      <p className="mt-3 text-[11px] sm:text-xs font-bold text-red-600 flex items-center gap-1.5"><AlertCircle size={14} /> Drained Qty inputs are locked because the drainage date is not today.</p>
+                    )}
+                  </>
                 )}
               </div>
             </div>
@@ -1144,8 +1153,8 @@ export function ExecutionModule() {
               <div className="pt-6 sm:pt-8 flex justify-end border-t border-zinc-100 w-full">
                 <button 
                   onClick={submitDrainage} 
-                  disabled={!activeTicket.signOffs?.drainageDate}
-                  title={!activeTicket.signOffs?.drainageDate ? "Please wait for an Admin to set a Drainage Date first" : ""}
+                  disabled={!activeTicket.signOffs?.drainageDate || !isDrainageToday}
+                  title={!activeTicket.signOffs?.drainageDate ? "Please wait for an Admin to set a Drainage Date first" : !isDrainageToday ? "Drainage can only be completed on the exact scheduled date" : ""}
                   className="w-full sm:w-auto flex justify-center items-center gap-2 px-6 sm:px-8 py-3.5 sm:py-4 bg-teal-600 text-white rounded-xl sm:rounded-2xl font-bold hover:bg-teal-700 transition-all shadow-xl shadow-teal-600/20 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed text-sm sm:text-base"
                 >
                   <CheckCircle2 size={18} /> Complete Drainage & Close Audit
