@@ -11,7 +11,7 @@ const calculateAuditDays = (approvedValue: number) => {
   if (!approvedValue) return 1;
   if (approvedValue <= 150000) return 1;
   if (approvedValue <= 300000) return 2;
-  return Math.ceil(approvedValue / 150000); // Scales infinitely (e.g. 4.5L = 3 days)
+  return Math.ceil(approvedValue / 150000); 
 };
 
 export function SchedulerModule() {
@@ -23,7 +23,6 @@ export function SchedulerModule() {
   
   const [currentMonth, setCurrentMonth] = useState(new Date());
   
-  // --- UNIFIED NEGOTIATION STATE ---
   const [isNegotiationModalOpen, setIsNegotiationModalOpen] = useState(false);
   const [negFilterAseId, setNegFilterAseId] = useState('');
   const [negDistId, setNegDistId] = useState('');
@@ -59,7 +58,6 @@ export function SchedulerModule() {
     return map;
   }, [allUsers]);
 
-  // 🔥 GATEKEEPERS: Prevent scheduling an active distributor twice
   const forceScheduleBlockedIds = useMemo(() => new Set(tickets.filter(t => !['tentative', 'closed'].includes(t.status)).map(t => t.distributorId)), [tickets]);
   const negotiationBlockedIds = useMemo(() => new Set(tickets.filter(t => !['tentative', 'scheduled', 'closed'].includes(t.status)).map(t => t.distributorId)), [tickets]);
 
@@ -278,7 +276,7 @@ export function SchedulerModule() {
         return alert("Cannot propose dates for this distributor as they already have an active audit in progress.");
     }
 
-    if (!isAdminOrHO && !proposalData.date) {
+    if (profile?.role === 'ase' && !proposalData.date) {
       return alert("You must select a proposed date before submitting.");
     }
     if (isAdminOrHO && !proposalData.date && !proposalData.remarks.trim()) {
@@ -288,7 +286,7 @@ export function SchedulerModule() {
     const targetTicket = tickets.find(t => t.distributorId === finalTargetDistId && ['tentative', 'scheduled'].includes(t.status));
     
     let rescheduleReason = "";
-    if (targetTicket && targetTicket.status === 'scheduled' && !isAdminOrHO) {
+    if (targetTicket && targetTicket.status === 'scheduled' && profile?.role === 'ase') {
       rescheduleReason = window.prompt("⚠️ This audit is already scheduled and confirmed.\n\nPlease provide a mandatory reason for requesting this reschedule:") || "";
       if (!rescheduleReason.trim()) {
         return alert("Reschedule Cancelled: A valid reason is required to alter a confirmed schedule.");
@@ -318,7 +316,7 @@ export function SchedulerModule() {
         };
         const updatedOldProposals = [...(currentNegTicket.dateProposals || []), redirectProposal];
         
-        const oldTicketStatus = currentNegTicket.status === 'scheduled' && !isAdminOrHO ? 'tentative' : currentNegTicket.status;
+        const oldTicketStatus = currentNegTicket.status === 'scheduled' && profile?.role === 'ase' ? 'tentative' : currentNegTicket.status;
         await supabase.from('auditTickets').update({ dateProposals: updatedOldProposals, status: oldTicketStatus, updatedAt: new Date().toISOString() }).eq('id', currentNegTicket.id);
       }
 
@@ -326,7 +324,7 @@ export function SchedulerModule() {
         const updatedProposals = [...(targetTicket.dateProposals || []), newProposal];
         const newMainDate = proposalData.date ? proposalData.date : targetTicket.proposedDate;
         
-        const newStatus = targetTicket.status === 'scheduled' && !isAdminOrHO ? 'tentative' : targetTicket.status;
+        const newStatus = targetTicket.status === 'scheduled' && profile?.role === 'ase' ? 'tentative' : targetTicket.status;
 
         await supabase.from('auditTickets').update({ proposedDate: newMainDate, dateProposals: updatedProposals, status: newStatus, updatedAt: new Date().toISOString() }).eq('id', targetTicket.id);
         
@@ -474,7 +472,7 @@ export function SchedulerModule() {
   
   const isTodayAudit = currentNegTicket?.scheduledDate === localTodayStr;
   const isPastNoon = todayObj.getHours() >= 12;
-  const canCancelToday = !isAdminOrHO && currentNegTicket?.status === 'scheduled' && isTodayAudit && isPastNoon;
+  const canCancelToday = profile?.role === 'ase' && currentNegTicket?.status === 'scheduled' && isTodayAudit && isPastNoon;
 
   return (
     <div className="space-y-6 sm:space-y-8 pb-12 w-full min-w-0">
@@ -505,7 +503,7 @@ export function SchedulerModule() {
                 {isHeaderSearchOpen && headerFilteredDistributors.length > 0 && (
                   <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="absolute top-full mt-2 left-0 w-full bg-white border border-zinc-200 rounded-xl shadow-xl z-50 max-h-60 overflow-y-auto custom-scrollbar flex flex-col p-1">
                     {headerFilteredDistributors.map(dist => (
-                      <button key={dist.id} onClick={() => openNegotiationModal(dist.id)} className="text-left px-3 py-2.5 hover:bg-zinc-50 rounded-lg transition-colors flex items-center gap-3 w-full">
+                      <button key={dist.id} onMouseDown={() => openNegotiationModal(dist.id)} className="text-left px-3 py-2.5 hover:bg-zinc-50 rounded-lg transition-colors flex items-center gap-3 w-full">
                         <Store size={14} className="text-zinc-400 shrink-0" />
                         <div className="min-w-0">
                           <p className="font-bold text-sm text-zinc-900 truncate">{dist.name}</p>
@@ -630,7 +628,6 @@ export function SchedulerModule() {
                               if (ticket.status === 'tentative') {
                                 openNegotiationModal(ticket.distributorId);
                               } else {
-                                // For ALL non-tentative statuses (scheduled, in_progress, completed)
                                 if (isAdminOrHO) {
                                   setEditingActiveTicket(ticket);
                                   setEditTicketData({ scheduledDate: ticket.scheduledDate || '', auditorIds: ticket.auditorIds || [] });
@@ -644,7 +641,7 @@ export function SchedulerModule() {
                               ticket.status === 'tentative' ? "bg-amber-50 border-amber-200 hover:shadow-md cursor-pointer hover:-translate-y-0.5" : 
                               cn("bg-emerald-50 border-emerald-100/50", (isAdminOrHO || (profile?.role === 'ase' && ticket.status === 'scheduled')) ? "cursor-pointer hover:shadow-md hover:border-emerald-300 hover:-translate-y-0.5" : "cursor-default")
                             )} 
-                            title={ticket.status === 'tentative' ? 'Click to negotiate dates' : (isAdminOrHO ? 'Click to edit assignment' : (profile?.role === 'ase' ? 'Click to request reschedule' : 'Scheduled'))}
+                            title={ticket.status === 'tentative' ? 'Click to view dates' : (isAdminOrHO ? 'Click to edit assignment' : (profile?.role === 'ase' ? 'Click to request reschedule' : 'Scheduled'))}
                           >
                             <p className="font-bold text-zinc-900 truncate mb-0.5 sm:mb-1 leading-tight">{dist?.name || 'Unknown'}</p>
                             
@@ -832,7 +829,7 @@ export function SchedulerModule() {
               </div>
 
               {/* Form is only shown to ASEs, OR to Admins if the ticket already has history. */}
-              {(!isAdminOrHO || (isAdminOrHO && currentNegTicket)) && (
+              {((profile?.role === 'ase') || (isAdminOrHO && currentNegTicket)) && (
                 <div className="p-4 sm:p-5 md:p-6 bg-white border-t border-zinc-100 shrink-0">
                   <form onSubmit={submitProposal} className="space-y-3">
                     <h5 className="text-xs font-bold tracking-tight text-zinc-900">
@@ -848,7 +845,7 @@ export function SchedulerModule() {
                       </select>
 
                       <div className="flex flex-col sm:flex-row gap-3 w-full">
-                        <input type="date" required={!isAdminOrHO} disabled={!negDistId} min={new Date().toISOString().split('T')[0]} className="w-full sm:w-40 px-3 py-2.5 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black outline-none transition-all text-xs font-medium text-zinc-700 cursor-pointer shrink-0 disabled:opacity-50" value={proposalData.date} onChange={e => setProposalData({...proposalData, date: e.target.value})} />
+                        <input type="date" required={profile?.role === 'ase'} disabled={!negDistId} min={new Date().toISOString().split('T')[0]} className="w-full sm:w-40 px-3 py-2.5 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black outline-none transition-all text-xs font-medium text-zinc-700 cursor-pointer shrink-0 disabled:opacity-50" value={proposalData.date} onChange={e => setProposalData({...proposalData, date: e.target.value})} />
                         <div className={cn("relative flex-1")}>
                           <input type="text" disabled={!negDistId} placeholder="Type message..." className="w-full pl-3 pr-10 py-2.5 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black outline-none transition-all text-xs disabled:opacity-50" value={proposalData.remarks} onChange={e => setProposalData({...proposalData, remarks: e.target.value})} />
                           <button type="submit" disabled={!negDistId} className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1.5 bg-black text-white rounded-lg hover:bg-zinc-800 transition-colors disabled:opacity-50"><Send size={14}/></button>
@@ -867,55 +864,6 @@ export function SchedulerModule() {
                   )}
                 </div>
               )}
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* --- FORCE SCHEDULE MODAL --- */}
-      <AnimatePresence>
-        {isCreateModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6">
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsCreateModalOpen(false)} className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
-            <motion.div initial={{ opacity: 0, scale: 0.9, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9, y: 20 }} className="relative w-full max-w-md bg-white rounded-[1.5rem] sm:rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
-              
-              <div className="flex justify-between items-center p-5 sm:p-6 border-b border-zinc-100 shrink-0">
-                <h3 className="text-lg sm:text-xl font-bold">Force Schedule Audit</h3>
-                <button onClick={() => setIsCreateModalOpen(false)} className="p-1.5 sm:p-2 hover:bg-zinc-100 rounded-lg sm:rounded-xl"><X size={18} className="sm:w-5 sm:h-5"/></button>
-              </div>
-
-              <div className="p-5 sm:p-6 overflow-y-auto custom-scrollbar flex-1 min-h-0">
-                <form id="force-schedule-form" onSubmit={handleCreateSubmit} className="space-y-3 sm:space-y-4">
-                  
-                  {isAdminOrHO && (
-                    <div>
-                      <label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-400">Filter by ASE (Optional)</label>
-                      <select className="w-full mt-1 px-3 sm:px-4 py-2.5 sm:py-3 bg-zinc-50 border border-zinc-200 sm:border-none rounded-xl focus:ring-2 focus:ring-black transition-all cursor-pointer text-sm" value={createAseId} onChange={e => { setCreateAseId(e.target.value); setCreateData({...createData, distributorId: ''}); }}>
-                        <option value="">All ASEs...</option>
-                        {allUsers.filter(u => u.role === 'ase' && u.active).map(u => <option key={u.uid} value={u.uid}>{u.name} {u.region ? `(${u.region})` : ''}</option>)}
-                      </select>
-                    </div>
-                  )}
-
-                  <div>
-                    <label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-400">Select Distributor *</label>
-                    <select required className="w-full mt-1 px-3 sm:px-4 py-2.5 sm:py-3 bg-zinc-50 border border-zinc-200 sm:border-none rounded-xl focus:ring-2 focus:ring-black transition-all cursor-pointer text-sm" value={createData.distributorId} onChange={e => setCreateData({...createData, distributorId: e.target.value})} disabled={isAdminOrHO && !createAseId && distributors.length > 50}>
-                      <option value="">Choose a distributor...</option>
-                      {distributors.filter(d => d.active && !forceScheduleBlockedIds.has(d.id) && (!createAseId || (d.aseIds && d.aseIds.includes(createAseId)))).map(d => <option key={d.id} value={d.id}>{d.name} ({d.code})</option>)}
-                    </select>
-                  </div>
-                  
-                  <div>
-                    <label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-400">Start Date</label>
-                    <input required type="date" min={new Date().toISOString().split('T')[0]} className="w-full mt-1 px-3 sm:px-4 py-2.5 sm:py-3 bg-zinc-50 border border-zinc-200 sm:border-none rounded-xl focus:ring-2 focus:ring-black transition-all cursor-pointer text-sm" value={createData.proposedDate} onChange={e => setCreateData({...createData, proposedDate: e.target.value})} />
-                  </div>
-                </form>
-              </div>
-
-              <div className="p-5 sm:p-6 border-t border-zinc-100 shrink-0">
-                <button type="submit" form="force-schedule-form" className="w-full py-3 sm:py-4 bg-black text-white rounded-xl sm:rounded-2xl font-bold hover:bg-zinc-800 transition-all shadow-md sm:shadow-xl sm:shadow-black/10 active:scale-95 text-sm sm:text-base">Schedule Audit</button>
-              </div>
-
             </motion.div>
           </div>
         )}
