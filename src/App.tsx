@@ -2,9 +2,10 @@ import React, { createContext, useContext, useEffect, useState, useMemo } from '
 import { supabase, logActivity } from './supabase';
 import { User } from '@supabase/supabase-js';
 import { UserProfile, ActivityLog } from './types';
-import { LayoutDashboard, Users, Store, CalendarClock, PlaySquare, FileBarChart, LogOut, Menu, X, Database, Bell, Trash2, ShieldAlert, Search, CheckCheck, Loader2, CalendarDays, Download } from 'lucide-react';
+import { LayoutDashboard, Users, Store, CalendarClock, PlaySquare, FileBarChart, LogOut, Menu, X, Database, Bell, Trash2, Search, CheckCheck, Loader2, CalendarDays, Download } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { isToday, isThisWeek, isThisMonth } from 'date-fns';
+import logo from './public/favicon.png'
 
 // Modules
 import { DashboardModule } from './modules/Dashboard';
@@ -32,18 +33,18 @@ export function cn(...classes: (string | undefined | null | false)[]) {
   return classes.filter(Boolean).join(' ');
 }
 
-// --- COLOR ENGINE FOR ACTIVITY LOGS ---
+// --- REFINED COLOR ENGINE FOR ACTIVITY LOGS ---
 const getLogStyle = (action: string) => {
   const a = action.toLowerCase();
-  if (a.includes('scheduled')) return { bg: 'bg-blue-50', border: 'border-blue-200', text: 'text-blue-900', tag: 'bg-blue-100 text-blue-700' };
-  if (a.includes('drainage')) return { bg: 'bg-teal-50', border: 'border-teal-200', text: 'text-teal-900', tag: 'bg-teal-100 text-teal-700' };
-  if (a.includes('check-in') || a.includes('selfie')) return { bg: 'bg-indigo-50', border: 'border-indigo-200', text: 'text-indigo-900', tag: 'bg-indigo-100 text-indigo-700' };
-  if (a.includes('whatsapp') || a.includes('document')) return { bg: 'bg-fuchsia-50', border: 'border-fuchsia-200', text: 'text-fuchsia-900', tag: 'bg-fuchsia-100 text-fuchsia-700' };
-  if (a.includes('verified') || a.includes('completed') || a.includes('signed off') || a.includes('approved')) return { bg: 'bg-emerald-50', border: 'border-emerald-200', text: 'text-emerald-900', tag: 'bg-emerald-100 text-emerald-700' };
-  if (a.includes('buffer')) return { bg: 'bg-amber-50', border: 'border-amber-200', text: 'text-amber-900', tag: 'bg-amber-100 text-amber-700' };
-  if (a.includes('reset') || a.includes('overridden') || a.includes('rejected') || a.includes('deleted')) return { bg: 'bg-rose-50', border: 'border-rose-200', text: 'text-rose-900', tag: 'bg-rose-100 text-rose-700' };
+  if (a.includes('scheduled')) return { bg: 'bg-indigo-50/50', border: 'border-indigo-100', text: 'text-indigo-900', tag: 'bg-indigo-100/50 text-indigo-700' };
+  if (a.includes('drainage')) return { bg: 'bg-cyan-50/50', border: 'border-cyan-100', text: 'text-cyan-900', tag: 'bg-cyan-100/50 text-cyan-700' };
+  if (a.includes('check-in') || a.includes('selfie')) return { bg: 'bg-sky-50/50', border: 'border-sky-100', text: 'text-sky-900', tag: 'bg-sky-100/50 text-sky-700' };
+  if (a.includes('whatsapp') || a.includes('document')) return { bg: 'bg-fuchsia-50/50', border: 'border-fuchsia-100', text: 'text-fuchsia-900', tag: 'bg-fuchsia-100/50 text-fuchsia-700' };
+  if (a.includes('verified') || a.includes('completed') || a.includes('signed off') || a.includes('approved')) return { bg: 'bg-emerald-50/50', border: 'border-emerald-100', text: 'text-emerald-900', tag: 'bg-emerald-100/50 text-emerald-700' };
+  if (a.includes('buffer')) return { bg: 'bg-amber-50/50', border: 'border-amber-100', text: 'text-amber-900', tag: 'bg-amber-100/50 text-amber-700' };
+  if (a.includes('reset') || a.includes('overridden') || a.includes('rejected') || a.includes('deleted')) return { bg: 'bg-rose-50/50', border: 'border-rose-100', text: 'text-rose-900', tag: 'bg-rose-100/50 text-rose-700' };
   
-  return { bg: 'bg-white', border: 'border-zinc-200', text: 'text-zinc-900', tag: 'bg-zinc-100 text-zinc-600' };
+  return { bg: 'bg-slate-50/50', border: 'border-slate-200', text: 'text-slate-900', tag: 'bg-slate-100 text-slate-600' };
 };
 
 export default function App() {
@@ -87,7 +88,6 @@ export default function App() {
   const [notifications, setNotifications] = useState<any[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
 
-  // NEW: Advanced Filter States
   const [logSearch, setLogSearch] = useState('');
   const [logTimeFilter, setLogTimeFilter] = useState<'all' | 'today' | 'week' | 'month'>('all');
   const [logRoleFilter, setLogRoleFilter] = useState('all');
@@ -128,7 +128,6 @@ export default function App() {
     return () => subscription.unsubscribe();
   }, []);
 
-  // Fetch Logs & Notifications
   useEffect(() => {
     if (!user || !profile) return;
     
@@ -185,17 +184,14 @@ export default function App() {
     setUnreadCount(prev => Math.max(0, prev - 1));
   };
 
-  // --- EXTRACT UNIQUE ACTIONS FOR DROPDOWN ---
   const uniqueActions = useMemo(() => {
     const actions = new Set<string>();
     activityLogs.forEach(log => actions.add(log.action));
     return Array.from(actions).sort();
   }, [activityLogs]);
 
-  // --- ADVANCED FILTER ENGINE ---
   const filteredLogs = useMemo(() => {
     return activityLogs.filter(log => {
-      // 1. Time Filter
       let matchesTime = true;
       if (logTimeFilter !== 'all') {
         const logDate = new Date(log.timestamp);
@@ -204,14 +200,12 @@ export default function App() {
         else if (logTimeFilter === 'month') matchesTime = isThisMonth(logDate);
       }
 
-      // 2. Search Filter (Distributor Name, User Name, Details)
       const searchLower = logSearch.toLowerCase().trim();
       const matchesSearch = searchLower === '' || 
         (log.details && log.details.toLowerCase().includes(searchLower)) ||
         (log.action && log.action.toLowerCase().includes(searchLower)) ||
         (log.userName && log.userName.toLowerCase().includes(searchLower));
 
-      // 3. Role Filter
       let matchesRole = true;
       if (logRoleFilter !== 'all') {
         if (logRoleFilter === 'admin') {
@@ -221,14 +215,12 @@ export default function App() {
         }
       }
 
-      // 4. Action/Status Filter
       const matchesAction = logActionFilter === 'all' || log.action === logActionFilter;
 
       return matchesTime && matchesSearch && matchesRole && matchesAction;
     });
   }, [activityLogs, logTimeFilter, logSearch, logRoleFilter, logActionFilter]);
 
-  // --- EXCEL / CSV EXPORTER ---
   const downloadLogsCSV = () => {
     if (filteredLogs.length === 0) {
       return alert("No logs match the current filters to download.");
@@ -237,7 +229,6 @@ export default function App() {
     const headers = ["Date", "Time", "Action Status", "User Name", "User Role", "Log Details"];
     const csvRows = filteredLogs.map(log => {
       const d = new Date(log.timestamp);
-      // Clean up details to prevent CSV breaking from commas or quotes
       const cleanDetails = log.details ? log.details.replace(/"/g, '""') : '';
       
       return [
@@ -292,7 +283,6 @@ export default function App() {
     }
   }, [profile, activeModuleState]); 
 
-  // --- THE AUTO-HEALING PROFILE FETCHER ---
   const fetchProfile = async (authUser: User) => {
     try {
       let { data } = await supabase.from('users').select('*').eq('uid', authUser.id).maybeSingle();
@@ -301,14 +291,12 @@ export default function App() {
         const { data: emailMatch } = await supabase.from('users').select('*').eq('email', authUser.email).maybeSingle();
         
         if (emailMatch) {
-          console.log("Auto-healing UID mismatch for user:", authUser.email);
           await supabase.from('users').update({ uid: authUser.id }).eq('email', authUser.email);
           data = { ...emailMatch, uid: authUser.id }; 
         }
       }
 
       if (!data) {
-        console.error("No profile found in public.users for:", authUser.email);
         await supabase.auth.signOut();
         setAuthError(`Account error. No profile found for ${authUser.email}.`);
         setLoading(false);
@@ -362,33 +350,18 @@ export default function App() {
     } catch (error) { console.error("Failed to delete log:", error); }
   };
 
-  const clearAllLogs = async () => {
-    if (profile?.role !== 'superadmin') {
-      alert("Action Denied: Only SuperAdmins can clear system logs.");
-      return;
-    }
-    if (window.confirm("WARNING: This will permanently delete ALL system activity logs. Continue?")) {
-      try {
-        await supabase.from('activityLogs').delete().neq('id', '0');
-      } catch (error) { console.error("Failed to clear logs:", error); }
-    }
-  };
-
-  // --- RENDER PIPELINE ---
-
   if (loading) {
     return (
-      <div className="min-h-screen bg-zinc-50 flex items-center justify-center p-4">
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
         <div className="animate-pulse flex flex-col items-center">
-          <div className="w-16 h-16 bg-zinc-200 rounded-2xl mb-4"></div>
-          <div className="h-4 w-32 bg-zinc-200 rounded mb-2"></div>
-          <div className="h-3 w-24 bg-zinc-200 rounded"></div>
+          <div className="w-16 h-16 bg-slate-200 rounded-3xl mb-4"></div>
+          <div className="h-4 w-32 bg-slate-200 rounded mb-2"></div>
+          <div className="h-3 w-24 bg-slate-200 rounded"></div>
         </div>
       </div>
     );
   }
 
-  // 1. PASSWORD SETUP INTERCEPTION
   if (needsPasswordSetup && user) {
      return <ForcePasswordSetup user={user} onComplete={() => {
         setNeedsPasswordSetup(false);
@@ -396,52 +369,56 @@ export default function App() {
      }} />;
   }
 
-  // 2. LOGIN SCREEN
+  // --- REDESIGNED LOGIN SCREEN WITH CUSTOM LOGO ---
   if (!user || !profile) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-zinc-50 to-zinc-100 flex items-center justify-center p-4 sm:p-6 md:p-8 relative overflow-hidden">
+      <div className="min-h-screen bg-[#0f172a] bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-indigo-900 via-slate-900 to-black flex items-center justify-center p-4 sm:p-6 md:p-8 relative overflow-hidden">
+        {/* Abstract shapes for depth */}
         <div className="absolute top-0 left-0 w-full h-full overflow-hidden z-0 pointer-events-none">
-          <div className="absolute -top-40 -right-40 w-96 h-96 bg-blue-100 rounded-full blur-3xl opacity-50"></div>
-          <div className="absolute -bottom-40 -left-40 w-96 h-96 bg-indigo-100 rounded-full blur-3xl opacity-50"></div>
+          <div className="absolute -top-[20%] -right-[10%] w-[600px] h-[600px] bg-indigo-500/20 rounded-full blur-[120px]"></div>
+          <div className="absolute -bottom-[20%] -left-[10%] w-[500px] h-[500px] bg-emerald-500/10 rounded-full blur-[100px]"></div>
         </div>
 
-        <div className="max-w-[420px] w-full bg-white/80 backdrop-blur-2xl p-8 sm:p-10 rounded-[2rem] sm:rounded-[2.5rem] shadow-2xl border border-white/60 relative z-10">
-          <div className="flex justify-center mb-6">
-            <div className="w-14 h-14 sm:w-16 sm:h-16 bg-black rounded-2xl flex items-center justify-center shadow-lg">
-              <ShieldAlert className="text-white" size={28} />
+        <motion.div 
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="max-w-[420px] w-full bg-slate-900/60 backdrop-blur-2xl p-8 sm:p-10 rounded-[2.5rem] shadow-[0_8px_30px_rgb(0,0,0,0.4)] border border-slate-700/50 relative z-10"
+        >
+          <div className="flex justify-center mb-8">
+            <div className="w-16 h-16 bg-white/10 rounded-2xl flex items-center justify-center shadow-lg shadow-indigo-500/10 p-2.5 border border-white/10 backdrop-blur-sm">
+              <img src={logo} alt="Logo" className="w-full h-full object-contain" />
             </div>
           </div>
           
           <div className="text-center mb-8">
-            <h2 className="text-2xl font-bold tracking-tight text-zinc-900">Welcome Back</h2>
-            <p className="text-zinc-500 text-sm mt-2">Sign in to your enterprise auditing portal.</p>
+            <h2 className="text-2xl font-bold tracking-tight text-white">Reliance Audit</h2>
+            <p className="text-slate-400 text-sm mt-2 font-medium">Enterprise Management Portal</p>
           </div>
           
           {authError && (
-            <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mb-6 p-4 bg-red-50/80 text-red-600 text-sm font-bold rounded-2xl text-center border border-red-100">
+            <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mb-6 p-4 bg-rose-500/10 text-rose-400 text-sm font-bold rounded-2xl text-center border border-rose-500/20">
               {authError}
             </motion.div>
           )}
           
           <form onSubmit={handleLogin} className="space-y-5">
             <div>
-              <label className="text-[11px] font-bold uppercase tracking-wider text-zinc-500 ml-2">Email Address</label>
-              <input type="email" required className="w-full mt-1.5 px-5 py-4 bg-white/50 border border-zinc-200 rounded-2xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-sm shadow-sm" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@company.com" />
+              <label className="text-[11px] font-bold uppercase tracking-wider text-slate-400 ml-2">Email Address</label>
+              <input type="email" required className="w-full mt-1.5 px-5 py-4 bg-slate-800/50 border border-slate-700 text-white rounded-2xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all text-sm placeholder:text-slate-500" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@company.com" />
             </div>
             <div>
-              <label className="text-[11px] font-bold uppercase tracking-wider text-zinc-500 ml-2">Password</label>
-              <input type="password" required className="w-full mt-1.5 px-5 py-4 bg-white/50 border border-zinc-200 rounded-2xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-sm shadow-sm" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" />
+              <label className="text-[11px] font-bold uppercase tracking-wider text-slate-400 ml-2">Password</label>
+              <input type="password" required className="w-full mt-1.5 px-5 py-4 bg-slate-800/50 border border-slate-700 text-white rounded-2xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all text-sm placeholder:text-slate-500" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" />
             </div>
-            <button type="submit" disabled={isLoggingIn} className="w-full mt-8 py-4 bg-gradient-to-r from-blue-700 to-blue-900 text-white rounded-2xl font-bold hover:from-blue-800 hover:to-black transition-all shadow-xl shadow-blue-900/20 active:scale-95 disabled:opacity-70 flex justify-center items-center text-sm sm:text-base">
+            <button type="submit" disabled={isLoggingIn} className="w-full mt-8 py-4 bg-indigo-600 text-white rounded-2xl font-bold hover:bg-indigo-500 transition-all shadow-lg shadow-indigo-600/30 active:scale-[0.98] disabled:opacity-70 flex justify-center items-center text-sm sm:text-base">
               {isLoggingIn ? <Loader2 size={20} className="animate-spin text-white/70" /> : 'Secure Sign In'}
             </button>
           </form>
-        </div>
+        </motion.div>
       </div>
     );
   }
 
-  // 3. MAIN APPLICATION ROUTING
   const renderModule = () => {
     switch (activeModuleState) {
       case 'dashboard': return <DashboardModule />;
@@ -458,90 +435,98 @@ export default function App() {
 
   return (
     <AuthContext.Provider value={{ user, profile, signOut }}>
-      <div className="min-h-screen bg-[#F4F5F7] flex flex-col w-full overflow-x-hidden font-sans">
+      <div className="min-h-screen bg-slate-50 flex flex-col w-full overflow-x-hidden font-sans text-slate-900">
         
-        {/* DESKTOP SIDEBAR */}
-        <aside className="hidden lg:flex flex-col w-72 bg-white/70 backdrop-blur-3xl border-r border-zinc-200/60 fixed h-full z-40 shadow-[4px_0_24px_rgba(0,0,0,0.02)]">
+        {/* --- REDESIGNED DESKTOP SIDEBAR WITH CUSTOM LOGO --- */}
+        <aside className="hidden lg:flex flex-col w-[280px] bg-white border-r border-slate-200 fixed h-full z-40 shadow-sm">
           <div className="p-8 pb-6 flex items-center gap-3">
-            <div className="w-10 h-10 bg-black rounded-xl flex items-center justify-center shadow-lg"><ShieldAlert className="text-white" size={20} /></div>
-            <div><h1 className="font-black text-xl tracking-tight leading-none">Reliance<br/><span className="text-zinc-400">Audit</span></h1></div>
+            <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border border-slate-100 p-1.5 bg-slate-50 shadow-sm">
+              <img src={logo} alt="Logo" className="w-full h-full object-contain" />
+            </div>
+            <div>
+              <h1 className="font-black text-xl tracking-tight leading-none text-slate-900">Reliance</h1>
+              <span className="text-xs font-bold tracking-widest uppercase text-slate-400">Audit System</span>
+            </div>
           </div>
           
-          <nav className="flex-1 px-4 space-y-1.5 overflow-y-auto custom-scrollbar mt-4">
-            <div className="px-4 mb-3 text-[10px] font-black text-zinc-400 uppercase tracking-widest">Main Menu</div>
+          <nav className="flex-1 px-4 space-y-1.5 overflow-y-auto custom-scrollbar mt-2">
+            <div className="px-4 mb-3 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Main Menu</div>
             {allowedNavItems.map(item => {
               const Icon = item.icon;
               const isActive = activeModuleState === item.id;
               return (
                 <button key={item.id} onClick={() => setActiveModule(item.id)} className={cn(
-                  "w-full flex items-center gap-3 px-4 py-3.5 rounded-2xl font-bold text-sm transition-all group relative overflow-hidden",
-                  isActive ? "text-blue-700 shadow-sm border border-blue-100" : "text-zinc-500 hover:bg-white hover:text-zinc-900 border border-transparent"
+                  "w-full flex items-center gap-3 px-4 py-3 rounded-[14px] font-semibold text-sm transition-all group relative overflow-hidden",
+                  isActive ? "bg-indigo-50 text-indigo-700 shadow-sm border border-indigo-100/50" : "text-slate-500 hover:bg-slate-50 hover:text-slate-900 border border-transparent"
                 )}>
-                  {isActive && <motion.div layoutId="active-nav" className="absolute inset-0 bg-gradient-to-r from-blue-50 to-blue-100/50 -z-10" />}
-                  <Icon size={18} className={cn("z-10 transition-colors", isActive ? "text-blue-600" : "text-zinc-400 group-hover:text-zinc-600")} />
+                  <Icon size={18} strokeWidth={isActive ? 2.5 : 2} className={cn("z-10 transition-colors", isActive ? "text-indigo-600" : "text-slate-400 group-hover:text-slate-600")} />
                   <span className="z-10">{item.label}</span>
                 </button>
               );
             })}
           </nav>
 
-          <div className="p-6 border-t border-zinc-200/60 bg-white/50">
-            <div className="bg-white p-4 rounded-2xl border border-zinc-100 shadow-sm mb-3">
-              <p className="font-bold text-sm text-zinc-900 truncate">{profile.name}</p>
-              <p className={cn("text-[9px] font-black uppercase tracking-wider mt-1 w-fit px-1.5 py-0.5 rounded", profile.role === 'superadmin' ? "bg-purple-100 text-purple-700" : "bg-blue-50 text-blue-600")}>
-                {profile.role}
+          <div className="p-6 border-t border-slate-100 bg-slate-50/50">
+            <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm mb-3">
+              <p className="font-bold text-sm text-slate-900 truncate">{profile.name}</p>
+              <p className={cn("text-[9px] font-black uppercase tracking-wider mt-1.5 w-fit px-2 py-0.5 rounded-md", profile.role === 'superadmin' ? "bg-fuchsia-100 text-fuchsia-700" : "bg-indigo-100 text-indigo-700")}>
+                {profile.role.replace('_', ' ')}
               </p>
             </div>
-            <button onClick={signOut} className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-white text-zinc-600 hover:text-red-600 hover:bg-red-50 border border-zinc-100 hover:border-red-100 font-bold text-sm rounded-xl transition-all shadow-sm active:scale-95">
+            <button onClick={signOut} className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-white text-slate-600 hover:text-rose-600 hover:bg-rose-50 border border-slate-200 hover:border-rose-200 font-bold text-sm rounded-xl transition-all shadow-sm active:scale-95">
               <LogOut size={16} /> Sign Out
             </button>
           </div>
         </aside>
 
-        {/* MOBILE HEADER */}
-        <div className="lg:hidden fixed top-0 w-full bg-white/80 backdrop-blur-2xl border-b border-zinc-200/60 z-40 px-4 py-3 flex items-center justify-between shadow-sm">
+        {/* MOBILE HEADER WITH CUSTOM LOGO */}
+        <div className="lg:hidden fixed top-0 w-full bg-white/90 backdrop-blur-xl border-b border-slate-200 z-40 px-4 py-3 flex items-center justify-between shadow-sm">
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-black rounded-lg flex items-center justify-center shadow-md"><ShieldAlert className="text-white" size={16} /></div>
-            <span className="font-black text-lg tracking-tight">Reliance<span className="text-zinc-400">Audit</span></span>
+            <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 border border-slate-100 p-1 bg-slate-50 shadow-sm">
+               <img src={logo} alt="Logo" className="w-full h-full object-contain" />
+            </div>
+            <span className="font-black text-lg tracking-tight">Reliance<span className="text-indigo-600">Audit</span></span>
           </div>
           
           <div className="flex items-center gap-2 sm:gap-3">
-            <button onClick={() => setIsActivityOpen(true)} className="p-2 text-zinc-600 hover:bg-white rounded-xl relative shadow-sm border border-transparent hover:border-zinc-200 transition-all">
+            <button onClick={() => setIsActivityOpen(true)} className="p-2 text-slate-600 hover:bg-slate-100 rounded-xl relative transition-all">
               <Bell size={20} />
               {unreadCount > 0 && (
-                <span className="absolute top-1 right-1 w-4 h-4 bg-red-500 rounded-full border-2 border-white flex items-center justify-center text-[9px] font-bold text-white">
+                <span className="absolute top-1 right-1 w-4 h-4 bg-rose-500 rounded-full border-2 border-white flex items-center justify-center text-[9px] font-bold text-white">
                   {unreadCount > 9 ? '9+' : unreadCount}
                 </span>
               )}
             </button>
-            <button onClick={() => setIsMobileMenuOpen(true)} className="p-2 text-zinc-600 hover:bg-white rounded-xl shadow-sm border border-transparent hover:border-zinc-200 transition-all"><Menu size={20} /></button>
+            <button onClick={() => setIsMobileMenuOpen(true)} className="p-2 text-slate-600 hover:bg-slate-100 rounded-xl transition-all"><Menu size={20} /></button>
           </div>
         </div>
 
-        {/* MOBILE SLIDE-OUT MENU */}
+        {/* MOBILE SLIDE-OUT MENU WITH CUSTOM LOGO */}
         <AnimatePresence>
           {isMobileMenuOpen && (
             <>
               <motion.div 
                 initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} 
                 onClick={() => setIsMobileMenuOpen(false)} 
-                className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 lg:hidden" 
+                className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 lg:hidden" 
               />
               <motion.div 
                 initial={{ x: '-100%' }} animate={{ x: 0 }} exit={{ x: '-100%' }} 
                 transition={{ type: 'spring', damping: 25, stiffness: 200 }} 
-                className="fixed top-0 left-0 w-[85%] max-w-[340px] h-full bg-white/95 backdrop-blur-3xl shadow-2xl z-50 flex flex-col lg:hidden border-r border-zinc-200/60"
+                className="fixed top-0 left-0 w-[85%] max-w-[340px] h-full bg-white shadow-2xl z-50 flex flex-col lg:hidden border-r border-slate-200"
               >
-                <div className="p-6 flex items-center justify-between border-b border-zinc-100">
+                <div className="p-6 flex items-center justify-between border-b border-slate-100">
                   <div className="flex items-center gap-2">
-                    <div className="w-8 h-8 bg-black rounded-lg flex items-center justify-center"><ShieldAlert className="text-white" size={16} /></div>
+                    <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 border border-slate-100 p-1 bg-slate-50">
+                       <img src={logo} alt="Logo" className="w-full h-full object-contain" />
+                    </div>
                     <span className="font-black text-lg tracking-tight">RelianceAudit</span>
                   </div>
-                  <button onClick={() => setIsMobileMenuOpen(false)} className="p-2 bg-zinc-100 text-zinc-600 rounded-xl hover:bg-zinc-200"><X size={20} /></button>
+                  <button onClick={() => setIsMobileMenuOpen(false)} className="p-2 bg-slate-100 text-slate-600 rounded-xl hover:bg-slate-200"><X size={20} /></button>
                 </div>
                 
                 <nav className="flex-1 px-4 py-6 space-y-2 overflow-y-auto custom-scrollbar">
-                  <div className="px-4 mb-3 text-[10px] font-black text-zinc-400 uppercase tracking-widest">Main Menu</div>
+                  <div className="px-4 mb-3 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Main Menu</div>
                   {allowedNavItems.map(item => {
                     const Icon = item.icon;
                     const isActive = activeModuleState === item.id;
@@ -550,23 +535,23 @@ export default function App() {
                         key={item.id} 
                         onClick={() => { setActiveModule(item.id); setIsMobileMenuOpen(false); }} 
                         className={cn(
-                          "w-full flex items-center gap-3 px-4 py-4 rounded-2xl font-bold text-sm transition-all",
-                          isActive ? "bg-gradient-to-r from-blue-50 to-blue-100/50 text-blue-700 border border-blue-100 shadow-sm" : "text-zinc-500 hover:bg-zinc-50 hover:text-zinc-900 border border-transparent"
+                          "w-full flex items-center gap-3 px-4 py-4 rounded-[14px] font-semibold text-sm transition-all",
+                          isActive ? "bg-indigo-50 text-indigo-700 border border-indigo-100 shadow-sm" : "text-slate-500 hover:bg-slate-50 hover:text-slate-900 border border-transparent"
                         )}
                       >
-                        <Icon size={18} className={isActive ? "text-blue-600" : "text-zinc-400"} />
+                        <Icon size={18} className={isActive ? "text-indigo-600" : "text-slate-400"} />
                         {item.label}
                       </button>
                     );
                   })}
                 </nav>
 
-                <div className="p-6 border-t border-zinc-100 bg-white/50">
-                  <div className="bg-white p-4 rounded-2xl border border-zinc-100 shadow-sm mb-4">
-                    <p className="font-bold text-sm text-zinc-900 truncate">{profile.name}</p>
-                    <p className={cn("text-[9px] font-black uppercase tracking-wider mt-1 w-fit px-1.5 py-0.5 rounded", profile.role === 'superadmin' ? "bg-purple-100 text-purple-700" : "bg-blue-50 text-blue-600")}>{profile.role}</p>
+                <div className="p-6 border-t border-slate-100 bg-slate-50/50">
+                  <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm mb-4">
+                    <p className="font-bold text-sm text-slate-900 truncate">{profile.name}</p>
+                    <p className={cn("text-[9px] font-black uppercase tracking-wider mt-1 w-fit px-2 py-0.5 rounded-md", profile.role === 'superadmin' ? "bg-fuchsia-100 text-fuchsia-700" : "bg-indigo-100 text-indigo-600")}>{profile.role}</p>
                   </div>
-                  <button onClick={signOut} className="w-full flex items-center justify-center gap-2 px-4 py-3.5 bg-white border border-zinc-200 text-zinc-600 hover:text-red-600 hover:border-red-100 hover:bg-red-50 font-bold text-sm rounded-xl shadow-sm active:scale-95 transition-all"><LogOut size={16} /> Sign Out</button>
+                  <button onClick={signOut} className="w-full flex items-center justify-center gap-2 px-4 py-3.5 bg-white border border-slate-200 text-slate-600 hover:text-rose-600 hover:border-rose-200 hover:bg-rose-50 font-bold text-sm rounded-xl shadow-sm active:scale-95 transition-all"><LogOut size={16} /> Sign Out</button>
                 </div>
               </motion.div>
             </>
@@ -574,29 +559,29 @@ export default function App() {
         </AnimatePresence>
 
         {/* MAIN CONTENT AREA */}
-        <main className="flex-1 lg:pl-72 flex flex-col min-h-screen pt-16 lg:pt-0 w-full">
+        <main className="flex-1 lg:pl-[280px] flex flex-col min-h-screen pt-16 lg:pt-0 w-full">
           
-          <header className="hidden lg:flex bg-white/60 backdrop-blur-2xl border-b border-zinc-200/60 sticky top-0 z-30 px-8 py-4 items-center justify-between w-full shadow-[0_4px_24px_rgba(0,0,0,0.02)]">
+          <header className="hidden lg:flex bg-white/80 backdrop-blur-xl border-b border-slate-200 sticky top-0 z-30 px-8 py-4 items-center justify-between w-full shadow-sm">
             <div>
-              <h2 className="text-2xl font-black tracking-tight text-zinc-900 capitalize">{activeModuleState.replace('_', ' ')}</h2>
-              <p className="text-xs font-medium text-zinc-500 mt-1 uppercase tracking-widest">Enterprise Management Portal</p>
+              <h2 className="text-2xl font-black tracking-tight text-slate-900 capitalize">{activeModuleState.replace('_', ' ')}</h2>
+              <p className="text-[11px] font-semibold text-slate-500 mt-0.5 uppercase tracking-widest">Enterprise Portal</p>
             </div>
             <div className="flex items-center gap-4">
               
-              <button onClick={() => setIsActivityOpen(true)} className="relative p-3 bg-white border border-zinc-200 hover:border-blue-200 hover:bg-blue-50 text-zinc-600 hover:text-blue-600 rounded-xl transition-all shadow-sm" title="Notifications & Activity">
+              <button onClick={() => setIsActivityOpen(true)} className="relative p-3 bg-white border border-slate-200 hover:border-indigo-300 hover:bg-indigo-50 text-slate-600 hover:text-indigo-600 rounded-[14px] transition-all shadow-sm" title="Notifications & Activity">
                 <Bell size={20} />
                 {unreadCount > 0 && (
-                  <span className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-red-500 rounded-full border-2 border-white flex items-center justify-center text-[10px] font-bold text-white shadow-sm">
+                  <span className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-rose-500 rounded-full border-2 border-white flex items-center justify-center text-[10px] font-bold text-white shadow-sm">
                     {unreadCount > 9 ? '9+' : unreadCount}
                   </span>
                 )}
               </button>
 
-              <div className="flex items-center gap-3 bg-white pl-2 pr-4 py-2 rounded-2xl border border-zinc-200 shadow-sm">
-                <div className={cn("w-9 h-9 rounded-xl flex items-center justify-center font-black text-sm shrink-0", profile.role === 'superadmin' ? "bg-purple-100 text-purple-700" : "bg-blue-100 text-blue-700")}>{profile.name.charAt(0)}</div>
+              <div className="flex items-center gap-3 bg-white pl-2.5 pr-4 py-2 rounded-2xl border border-slate-200 shadow-sm">
+                <div className={cn("w-9 h-9 rounded-[10px] flex items-center justify-center font-black text-sm shrink-0", profile.role === 'superadmin' ? "bg-fuchsia-100 text-fuchsia-700" : "bg-indigo-100 text-indigo-700")}>{profile.name.charAt(0)}</div>
                 <div className="hidden sm:block">
-                  <p className="text-sm font-bold text-zinc-900 leading-none truncate max-w-[150px]">{profile.name}</p>
-                  <p className="text-[9px] font-black text-zinc-400 uppercase tracking-widest mt-1">{profile.role}</p>
+                  <p className="text-sm font-bold text-slate-900 leading-none truncate max-w-[150px]">{profile.name}</p>
+                  <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mt-1">{profile.role.replace('_', ' ')}</p>
                 </div>
               </div>
             </div>
@@ -604,8 +589,8 @@ export default function App() {
 
           <div className="flex-1 p-4 sm:p-6 md:p-8 max-w-7xl mx-auto w-full min-w-0">
             <div className="lg:hidden mb-6 mt-2">
-              <h2 className="text-2xl font-black tracking-tight text-zinc-900 capitalize">{activeModuleState.replace('_', ' ')}</h2>
-              <p className="text-[10px] font-bold text-zinc-400 mt-1 uppercase tracking-widest">Enterprise Portal</p>
+              <h2 className="text-2xl font-black tracking-tight text-slate-900 capitalize">{activeModuleState.replace('_', ' ')}</h2>
+              <p className="text-[10px] font-bold text-slate-500 mt-1 uppercase tracking-widest">Enterprise Portal</p>
             </div>
             
             {renderModule()}
@@ -613,69 +598,69 @@ export default function App() {
         </main>
       </div>
 
-      {/* NOTIFICATIONS & ACTIVITY DRAWER */}
+      {/* --- REDESIGNED NOTIFICATIONS & ACTIVITY DRAWER --- */}
       <AnimatePresence>
         {isActivityOpen && (
           <>
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsActivityOpen(false)} className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50" />
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsActivityOpen(false)} className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50" />
             <motion.div 
               initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }} 
               transition={{ type: 'spring', damping: 25, stiffness: 200 }} 
-              className="fixed top-0 right-0 w-full sm:w-[480px] max-w-[100vw] h-full bg-white shadow-2xl z-50 border-l border-zinc-200 flex flex-col"
+              className="fixed top-0 right-0 w-full sm:w-[480px] max-w-[100vw] h-full bg-white shadow-2xl z-50 border-l border-slate-200 flex flex-col"
             >
-              <div className="p-4 sm:p-6 border-b border-zinc-100 flex items-center justify-between shrink-0 bg-zinc-50">
+              <div className="p-4 sm:p-6 border-b border-slate-100 flex items-center justify-between shrink-0 bg-slate-50">
                 <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 bg-blue-600 text-white rounded-xl flex items-center justify-center shadow-md shrink-0"><Bell size={20} /></div>
-                  <div><h3 className="font-bold text-base sm:text-lg">Notifications</h3><p className="text-[10px] sm:text-xs text-zinc-500">Alerts and System Activity</p></div>
+                  <div className="w-10 h-10 bg-indigo-600 text-white rounded-[14px] flex items-center justify-center shadow-md shadow-indigo-600/20 shrink-0"><Bell size={20} /></div>
+                  <div><h3 className="font-bold text-base sm:text-lg text-slate-900">Notifications</h3><p className="text-[10px] sm:text-xs font-medium text-slate-500">Alerts and System Activity</p></div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <button onClick={() => setIsActivityOpen(false)} className="p-2 hover:bg-zinc-200 rounded-xl transition-colors"><X size={20} /></button>
+                  <button onClick={() => setIsActivityOpen(false)} className="p-2 text-slate-400 hover:bg-slate-200 hover:text-slate-700 rounded-xl transition-colors"><X size={20} /></button>
                 </div>
               </div>
 
               {/* TABS (DYNAMIC) */}
-              <div className="flex px-4 pt-4 border-b border-zinc-100 shrink-0">
+              <div className="flex px-4 pt-4 border-b border-slate-200 shrink-0 bg-slate-50/50">
                 <button 
                   onClick={() => setDrawerTab('alerts')} 
                   className={cn(
                     "pb-3 text-sm font-bold border-b-2 transition-all relative flex items-center justify-center gap-2", 
-                    drawerTab === 'alerts' ? "border-blue-600 text-blue-700" : "border-transparent text-zinc-400 hover:text-zinc-600",
+                    drawerTab === 'alerts' ? "border-indigo-600 text-indigo-700" : "border-transparent text-slate-500 hover:text-slate-700",
                     isAdminOrHO ? "flex-1" : "w-full"
                   )}
                 >
                   {isAdminOrHO ? 'My Alerts' : 'My Activity & Alerts'}
-                  {unreadCount > 0 && <span className="px-1.5 py-0.5 bg-red-500 text-white rounded-full text-[9px]">{unreadCount}</span>}
+                  {unreadCount > 0 && <span className="px-1.5 py-0.5 bg-rose-500 text-white rounded-md text-[10px]">{unreadCount}</span>}
                 </button>
                 
                 {isAdminOrHO && (
                   <button 
                     onClick={() => setDrawerTab('activity')} 
-                    className={cn("flex-1 pb-3 text-sm font-bold border-b-2 transition-all", drawerTab === 'activity' ? "border-blue-600 text-blue-700" : "border-transparent text-zinc-400 hover:text-zinc-600")}
+                    className={cn("flex-1 pb-3 text-sm font-bold border-b-2 transition-all", drawerTab === 'activity' ? "border-indigo-600 text-indigo-700" : "border-transparent text-slate-500 hover:text-slate-700")}
                   >
                     Global Activity
                   </button>
                 )}
               </div>
 
-              <div className="flex-1 overflow-y-auto custom-scrollbar bg-zinc-50/50 flex flex-col">
+              <div className="flex-1 overflow-y-auto custom-scrollbar bg-white flex flex-col">
                 {drawerTab === 'alerts' ? (
                   <div className="p-4 space-y-3">
                     {unreadCount > 0 && (
                       <div className="flex justify-end mb-2">
-                        <button onClick={markAllAsRead} className="text-xs font-bold text-blue-600 hover:underline flex items-center gap-1"><CheckCheck size={14}/> Mark all read</button>
+                        <button onClick={markAllAsRead} className="text-xs font-bold text-indigo-600 hover:underline flex items-center gap-1"><CheckCheck size={14}/> Mark all read</button>
                       </div>
                     )}
                     {notifications.length === 0 ? (
-                      <div className="text-center py-12 text-zinc-400 flex flex-col items-center"><Bell size={32} className="mb-3 opacity-20" /><p className="font-bold">All caught up!</p><p className="text-xs mt-1">You have no personal alerts.</p></div>
+                      <div className="text-center py-16 text-slate-400 flex flex-col items-center"><Bell size={32} className="mb-3 opacity-20" /><p className="font-bold">All caught up!</p><p className="text-xs mt-1">You have no personal alerts.</p></div>
                     ) : (
                       notifications.map(n => (
-                        <div key={n.id} onClick={() => markAsRead(n.id)} className={cn("p-4 rounded-2xl border shadow-sm transition-all cursor-pointer", n.is_read ? "bg-white border-zinc-200 opacity-70" : "bg-blue-50 border-blue-200")}>
+                        <div key={n.id} onClick={() => markAsRead(n.id)} className={cn("p-4 rounded-[1rem] border transition-all cursor-pointer", n.is_read ? "bg-slate-50 border-slate-200 opacity-70" : "bg-indigo-50/50 border-indigo-200 shadow-sm")}>
                           <div className="flex justify-between items-start mb-1">
-                            <h4 className={cn("font-bold text-sm", n.is_read ? "text-zinc-700" : "text-blue-900")}>{n.title}</h4>
-                            {!n.is_read && <span className="w-2 h-2 rounded-full bg-blue-600 mt-1 shrink-0"></span>}
+                            <h4 className={cn("font-bold text-sm", n.is_read ? "text-slate-700" : "text-indigo-900")}>{n.title}</h4>
+                            {!n.is_read && <span className="w-2 h-2 rounded-full bg-indigo-600 mt-1 shrink-0 shadow-sm"></span>}
                           </div>
-                          <p className={cn("text-xs leading-relaxed", n.is_read ? "text-zinc-500" : "text-blue-800")}>{n.message}</p>
-                          <p className="text-[10px] font-bold text-zinc-400 mt-3">{new Date(n.created_at).toLocaleString()}</p>
+                          <p className={cn("text-xs leading-relaxed mt-1.5", n.is_read ? "text-slate-500" : "text-indigo-800")}>{n.message}</p>
+                          <p className="text-[10px] font-bold text-slate-400 mt-3">{new Date(n.created_at).toLocaleString()}</p>
                         </div>
                       ))
                     )}
@@ -683,29 +668,29 @@ export default function App() {
                 ) : (
                   <div className="flex flex-col h-full">
                     {/* --- ADVANCED FILTER PANEL --- */}
-                    <div className="p-4 border-b border-zinc-200 space-y-3 bg-zinc-100/50 shrink-0">
+                    <div className="p-4 border-b border-slate-200 space-y-3 bg-slate-50/80 shrink-0">
                       
                       <div className="flex justify-between items-center mb-1">
-                        <h4 className="text-xs font-bold text-zinc-800 uppercase tracking-wider">Filter Logs</h4>
-                        <button onClick={downloadLogsCSV} className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 text-white text-xs font-bold rounded-lg hover:bg-emerald-700 transition-colors shadow-sm active:scale-95">
+                        <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Filter Logs</h4>
+                        <button onClick={downloadLogsCSV} className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 text-white text-[11px] font-bold rounded-[10px] hover:bg-emerald-700 transition-colors shadow-sm active:scale-95">
                           <Download size={14}/> Export CSV
                         </button>
                       </div>
 
                       <div className="relative">
-                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" size={16} />
-                        <input type="text" placeholder="Search distributors, users, details..." className="w-full pl-9 pr-3 py-2 bg-white border border-zinc-200 rounded-lg text-sm focus:ring-2 focus:ring-black outline-none transition-all shadow-sm" value={logSearch} onChange={(e) => setLogSearch(e.target.value)} />
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                        <input type="text" placeholder="Search distributors, users, details..." className="w-full pl-9 pr-3 py-2.5 bg-white border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all shadow-sm" value={logSearch} onChange={(e) => setLogSearch(e.target.value)} />
                       </div>
                       
                       <div className="grid grid-cols-2 gap-2">
-                        <select className="w-full p-2 bg-white border border-zinc-200 rounded-lg text-xs font-medium focus:ring-2 focus:ring-black outline-none transition-all cursor-pointer text-zinc-700 shadow-sm" value={logTimeFilter} onChange={(e) => setLogTimeFilter(e.target.value as any)}>
+                        <select className="w-full p-2.5 bg-white border border-slate-200 rounded-xl text-xs font-semibold focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all cursor-pointer text-slate-700 shadow-sm" value={logTimeFilter} onChange={(e) => setLogTimeFilter(e.target.value as any)}>
                           <option value="all">All Time</option>
                           <option value="today">Today</option>
                           <option value="week">This Week</option>
                           <option value="month">This Month</option>
                         </select>
 
-                        <select className="w-full p-2 bg-white border border-zinc-200 rounded-lg text-xs font-medium focus:ring-2 focus:ring-black outline-none transition-all cursor-pointer text-zinc-700 shadow-sm" value={logRoleFilter} onChange={(e) => setLogRoleFilter(e.target.value)}>
+                        <select className="w-full p-2.5 bg-white border border-slate-200 rounded-xl text-xs font-semibold focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all cursor-pointer text-slate-700 shadow-sm" value={logRoleFilter} onChange={(e) => setLogRoleFilter(e.target.value)}>
                           <option value="all">All Roles</option>
                           <option value="ase">ASE</option>
                           <option value="auditor">Auditor</option>
@@ -713,36 +698,36 @@ export default function App() {
                         </select>
                       </div>
 
-                      <select className="w-full p-2 bg-white border border-zinc-200 rounded-lg text-xs font-medium focus:ring-2 focus:ring-black outline-none transition-all cursor-pointer text-zinc-700 shadow-sm" value={logActionFilter} onChange={(e) => setLogActionFilter(e.target.value)}>
+                      <select className="w-full p-2.5 bg-white border border-slate-200 rounded-xl text-xs font-semibold focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all cursor-pointer text-slate-700 shadow-sm" value={logActionFilter} onChange={(e) => setLogActionFilter(e.target.value)}>
                          <option value="all">All Statuses / Actions</option>
                          {uniqueActions.map(action => <option key={action} value={action}>{action}</option>)}
                       </select>
 
                     </div>
 
-                    <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar">
+                    <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar bg-slate-50/30">
                       {filteredLogs.length === 0 ? (
-                        <div className="text-center py-12 text-zinc-400 flex flex-col items-center"><Bell size={32} className="mb-3 opacity-20" /><p className="font-bold">No activity matches your filters.</p></div>
+                        <div className="text-center py-16 text-slate-400 flex flex-col items-center"><Bell size={32} className="mb-3 opacity-20" /><p className="font-bold">No activity matches your filters.</p></div>
                       ) : (
                         filteredLogs.map(log => {
                           const style = getLogStyle(log.action);
                           return (
-                            <div key={log.id} className={cn("p-4 rounded-2xl border shadow-sm transition-all", style.bg, style.border)}>
+                            <div key={log.id} className={cn("p-4 rounded-[1rem] border transition-all shadow-sm", style.bg, style.border)}>
                               <div className="flex items-start justify-between mb-2 gap-3 sm:gap-4">
                                 <div className="min-w-0 flex-1">
                                   <p className={cn("text-xs sm:text-sm leading-snug break-words", style.text)}>
-                                    <span className="font-black block text-sm sm:text-base mb-0.5">{log.action}</span>
-                                    <span className="font-bold">{log.userName}</span>
+                                    <span className="font-black block text-sm mb-0.5 tracking-tight">{log.action}</span>
+                                    <span className="font-semibold text-slate-600">{log.userName}</span>
                                   </p>
-                                  {log.details && <p className={cn("text-[10px] sm:text-xs mt-2 font-medium opacity-90 break-words", style.text)}>"{log.details}"</p>}
+                                  {log.details && <p className={cn("text-[10px] sm:text-xs mt-2 font-medium opacity-80 break-words leading-relaxed", style.text)}>"{log.details}"</p>}
                                 </div>
                                 {profile.role === 'superadmin' && (
-                                  <button onClick={() => deleteActivityLog(log.id)} className="text-zinc-400 hover:text-red-500 bg-white/50 p-1.5 rounded-lg transition-colors opacity-100 lg:opacity-0 lg:group-hover:opacity-100 shrink-0"><Trash2 size={14} /></button>
+                                  <button onClick={() => deleteActivityLog(log.id)} className="text-slate-400 hover:text-rose-500 bg-white/50 hover:bg-rose-100 p-1.5 rounded-lg transition-colors shrink-0 border border-transparent hover:border-rose-200"><Trash2 size={14} /></button>
                                 )}
                               </div>
-                              <div className="flex flex-wrap items-center gap-2 mt-3 sm:mt-4 text-[9px] sm:text-[10px] font-black uppercase tracking-wider">
-                                <span className={cn("px-2 py-1 rounded shadow-sm", style.tag)}>{log.userRole}</span>
-                                <span className={cn("opacity-70", style.text)}>{new Date(log.timestamp).toLocaleString()}</span>
+                              <div className="flex flex-wrap items-center gap-2 mt-3 text-[9px] font-bold uppercase tracking-wider">
+                                <span className={cn("px-2 py-0.5 rounded-md", style.tag)}>{log.userRole.replace('_', ' ')}</span>
+                                <span className={cn("opacity-70 font-medium", style.text)}>{new Date(log.timestamp).toLocaleString()}</span>
                               </div>
                             </div>
                           );

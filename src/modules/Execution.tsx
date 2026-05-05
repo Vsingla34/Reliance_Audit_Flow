@@ -30,9 +30,13 @@ export function ExecutionModule() {
   const [tickets, setTickets] = useState<AuditTicket[]>([]);
   const [distributors, setDistributors] = useState<any[]>([]); 
   const [activeTicket, setActiveTicket] = useState<AuditTicket | null>(null);
-  const [items, setItems] = useState<AuditLineItem[]>([]);
-  const [availableDumpItems, setAvailableDumpItems] = useState<CombinedDumpItem[]>([]);
   
+  const [items, setItems] = useState<AuditLineItem[]>([]);
+  const itemsRef = useRef<AuditLineItem[]>([]);
+  useEffect(() => { itemsRef.current = items; }, [items]);
+  const latestEditsRef = useRef<Record<string, AuditLineItem>>({});
+  
+  const [availableDumpItems, setAvailableDumpItems] = useState<CombinedDumpItem[]>([]);
   const [itemSearchQuery, setItemSearchQuery] = useState('');
   
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -44,8 +48,22 @@ export function ExecutionModule() {
 
   const [activeTab, setActiveTab] = useState<'active' | 'drainage' | 'signoff' | 'completed'>('active');
 
-  const isAdminOrHO = ['superadmin', 'admin', 'ho'].includes(profile?.role || '');
-  const isAdminOrSuperadmin = ['superadmin', 'admin'].includes(profile?.role || '');
+  // --- STRICT GLOBAL ROLE FLAGS ---
+  const isSuperAdmin = profile?.role === 'superadmin';
+  const isAuditor = profile?.role === 'auditor';
+  const isASE = profile?.role === 'ase';
+
+  // --- GLOBAL STATUS FLAGS ---
+  const todayDate = new Date();
+  const offset = todayDate.getTimezoneOffset();
+  const localToday = new Date(todayDate.getTime() - (offset * 60 * 1000));
+  const todayStr = localToday.toISOString().split('T')[0];
+
+  const isSubmittedPhase = activeTicket ? ['submitted', 'drainage_pending', 'signed', 'evidence_uploaded', 'closed'].includes(activeTicket.status) : false;
+  const isClosedPhase = activeTicket ? activeTicket.status === 'closed' : false;
+  const isDrainagePhase = activeTicket ? ['drainage_pending', 'closed'].includes(activeTicket.status) : false;
+  const isActionableDate = activeTicket?.scheduledDate ? (activeTicket.scheduledDate <= todayStr || activeTicket.status === 'in_progress') : false;
+  const isDrainageToday = activeTicket?.signOffs?.drainageDate === todayStr;
 
   const distMap = useMemo(() => {
     const map: Record<string, any> = {};
@@ -161,7 +179,7 @@ export function ExecutionModule() {
       setActiveTicket({ ...activeTicket, status: newStatus as any });
       
       const dist = distMap[activeTicket.distributorId];
-      logActivity(user, profile, "Status Overridden", `Admin manually changed status to ${newStatus.replace('_', ' ')} for ${dist?.name}`);
+      logActivity(user, profile, "Status Overridden", `Super Admin manually changed status to ${newStatus.replace('_', ' ')} for ${dist?.name}`);
     } catch (error) {
       console.error("Failed to force update status:", error);
     }
@@ -178,7 +196,7 @@ export function ExecutionModule() {
       }).eq('id', activeTicket.id);
       
       const dist = distMap[activeTicket.distributorId];
-      logActivity(user, profile, "Audit Reset", `Admin reset the audit for ${dist?.name} back to Scheduler`);
+      logActivity(user, profile, "Audit Reset", `Super Admin reset the audit for ${dist?.name} back to Scheduler`);
 
       setTickets(prev => prev.filter(t => t.id !== activeTicket.id)); setActiveTicket(null);
       alert("Ticket cleared successfully! It is now back in the Scheduler page.");
@@ -195,7 +213,7 @@ export function ExecutionModule() {
       setActiveTicket({ ...activeTicket, signOffs: newSignOffs });
       
       const dist = distMap[activeTicket.distributorId];
-      logActivity(user, profile, "WhatsApp Media Confirmed", `Admin marked WhatsApp audit evidence as ${newStatus ? 'Approved' : 'Pending'} for ${dist?.name}`);
+      logActivity(user, profile, "WhatsApp Media Confirmed", `Super Admin marked WhatsApp audit evidence as ${newStatus ? 'Approved' : 'Pending'} for ${dist?.name}`);
     } catch (error) { console.error("Failed to update WhatsApp approval:", error); }
   };
 
@@ -209,7 +227,7 @@ export function ExecutionModule() {
       setActiveTicket({ ...activeTicket, signOffs: newSignOffs });
       
       const dist = distMap[activeTicket.distributorId];
-      logActivity(user, profile, "Drainage Media Confirmed", `Admin marked Drainage evidence as ${newStatus ? 'Approved' : 'Pending'} for ${dist?.name}`);
+      logActivity(user, profile, "Drainage Media Confirmed", `Super Admin marked Drainage evidence as ${newStatus ? 'Approved' : 'Pending'} for ${dist?.name}`);
     } catch (error) { console.error("Failed to update Drainage Media approval:", error); }
   };
 
@@ -243,7 +261,7 @@ export function ExecutionModule() {
       setActiveTicket({ ...activeTicket, signOffs: newSignOffs });
       
       const dist = distMap[activeTicket.distributorId];
-      logActivity(user, profile, "Sign-off Document Confirmed", `Admin marked physical sign-off sheet as ${newStatus ? 'Approved' : 'Pending'} for ${dist?.name}`);
+      logActivity(user, profile, "Sign-off Document Confirmed", `Super Admin marked physical sign-off sheet as ${newStatus ? 'Approved' : 'Pending'} for ${dist?.name}`);
     } catch (error) { console.error("Failed to update Sign-off approval:", error); }
   };
 
@@ -258,7 +276,7 @@ export function ExecutionModule() {
     }
 
     try {
-      const rejectionMessage = `🚨 Sign-off Document Rejected by Admin: ${reason}`;
+      const rejectionMessage = `🚨 Sign-off Document Rejected by Super Admin: ${reason}`;
       const newComment = {
         id: Math.random().toString(36).substring(7),
         userId: user.id,
@@ -286,7 +304,7 @@ export function ExecutionModule() {
       });
       
       const dist = distMap[activeTicket.distributorId];
-      logActivity(user, profile, "Sign-off Rejected", `Admin rejected physical sign-off sheet for ${dist?.name}. Reason: "${reason}"`);
+      logActivity(user, profile, "Sign-off Rejected", `Super Admin rejected physical sign-off sheet for ${dist?.name}. Reason: "${reason}"`);
       notifyLinkedUsers(activeTicket.distributorId, "Sign-off Rejected", `The Sign-off Document for ${dist?.name} was rejected. Reason: "${reason}". Please upload a new copy.`);
       
       alert("Document rejected successfully. The reason has been posted to the discussion board.");
@@ -304,109 +322,138 @@ export function ExecutionModule() {
   };
 
   const handleInlineChange = (id: string, field: 'qtyNonSaleable' | 'qtyBBD' | 'qtyDamaged' | 'mfgDate' | 'expDate', value: any, e?: React.ChangeEvent<HTMLInputElement>) => {
-    setItems(prev => {
-      const itemIndex = prev.findIndex(i => i.id === id);
-      if (itemIndex === -1) return prev;
+    const oldItem = itemsRef.current.find(i => i.id === id);
+    if (!oldItem) return;
 
-      const oldItem = prev[itemIndex];
-      const updatedItem = { ...oldItem, [field]: value };
+    const updatedItem = { ...oldItem, [field]: value };
 
-      if (['qtyNonSaleable', 'qtyBBD', 'qtyDamaged'].includes(field)) {
-         updatedItem.quantity = (Number(updatedItem.qtyNonSaleable) || 0) + (Number(updatedItem.qtyBBD) || 0) + (Number(updatedItem.qtyDamaged) || 0);
-         updatedItem.totalValue = updatedItem.quantity * updatedItem.unitValue;
-      }
+    if (['qtyNonSaleable', 'qtyBBD', 'qtyDamaged'].includes(field)) {
+       updatedItem.quantity = (Number(updatedItem.qtyNonSaleable) || 0) + (Number(updatedItem.qtyBBD) || 0) + (Number(updatedItem.qtyDamaged) || 0);
+       updatedItem.totalValue = updatedItem.quantity * updatedItem.unitValue;
+    }
 
-      if (field === 'mfgDate' || field === 'expDate') {
-         if (updatedItem.mfgDate && updatedItem.expDate) {
-           const m = new Date(updatedItem.mfgDate);
-           const eDate = new Date(updatedItem.expDate);
-           if (!isNaN(m.getTime()) && !isNaN(eDate.getTime())) {
-             const diffDays = Math.ceil((eDate.getTime() - m.getTime()) / (1000 * 60 * 60 * 24));
-             updatedItem.productLife = `${diffDays} Days`;
-           } else { updatedItem.productLife = '-'; }
+    if (field === 'mfgDate' || field === 'expDate') {
+       if (updatedItem.mfgDate && updatedItem.expDate) {
+         const m = new Date(updatedItem.mfgDate);
+         const eDate = new Date(updatedItem.expDate);
+         if (!isNaN(m.getTime()) && !isNaN(eDate.getTime())) {
+           const diffDays = Math.ceil((eDate.getTime() - m.getTime()) / (1000 * 60 * 60 * 24));
+           updatedItem.productLife = `${diffDays} Days`;
          } else { updatedItem.productLife = '-'; }
-      }
-      
-      if (field === 'mfgDate' && value && activeTicket?.scheduledDate && !isAdminOrSuperadmin) {
-          const mfgDateObj = new Date(value);
-          const auditDateObj = new Date(activeTicket.scheduledDate);
-          mfgDateObj.setHours(0,0,0,0);
-          auditDateObj.setHours(0,0,0,0);
-          if (mfgDateObj > auditDateObj) {
-              alert("Manufacturing Date cannot be in the future.");
-              if (e && e.target) e.target.value = oldItem[field] || ''; 
-              return [...prev];
-          }
-      }
+       } else { updatedItem.productLife = '-'; }
+    }
+    
+    if (field === 'mfgDate' && value && activeTicket?.scheduledDate && !isSuperAdmin) {
+        const mfgDateObj = new Date(value);
+        const auditDateObj = new Date(activeTicket.scheduledDate);
+        mfgDateObj.setHours(0,0,0,0);
+        auditDateObj.setHours(0,0,0,0);
+        if (mfgDateObj > auditDateObj) {
+            alert("Manufacturing Date cannot be in the future.");
+            if (e && e.target) e.target.value = oldItem[field] || ''; 
+            return;
+        }
+    }
 
-      const currentExp = field === 'expDate' ? value : updatedItem.expDate;
-      
-      if (currentExp && activeTicket?.scheduledDate) {
-          const expDateObj = new Date(currentExp);
-          const auditDateObj = new Date(activeTicket.scheduledDate);
-          
-          expDateObj.setHours(0,0,0,0);
-          auditDateObj.setHours(0,0,0,0);
-          
-          if (expDateObj > auditDateObj) {
-              if (isAdminOrHO) {
-                updatedItem.bbdApprovalStatus = 'approved';
-              } else if (oldItem.bbdApprovalStatus !== 'pending' && oldItem.bbdApprovalStatus !== 'approved') {
-                const confirmMsg = `WARNING: You selected a date (${currentExp}) that is BEYOND the scheduled audit date.\n\nFuture dates cannot be recorded without Admin Approval.\n\nDo you want to request special Admin Approval to allow this exception? Click OK to request, or Cancel to revert.`;
-                
-                if (!window.confirm(confirmMsg)) {
-                   if (e && e.target) e.target.value = oldItem[field] || ''; 
-                   return [...prev]; 
-                }
-                updatedItem.bbdApprovalStatus = 'pending';
-              } else {
-                 updatedItem.bbdApprovalStatus = oldItem.bbdApprovalStatus;
+    const currentExp = field === 'expDate' ? value : updatedItem.expDate;
+    if (currentExp && activeTicket?.scheduledDate) {
+        const expDateObj = new Date(currentExp);
+        const auditDateObj = new Date(activeTicket.scheduledDate);
+        expDateObj.setHours(0,0,0,0);
+        auditDateObj.setHours(0,0,0,0);
+        
+        if (expDateObj > auditDateObj) {
+            if (isSuperAdmin) {
+              updatedItem.bbdApprovalStatus = 'approved';
+            } else if (oldItem.bbdApprovalStatus !== 'pending' && oldItem.bbdApprovalStatus !== 'approved') {
+              const confirmMsg = `WARNING: You selected a date (${currentExp}) that is BEYOND the scheduled audit date.\n\nFuture dates cannot be recorded without Admin Approval.\n\nDo you want to request special Admin Approval to allow this exception? Click OK to request, or Cancel to revert.`;
+              if (!window.confirm(confirmMsg)) {
+                 if (e && e.target) e.target.value = oldItem[field] || ''; 
+                 return;
               }
-          } else {
-              updatedItem.bbdApprovalStatus = 'none';
-          }
-      } else {
-          updatedItem.bbdApprovalStatus = 'none';
-      }
+              updatedItem.bbdApprovalStatus = 'pending';
+            } else {
+               updatedItem.bbdApprovalStatus = oldItem.bbdApprovalStatus;
+            }
+        } else {
+            updatedItem.bbdApprovalStatus = 'none';
+        }
+    } else {
+        updatedItem.bbdApprovalStatus = 'none';
+    }
 
-      const newItems = [...prev];
-      newItems[itemIndex] = updatedItem;
-      return newItems;
+    latestEditsRef.current[id] = updatedItem;
+
+    setItems(prev => {
+      const newArr = [...prev];
+      const idx = newArr.findIndex(i => i.id === id);
+      if (idx !== -1) newArr[idx] = updatedItem;
+      return newArr;
     });
   };
 
-  const saveInlineEdit = async (itemToSave: AuditLineItem) => {
+  const saveInlineEdit = async (id: string) => {
     if (!activeTicket) return;
     
-    const latestItemState = items.find(i => i.id === itemToSave.id) || itemToSave;
-    
-    const originalItem = items.find(i => i.id === itemToSave.id);
-    const valueDifference = latestItemState.totalValue - (originalItem ? originalItem.totalValue : 0);
-    
-    if ((activeTicket.verifiedTotal || 0) + valueDifference > activeTicket.maxAllowedValue) { 
+    const itemToSave = latestEditsRef.current[id] || itemsRef.current.find(i => i.id === id);
+    if (!itemToSave) return;
+
+    const newVerifiedTotal = itemsRef.current.reduce((sum, item) => sum + (item.id === id ? itemToSave.totalValue : item.totalValue), 0);
+
+    if (newVerifiedTotal > activeTicket.maxAllowedValue) { 
       alert(`Changes reverted. This update exceeds the absolute 5% maximum limit (₹${activeTicket.maxAllowedValue.toLocaleString()}).`); 
       fetchItems(activeTicket.id); 
       return; 
     }
 
     try {
-      if ((activeTicket.verifiedTotal || 0) + valueDifference > activeTicket.approvedValue && (activeTicket.verifiedTotal || 0) <= activeTicket.approvedValue) {
+      if (newVerifiedTotal > activeTicket.approvedValue && itemsRef.current.reduce((sum, item) => sum + item.totalValue, 0) <= activeTicket.approvedValue) {
         const dist = distMap[activeTicket.distributorId];
         logActivity(user, profile, "Buffer Zone Triggered", `Audit for ${dist?.name} exceeded the primary limit of ₹${activeTicket.approvedValue.toLocaleString()} and entered the 5% buffer zone.`);
       }
 
       await supabase.from('auditLineItems').update({ 
-        quantity: latestItemState.quantity, 
-        qtyNonSaleable: latestItemState.qtyNonSaleable,
-        qtyBBD: latestItemState.qtyBBD,
-        qtyDamaged: latestItemState.qtyDamaged,
-        totalValue: latestItemState.totalValue,
-        mfgDate: latestItemState.mfgDate,
-        expDate: latestItemState.expDate,
-        productLife: latestItemState.productLife,
-        bbdApprovalStatus: latestItemState.bbdApprovalStatus || 'none'
-      }).eq('id', latestItemState.id);
+        quantity: itemToSave.quantity, 
+        qtyNonSaleable: itemToSave.qtyNonSaleable,
+        qtyBBD: itemToSave.qtyBBD,
+        qtyDamaged: itemToSave.qtyDamaged,
+        totalValue: itemToSave.totalValue,
+        mfgDate: itemToSave.mfgDate,
+        expDate: itemToSave.expDate,
+        productLife: itemToSave.productLife,
+        bbdApprovalStatus: itemToSave.bbdApprovalStatus || 'none'
+      }).eq('id', id);
       
+    } catch (error) { console.error(error); }
+  };
+
+  const handleDrainageChange = (id: string, value: string) => {
+    const oldItem = itemsRef.current.find(i => i.id === id);
+    if (!oldItem) return;
+
+    let val: number | string = parseInt(value);
+    if (isNaN(val)) val = '';
+    else if (val > oldItem.quantity) val = oldItem.quantity; 
+    else if (val < 0) val = 0;
+    
+    const updatedItem = { ...oldItem, qtyDrained: val as number };
+    latestEditsRef.current[id] = updatedItem;
+
+    setItems(prev => {
+      const newArr = [...prev];
+      const idx = newArr.findIndex(i => i.id === id);
+      if (idx !== -1) newArr[idx] = updatedItem;
+      return newArr;
+    });
+  };
+
+  const saveInlineDrainage = async (id: string) => {
+    if (!activeTicket) return;
+    const itemToSave = latestEditsRef.current[id] || itemsRef.current.find(i => i.id === id);
+    if (!itemToSave) return;
+    
+    try {
+      await supabase.from('auditLineItems').update({ qtyDrained: itemToSave.qtyDrained || 0 }).eq('id', id);
     } catch (error) { console.error(error); }
   };
 
@@ -415,7 +462,7 @@ export function ExecutionModule() {
     try {
       await supabase.from('auditLineItems').update({ bbdApprovalStatus: 'approved' }).eq('id', item.id);
       setItems(prev => prev.map(i => i.id === item.id ? { ...i, bbdApprovalStatus: 'approved' } : i));
-      logActivity(user, profile, "Future Expiry Approved", `Admin approved an exception for a future-dated expiry item: ${item.articleNumber}`);
+      logActivity(user, profile, "Future Expiry Approved", `Super Admin approved an exception for a future-dated expiry item: ${item.articleNumber}`);
     } catch (e) { console.error(e); }
   };
 
@@ -433,7 +480,7 @@ export function ExecutionModule() {
       }).eq('id', item.id);
       
       setItems(prev => prev.map(i => i.id === item.id ? { ...i, qtyBBD: 0, quantity: newTotalQty, totalValue: newTotalValue, bbdApprovalStatus: 'rejected' } : i));
-      logActivity(user, profile, "Future Expiry Rejected", `Admin rejected exception for future expiry date on ${item.articleNumber}. BBD quantity reset to 0.`);
+      logActivity(user, profile, "Future Expiry Rejected", `Super Admin rejected exception for future expiry date on ${item.articleNumber}. BBD quantity reset to 0.`);
     } catch (e) { console.error(e); }
   };
 
@@ -450,24 +497,20 @@ export function ExecutionModule() {
     alert("Drainage date saved successfully!");
   };
 
-  const handleDrainageChange = (id: string, value: string) => {
-    setItems(prev => prev.map(item => {
-      if (item.id === id) {
-        let val: number | string = parseInt(value);
-        if (isNaN(val)) val = '';
-        else if (val > item.quantity) val = item.quantity; 
-        else if (val < 0) val = 0;
-        return { ...item, qtyDrained: val as number };
-      }
-      return item;
-    }));
-  };
-
-  const saveInlineDrainage = async (itemToSave: AuditLineItem) => {
-    if (!activeTicket) return;
+  const startAudit = async (ticket: AuditTicket) => {
     try {
-      await supabase.from('auditLineItems').update({ qtyDrained: itemToSave.qtyDrained || 0 }).eq('id', itemToSave.id);
-    } catch (error) { console.error(error); }
+      const { error } = await supabase.from('auditTickets').update({ 
+        status: 'in_progress',
+        updatedAt: new Date().toISOString()
+      }).eq('id', ticket.id);
+      
+      if (error) throw error;
+      
+      logActivity(user, profile, "Audit Started", `Auditor started execution for ${distMap[ticket.distributorId]?.name}`);
+      setActiveTicket({ ...ticket, status: 'in_progress' });
+    } catch (error) {
+      console.error("Failed to start audit:", error);
+    }
   };
 
   const submitByAuditor = async () => {
@@ -475,12 +518,12 @@ export function ExecutionModule() {
     
     const hasPendingItems = items.some(i => i.bbdApprovalStatus === 'pending');
     if (hasPendingItems) {
-       alert("You have items marked as Expired that have future expiry dates. An Admin must approve these exceptions before you can submit the audit.");
+       alert("You have items marked as Expired that have future expiry dates. A Super Admin must approve these exceptions before you can submit the audit.");
        return;
     }
 
     if (!activeTicket.signOffs?.whatsappMediaApproved || !activeTicket.signOffs?.signoffDocumentApproved) {
-       alert("WhatsApp Evidence and Physical Sign-off must be approved by an Admin before submitting.");
+       alert("WhatsApp Evidence and Physical Sign-off must be approved by a Super Admin before submitting.");
        return;
     }
 
@@ -500,7 +543,7 @@ export function ExecutionModule() {
     if (!reason.trim()) { alert("A reason is required to reject the audit."); return; }
 
     try {
-      const rejectionMessage = `🚨 Audit Rejected by ASE: ${reason}`;
+      const rejectionMessage = `🚨 Audit Rejected: ${reason}`;
       
       const newComment = {
         id: Math.random().toString(36).substring(7),
@@ -528,7 +571,7 @@ export function ExecutionModule() {
       });
       
       const dist = distMap[activeTicket.distributorId];
-      logActivity(user, profile, "Audit Rejected", `ASE rejected the audit count for ${dist?.name}. Reason: "${reason}"`);
+      logActivity(user, profile, "Audit Rejected", `${profile.role.toUpperCase()} rejected the audit count for ${dist?.name}. Reason: "${reason}"`);
 
       alert("Audit rejected! The reason has been posted to the discussion board and returned to the Auditor for corrections.");
     } catch (error) {
@@ -542,7 +585,7 @@ export function ExecutionModule() {
     await supabase.from('auditTickets').update({ status: 'submitted', updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
     
     const dist = distMap[activeTicket.distributorId];
-    logActivity(user, profile, "Audit Verified", `ASE verified audit for ${dist?.name} and requested sign-offs`);
+    logActivity(user, profile, "Audit Verified", `${profile?.role.toUpperCase()} verified audit for ${dist?.name} and requested sign-offs`);
 
     setActiveTicket(null); alert("Audit verified! It is now pending Sign-offs.");
   };
@@ -550,8 +593,8 @@ export function ExecutionModule() {
   const signOff = async (roleRequired: 'auditor' | 'ase' | 'distributor') => {
     if (!activeTicket || !user || !profile) return;
     
-    if (profile.role !== roleRequired && !isAdminOrSuperadmin) { 
-      alert(`Action Denied: Must be an ${roleRequired.toUpperCase()} or Admin to sign.`); 
+    if (profile.role !== roleRequired && !isSuperAdmin) { 
+      alert(`Action Denied: Must be an ${roleRequired.toUpperCase()} or Super Admin to sign.`); 
       return; 
     }
     
@@ -596,38 +639,21 @@ export function ExecutionModule() {
 
   if (activeTicket) {
     const dist = distMap[activeTicket.distributorId];
-    
-    const isAuditor = profile?.role === 'auditor';
-    const isASE = profile?.role === 'ase';
-    
-    const isSubmittedPhase = ['submitted', 'drainage_pending', 'signed', 'evidence_uploaded', 'closed'].includes(activeTicket.status);
-    const isClosedPhase = activeTicket.status === 'closed';
-    const isDrainagePhase = ['drainage_pending', 'closed'].includes(activeTicket.status);
-    
-    const today = new Date();
-    const offset = today.getTimezoneOffset();
-    const localToday = new Date(today.getTime() - (offset*60*1000));
-    const todayStr = localToday.toISOString().split('T')[0];
-    
-    const isActionableDate = activeTicket.scheduledDate ? (activeTicket.scheduledDate <= todayStr || activeTicket.status === 'in_progress') : false;
 
     const approvedLogs = activeTicket.presenceLogs?.filter((l: any) => l.status === 'approved') || [];
     const hasApprovedCheckIn = approvedLogs.length > 0;
 
-    const canUploadFiles = (isAuditor || isAdminOrHO) && (!isSubmittedPhase && !['auditor_submitted'].includes(activeTicket.status));
+    const canUploadFiles = isAuditor && (!isSubmittedPhase && !['auditor_submitted'].includes(activeTicket.status));
     
-    const canEditItems = (isAuditor || isAdminOrSuperadmin) && canUploadFiles && isActionableDate && hasApprovedCheckIn && activeTicket.status === 'in_progress' && !isClosedPhase; 
-    
-    const isDrainageToday = activeTicket.signOffs?.drainageDate === todayStr;
-    const canEditDrainage = (isAuditor || isAdminOrSuperadmin) && activeTicket.status === 'drainage_pending' && !isClosedPhase && isDrainageToday;
+    // GATEKEEPER RESTRICTIONS
+    const canEditItems = isAuditor && canUploadFiles && isActionableDate && hasApprovedCheckIn && activeTicket.status === 'in_progress' && !isClosedPhase; 
+    const canEditDrainage = isAuditor && activeTicket.status === 'drainage_pending' && !isClosedPhase && isDrainageToday;
 
     const percentUsed = ((activeTicket.verifiedTotal || 0) / activeTicket.approvedValue) * 100;
     const isOverBudget = (activeTicket.verifiedTotal || 0) > activeTicket.approvedValue;
     const isMaxedOut = (activeTicket.verifiedTotal || 0) >= activeTicket.maxAllowedValue;
     
     const auditDateString = activeTicket.scheduledDate?.split('T')[0] || '';
-
-    // GATEKEEPER LOGIC
     const canSubmitToAse = activeTicket.signOffs?.whatsappMediaApproved === true && activeTicket.signOffs?.signoffDocumentApproved === true;
 
     return (
@@ -640,7 +666,7 @@ export function ExecutionModule() {
           </button>
           
           <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-            {isAdminOrHO && (
+            {isSuperAdmin && (
               <div className="flex items-center gap-2 bg-white border border-zinc-200 px-3 py-2 rounded-xl shadow-sm w-full sm:w-auto">
                 <span className="text-[10px] sm:text-xs font-bold text-zinc-500 uppercase tracking-wider hidden md:inline">Force Status:</span>
                 <select
@@ -660,7 +686,7 @@ export function ExecutionModule() {
             )}
 
             <div className="flex w-full sm:w-auto gap-2 sm:gap-3">
-              {profile?.role === 'superadmin' && !isClosedPhase && (
+              {isSuperAdmin && !isClosedPhase && (
                 <button onClick={resetAuditTicket} className="flex-1 sm:flex-none flex justify-center items-center gap-2 px-3 sm:px-4 py-2 bg-red-50 text-red-600 rounded-xl text-xs sm:text-sm font-bold hover:bg-red-100 transition-all border border-red-100"><RotateCcw size={16} /> <span className="hidden sm:inline">Reset</span></button>
               )}
               <button onClick={() => setIsChatOpen(true)} className="flex-1 sm:flex-none flex justify-center items-center gap-2 px-3 sm:px-4 py-2 bg-blue-50 text-blue-600 rounded-xl text-xs sm:text-sm font-bold hover:bg-blue-100 transition-all border border-blue-100"><MessageSquare size={16} /> Discussion {activeTicket.comments?.length ? `(${activeTicket.comments.length})` : ''}</button>
@@ -706,7 +732,7 @@ export function ExecutionModule() {
               <Lock className="text-blue-500 shrink-0 mt-0.5" size={20} />
               <div>
                 <h4 className="font-bold text-blue-900 text-sm sm:text-base">Awaiting Selfie Approval</h4>
-                <p className="text-xs sm:text-sm text-blue-800 mt-1">Your check-in selfie must be <strong>approved by an Admin</strong> before you can begin counting line items.</p>
+                <p className="text-xs sm:text-sm text-blue-800 mt-1">Your check-in selfie must be <strong>approved by a Super Admin</strong> before you can begin counting line items.</p>
               </div>
             </div>
           )}
@@ -751,12 +777,13 @@ export function ExecutionModule() {
             </div>
           )}
 
+          {/* --- 🔥 STRICT DRAINAGE LOCK WARNING BANNER 🔥 --- */}
           {activeTicket.status === 'drainage_pending' && !isClosedPhase && (
             <div className="mb-6 sm:mb-8 p-4 sm:p-5 bg-teal-50 border border-teal-100 rounded-xl sm:rounded-2xl flex items-start gap-3 sm:gap-4">
               <CalendarClock className="text-teal-500 shrink-0 mt-0.5" size={20} />
               <div className="w-full">
                 <h4 className="font-bold text-teal-900 text-sm sm:text-base">Drainage Phase Active</h4>
-                {isAdminOrSuperadmin ? (
+                {isSuperAdmin ? (
                   <>
                     <p className="text-xs sm:text-sm text-teal-800 mt-1 mb-3 sm:mb-4">
                       Original counts are frozen. The <strong>Drained Qty</strong> column is unlocked. Confirm the scheduled drainage date below to finalize.
@@ -772,7 +799,7 @@ export function ExecutionModule() {
                 ) : (
                   <>
                     <p className="text-xs sm:text-sm text-teal-800 mt-1 mb-3 sm:mb-4">
-                       Original counts are frozen. <strong>Drainage Date: {activeTicket.signOffs?.drainageDate || 'Pending Admin to schedule'}</strong>
+                       Original counts are frozen. <strong>Drainage Date: {activeTicket.signOffs?.drainageDate || 'Pending Super Admin to schedule'}</strong>
                     </p>
                     {!isDrainageToday && activeTicket.signOffs?.drainageDate && (
                       <p className="mt-3 text-[11px] sm:text-xs font-bold text-red-600 flex items-center gap-1.5"><AlertCircle size={14} /> Drained Qty inputs are locked because the drainage date is not today.</p>
@@ -783,8 +810,8 @@ export function ExecutionModule() {
             </div>
           )}
 
-          {!isSubmittedPhase && activeTicket.status !== 'auditor_submitted' && activeTicket.status !== 'drainage_pending' && (isAuditor || isAdminOrHO) && (
-            <CheckInBlock activeTicket={activeTicket} setActiveTicket={setActiveTicket} user={user} profile={profile} isAdminOrHO={isAdminOrHO} isActionableDate={isActionableDate} />
+          {!isSubmittedPhase && activeTicket.status !== 'auditor_submitted' && activeTicket.status !== 'drainage_pending' && (isAuditor || isSuperAdmin) && (
+            <CheckInBlock activeTicket={activeTicket} setActiveTicket={setActiveTicket} user={user} profile={profile} isSuperAdmin={isSuperAdmin} isActionableDate={isActionableDate} />
           )}
 
           <div className="space-y-6 sm:space-y-8 w-full min-w-0">
@@ -804,13 +831,15 @@ export function ExecutionModule() {
                       onChange={(e) => setItemSearchQuery(e.target.value)}
                     />
                   </div>
-                  <button 
-                    onClick={() => setIsAddModalOpen(true)} 
-                    disabled={!canEditItems || isMaxedOut}
-                    className={cn("w-full sm:w-auto flex justify-center items-center gap-2 px-6 py-2.5 sm:py-2.5 rounded-xl text-sm font-bold transition-all shadow-md active:scale-95 whitespace-nowrap", (canEditItems && !isMaxedOut) ? "bg-black text-white hover:bg-zinc-800" : "bg-zinc-200 text-zinc-400 cursor-not-allowed")}
-                  >
-                    <Plus size={18} /> Add Item
-                  </button>
+                  {canEditItems && (
+                    <button 
+                      onClick={() => setIsAddModalOpen(true)} 
+                      disabled={isMaxedOut}
+                      className={cn("w-full sm:w-auto flex justify-center items-center gap-2 px-6 py-2.5 sm:py-2.5 rounded-xl text-sm font-bold transition-all shadow-md active:scale-95 whitespace-nowrap", !isMaxedOut ? "bg-black text-white hover:bg-zinc-800" : "bg-zinc-200 text-zinc-400 cursor-not-allowed")}
+                    >
+                      <Plus size={18} /> Add Item
+                    </button>
+                  )}
                 </div>
               </div>
               
@@ -863,11 +892,11 @@ export function ExecutionModule() {
                             </td>
                             
                             <td className="px-3 py-3 sm:py-4 text-center bg-purple-50/30 border-r border-purple-100">
-                              {canEditItems ? <input type="number" min="0" value={item.qtyDamaged || ''} onChange={(e) => handleInlineChange(item.id, 'qtyDamaged', e.target.value, e)} onBlur={() => saveInlineEdit(item)} className="w-12 text-center bg-white border text-xs font-bold rounded px-1 py-2 sm:py-1 focus:ring-2 focus:ring-purple-500 outline-none text-purple-700 border-purple-200" placeholder="0" /> : <span className="font-bold text-purple-700">{item.qtyDamaged}</span>}
+                              {canEditItems ? <input type="number" min="0" value={item.qtyDamaged || ''} onChange={(e) => handleInlineChange(item.id, 'qtyDamaged', e.target.value, e)} onBlur={() => saveInlineEdit(item.id)} className="w-12 text-center bg-white border text-xs font-bold rounded px-1 py-2 sm:py-1 focus:ring-2 focus:ring-purple-500 outline-none text-purple-700 border-purple-200" placeholder="0" /> : <span className="font-bold text-purple-700">{item.qtyDamaged}</span>}
                             </td>
 
                             <td className="px-3 py-3 sm:py-4 text-center bg-red-50/30 border-r border-red-100">
-                              {canEditItems ? <input type="number" min="0" value={item.qtyNonSaleable || ''} onChange={(e) => handleInlineChange(item.id, 'qtyNonSaleable', e.target.value, e)} onBlur={() => saveInlineEdit(item)} className="w-12 text-center bg-white border text-xs font-bold rounded px-1 py-2 sm:py-1 focus:ring-2 focus:ring-red-500 outline-none text-red-700 border-red-200" placeholder="0" /> : <span className="font-bold text-red-700">{item.qtyNonSaleable}</span>}
+                              {canEditItems ? <input type="number" min="0" value={item.qtyNonSaleable || ''} onChange={(e) => handleInlineChange(item.id, 'qtyNonSaleable', e.target.value, e)} onBlur={() => saveInlineEdit(item.id)} className="w-12 text-center bg-white border text-xs font-bold rounded px-1 py-2 sm:py-1 focus:ring-2 focus:ring-red-500 outline-none text-red-700 border-red-200" placeholder="0" /> : <span className="font-bold text-red-700">{item.qtyNonSaleable}</span>}
                             </td>
                             
                             <td className="px-3 py-3 sm:py-4 text-center bg-amber-50/30 border-r border-amber-100 relative align-top">
@@ -875,7 +904,7 @@ export function ExecutionModule() {
                                  <input 
                                     type="number" min="0" value={item.qtyBBD || ''} 
                                     onChange={(e) => handleInlineChange(item.id, 'qtyBBD', e.target.value, e)} 
-                                    onBlur={() => saveInlineEdit(item)} 
+                                    onBlur={() => saveInlineEdit(item.id)} 
                                     className={cn("w-12 text-center bg-white border text-xs font-bold rounded px-1 py-2 sm:py-1 focus:outline-none transition-colors", item.bbdApprovalStatus === 'pending' ? "border-red-400 ring-2 ring-red-400 text-red-700" : "border-amber-200 focus:ring-2 focus:ring-amber-500 text-amber-700")} 
                                     placeholder="0"
                                  />
@@ -883,11 +912,11 @@ export function ExecutionModule() {
                                  <span className="font-bold text-amber-700">{item.qtyBBD}</span>
                               )}
                               
-                              {item.bbdApprovalStatus === 'pending' && <div className="mt-1.5 flex flex-col items-center justify-center gap-1 text-[9px] leading-tight text-red-600 font-black uppercase tracking-wider"><AlertCircle size={10}/> Pending Admin</div>}
+                              {item.bbdApprovalStatus === 'pending' && <div className="mt-1.5 flex flex-col items-center justify-center gap-1 text-[9px] leading-tight text-red-600 font-black uppercase tracking-wider"><AlertCircle size={10}/> Pending Super Admin</div>}
                               {item.bbdApprovalStatus === 'rejected' && <div className="mt-1.5 flex items-center justify-center gap-1 text-[9px] text-red-600 font-black uppercase tracking-wider"><X size={10}/> Rejected</div>}
                               {item.bbdApprovalStatus === 'approved' && <div className="mt-1.5 flex items-center justify-center gap-1 text-[9px] text-emerald-600 font-black uppercase tracking-wider"><CheckCircle2 size={10}/> Approved</div>}
                               
-                              {isAdminOrHO && item.bbdApprovalStatus === 'pending' && !isClosedPhase && (
+                              {isSuperAdmin && item.bbdApprovalStatus === 'pending' && !isClosedPhase && (
                                  <div className="flex gap-1.5 justify-center mt-2.5">
                                     <button onClick={() => approveBBDItem(item)} className="text-emerald-600 bg-white hover:bg-emerald-50 p-1.5 rounded border border-emerald-200 shadow-sm transition-colors" title="Approve Exception"><CheckCircle2 size={12}/></button>
                                     <button onClick={() => rejectBBDItem(item)} className="text-red-600 bg-white hover:bg-red-50 p-1.5 rounded border border-red-200 shadow-sm transition-colors" title="Reject Exception"><X size={12}/></button>
@@ -903,10 +932,10 @@ export function ExecutionModule() {
                               {canEditItems ? (
                                 <input 
                                   type="date" 
-                                  max={!isAdminOrSuperadmin ? auditDateString : undefined} 
+                                  max={!isSuperAdmin ? auditDateString : undefined} 
                                   value={item.mfgDate || ''} 
                                   onChange={(e) => handleInlineChange(item.id, 'mfgDate', e.target.value, e)} 
-                                  onBlur={() => saveInlineEdit(item)} 
+                                  onBlur={() => saveInlineEdit(item.id)} 
                                   className="w-[100px] sm:w-[110px] text-center bg-white border text-[10px] font-bold rounded px-1 py-2 sm:py-1 focus:ring-2 focus:ring-blue-500 outline-none text-blue-700 border-blue-200 cursor-pointer" 
                                 />
                               ) : (
@@ -918,10 +947,10 @@ export function ExecutionModule() {
                               {canEditItems ? (
                                 <input 
                                   type="date" 
-                                  max={!isAdminOrSuperadmin ? auditDateString : undefined} 
+                                  max={!isSuperAdmin ? auditDateString : undefined} 
                                   value={item.expDate || ''} 
                                   onChange={(e) => handleInlineChange(item.id, 'expDate', e.target.value, e)} 
-                                  onBlur={() => saveInlineEdit(item)} 
+                                  onBlur={() => saveInlineEdit(item.id)} 
                                   className="w-[100px] sm:w-[110px] text-center bg-white border text-[10px] font-bold rounded px-1 py-2 sm:py-1 focus:ring-2 focus:ring-blue-500 outline-none text-blue-700 border-blue-200 cursor-pointer" 
                                 />
                               ) : (
@@ -941,7 +970,7 @@ export function ExecutionModule() {
                                   max={item.quantity} 
                                   value={item.qtyDrained ?? ''} 
                                   onChange={(e) => handleDrainageChange(item.id, e.target.value)} 
-                                  onBlur={() => saveInlineDrainage(item)} 
+                                  onBlur={() => saveInlineDrainage(item.id)} 
                                   className="w-14 text-center bg-white border text-xs font-bold rounded px-1 py-2 focus:ring-2 focus:ring-teal-500 outline-none text-teal-800 border-teal-200 shadow-sm" 
                                   placeholder="0"
                                 />
@@ -1004,7 +1033,7 @@ export function ExecutionModule() {
                     </div>
                   </div>
                   
-                  {isAdminOrHO && !isClosedPhase ? (
+                  {isSuperAdmin && !isClosedPhase ? (
                     <button
                       onClick={toggleWhatsappApproval}
                       className={cn("w-full sm:w-auto px-4 py-2 text-xs font-bold rounded-xl transition-all active:scale-95", activeTicket.signOffs?.whatsappMediaApproved ? "bg-emerald-600 text-white shadow-lg shadow-emerald-600/20" : "bg-black text-white hover:bg-zinc-800 shadow-md")}
@@ -1013,7 +1042,7 @@ export function ExecutionModule() {
                     </button>
                   ) : (
                     <span className={cn("w-full sm:w-auto text-center px-3 py-2 sm:py-1.5 text-[10px] sm:text-xs font-bold rounded-xl", activeTicket.signOffs?.whatsappMediaApproved ? "bg-emerald-50 border border-emerald-200 text-emerald-700" : "bg-zinc-100 text-zinc-500")}>
-                      {activeTicket.signOffs?.whatsappMediaApproved ? 'Approved by Admin' : 'Pending Admin'}
+                      {activeTicket.signOffs?.whatsappMediaApproved ? 'Approved by Super Admin' : 'Pending Super Admin'}
                     </span>
                   )}
                 </div>
@@ -1031,7 +1060,7 @@ export function ExecutionModule() {
                       </div>
                     </div>
                     
-                    {isAdminOrHO && !isClosedPhase ? (
+                    {isSuperAdmin && !isClosedPhase ? (
                       <button
                         onClick={toggleDrainageMediaApproval}
                         className={cn("w-full sm:w-auto px-4 py-2 text-xs font-bold rounded-xl transition-all active:scale-95", activeTicket.signOffs?.drainageMediaApproved ? "bg-emerald-600 text-white shadow-lg shadow-emerald-600/20" : "bg-black text-white hover:bg-zinc-800 shadow-md")}
@@ -1040,7 +1069,7 @@ export function ExecutionModule() {
                       </button>
                     ) : (
                       <span className={cn("w-full sm:w-auto text-center px-3 py-2 sm:py-1.5 text-[10px] sm:text-xs font-bold rounded-xl", activeTicket.signOffs?.drainageMediaApproved ? "bg-emerald-50 border border-emerald-200 text-emerald-700" : "bg-zinc-100 text-zinc-500")}>
-                        {activeTicket.signOffs?.drainageMediaApproved ? 'Approved by Admin' : 'Pending Admin'}
+                        {activeTicket.signOffs?.drainageMediaApproved ? 'Approved by Super Admin' : 'Pending Super Admin'}
                       </span>
                     )}
                   </div>
@@ -1062,7 +1091,7 @@ export function ExecutionModule() {
                   </div>
                   
                   <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
-                    {!activeTicket.signOffs?.signoffDocumentUrl && (isAuditor || isASE || isAdminOrHO) && !isClosedPhase && (
+                    {!activeTicket.signOffs?.signoffDocumentUrl && (isAuditor || isASE) && !isClosedPhase && (
                       <>
                         <input type="file" accept="image/*,application/pdf" capture="environment" className="hidden" ref={signoffFileRef} onChange={handleSignoffUpload} />
                         <button onClick={() => signoffFileRef.current?.click()} disabled={isUploadingSignoff} className="w-full sm:w-auto px-4 py-2 bg-white border border-zinc-200 text-zinc-700 text-xs font-bold rounded-xl hover:bg-zinc-50 transition-all shadow-sm">
@@ -1071,17 +1100,13 @@ export function ExecutionModule() {
                       </>
                     )}
                     
-                    {activeTicket.signOffs?.signoffDocumentUrl && isAdminOrHO && !isClosedPhase ? (
+                    {activeTicket.signOffs?.signoffDocumentUrl && isSuperAdmin && !isClosedPhase ? (
                       <div className="flex items-center gap-2 w-full sm:w-auto">
                         {!activeTicket.signOffs?.signoffDocumentApproved && (
-                           <>
-                             <button onClick={rejectSignoffDocument} className="flex-1 sm:flex-none px-3 py-2 text-xs font-bold rounded-xl transition-all active:scale-95 bg-red-50 border border-red-100 text-red-600 hover:bg-red-100 shadow-sm">
-                               Reject
-                             </button>
-                             <button onClick={() => signoffFileRef.current?.click()} className="flex-1 sm:flex-none p-2 text-zinc-400 hover:text-zinc-900 bg-white border border-zinc-200 rounded-xl transition-all flex justify-center" title="Re-upload Document"><Upload size={14}/></button>
-                           </>
+                           <button onClick={rejectSignoffDocument} className="flex-1 sm:flex-none px-3 py-2 text-xs font-bold rounded-xl transition-all active:scale-95 bg-red-50 border border-red-100 text-red-600 hover:bg-red-100 shadow-sm">
+                             Reject
+                           </button>
                         )}
-                        <input type="file" accept="image/*,application/pdf" className="hidden" ref={signoffFileRef} onChange={handleSignoffUpload} />
                         
                         <button
                           onClick={toggleSignoffApproval}
@@ -1092,7 +1117,7 @@ export function ExecutionModule() {
                       </div>
                     ) : activeTicket.signOffs?.signoffDocumentUrl ? (
                       <span className={cn("w-full sm:w-auto text-center px-3 py-2 sm:py-1.5 text-[10px] sm:text-xs font-bold rounded-xl", activeTicket.signOffs?.signoffDocumentApproved ? "bg-emerald-50 border border-emerald-200 text-emerald-700" : "bg-amber-50 border border-amber-200 text-amber-700")}>
-                        {activeTicket.signOffs?.signoffDocumentApproved ? 'Approved by Admin' : 'Pending Admin'}
+                        {activeTicket.signOffs?.signoffDocumentApproved ? 'Approved by Super Admin' : 'Pending Super Admin'}
                       </span>
                     ) : null}
                   </div>
@@ -1105,7 +1130,7 @@ export function ExecutionModule() {
                   <div className="space-y-2 sm:space-y-3">
                     {['auditor', 'ase', 'distributor'].map((role) => {
                       const signedData = activeTicket.signOffs?.[role as keyof SignOff];
-                      const isMyRole = profile?.role === role || isAdminOrSuperadmin;
+                      const isMyRole = profile?.role === role || isSuperAdmin;
                       return (
                         <div key={role} className="flex items-center justify-between p-3 sm:p-4 bg-zinc-50 rounded-xl sm:rounded-2xl border border-zinc-100">
                           <div><span className="text-xs sm:text-sm font-bold uppercase tracking-wider text-zinc-600">{role}</span></div>
@@ -1120,12 +1145,12 @@ export function ExecutionModule() {
             </div>
 
             {/* --- ACTION BUTTONS WITH NEW COMPLIANCE GATEKEEPER --- */}
-            {(isAuditor || isAdminOrSuperadmin) && activeTicket.status === 'in_progress' && items.length > 0 && (
+            {(isAuditor || isSuperAdmin) && activeTicket.status === 'in_progress' && items.length > 0 && (
               <div className="pt-6 sm:pt-8 flex flex-col items-end border-t border-zinc-100 w-full gap-3">
                 {!canSubmitToAse && (
                   <div className="flex items-start sm:items-center gap-2 p-3 sm:p-4 bg-amber-50 text-amber-700 rounded-xl border border-amber-200 w-full sm:w-auto text-left sm:text-center text-xs sm:text-sm font-bold">
                     <AlertCircle size={18} className="shrink-0 mt-0.5 sm:mt-0" />
-                    <p>WhatsApp Evidence and Physical Sign-off must be approved by Admin before submitting.</p>
+                    <p>WhatsApp Evidence and Physical Sign-off must be approved by Super Admin before submitting.</p>
                   </div>
                 )}
                 <button 
@@ -1138,7 +1163,7 @@ export function ExecutionModule() {
               </div>
             )}
 
-            {(isASE || isAdminOrHO) && activeTicket.status === 'auditor_submitted' && (
+            {(isASE || isSuperAdmin) && activeTicket.status === 'auditor_submitted' && (
               <div className="pt-6 sm:pt-8 flex flex-col-reverse sm:flex-row justify-end gap-3 border-t border-zinc-100 w-full">
                 <button onClick={rejectByASE} className="w-full sm:w-auto flex justify-center items-center gap-2 px-6 sm:px-8 py-3.5 sm:py-4 bg-white border border-red-200 text-red-600 rounded-xl sm:rounded-2xl font-bold hover:bg-red-50 transition-all shadow-sm active:scale-95 text-sm sm:text-base">
                   <RotateCcw size={18} /> Reject & Return to Auditor
@@ -1149,12 +1174,12 @@ export function ExecutionModule() {
               </div>
             )}
 
-            {(isAuditor || isAdminOrSuperadmin) && activeTicket.status === 'drainage_pending' && (
+            {(isAuditor || isSuperAdmin) && activeTicket.status === 'drainage_pending' && (
               <div className="pt-6 sm:pt-8 flex justify-end border-t border-zinc-100 w-full">
                 <button 
                   onClick={submitDrainage} 
                   disabled={!activeTicket.signOffs?.drainageDate || !isDrainageToday}
-                  title={!activeTicket.signOffs?.drainageDate ? "Please wait for an Admin to set a Drainage Date first" : !isDrainageToday ? "Drainage can only be completed on the exact scheduled date" : ""}
+                  title={!activeTicket.signOffs?.drainageDate ? "Please wait for a Super Admin to set a Drainage Date first" : !isDrainageToday ? "Drainage can only be completed on the exact scheduled date" : ""}
                   className="w-full sm:w-auto flex justify-center items-center gap-2 px-6 sm:px-8 py-3.5 sm:py-4 bg-teal-600 text-white rounded-xl sm:rounded-2xl font-bold hover:bg-teal-700 transition-all shadow-xl shadow-teal-600/20 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed text-sm sm:text-base"
                 >
                   <CheckCircle2 size={18} /> Complete Drainage & Close Audit
@@ -1181,11 +1206,6 @@ export function ExecutionModule() {
       </div>
     );
   }
-
-  const todayDate = new Date();
-  const offset = todayDate.getTimezoneOffset();
-  const localToday = new Date(todayDate.getTime() - (offset*60*1000));
-  const todayStr = localToday.toISOString().split('T')[0];
 
   const activeTickets = tickets.filter(t => ['scheduled', 'in_progress', 'auditor_submitted'].includes(t.status));
   const signoffTickets = tickets.filter(t => t.status === 'submitted');
@@ -1237,6 +1257,23 @@ export function ExecutionModule() {
                 </div>
                 <h4 className="text-base sm:text-lg font-bold tracking-tight mb-1 line-clamp-1">{dist?.name || 'Loading...'}</h4>
                 <p className="text-xs sm:text-sm text-zinc-500 flex items-center gap-1.5 mb-4 sm:mb-6"><MapPin size={12} className="shrink-0" /> <span className="truncate">{dist?.city}</span></p>
+
+                {/* --- RENDER BUTTONS BASED ON ROLE --- */}
+                {ticket.status === 'scheduled' ? (
+                  (isAuditor || isSuperAdmin) ? (
+                    <button onClick={(e) => { e.stopPropagation(); startAudit(ticket); }} className="w-full py-3 bg-zinc-100 text-zinc-900 font-bold rounded-xl group-hover:bg-black group-hover:text-white transition-all text-sm shadow-sm active:scale-95">
+                      Start Execution
+                    </button>
+                  ) : (
+                    <button onClick={(e) => { e.stopPropagation(); setActiveTicket(ticket); }} className="w-full py-3 bg-zinc-100 text-zinc-900 font-bold rounded-xl group-hover:bg-zinc-200 transition-all text-sm shadow-sm active:scale-95">
+                      View Details
+                    </button>
+                  )
+                ) : (
+                  <button className="w-full py-3 bg-blue-50 text-blue-700 border border-blue-100 font-bold rounded-xl group-hover:bg-blue-600 group-hover:text-white transition-all text-sm shadow-sm active:scale-95 flex items-center justify-center gap-2">
+                    {['auditor', 'ase', 'superadmin'].includes(profile?.role || '') ? 'Resume / Review Audit' : 'View Audit'}
+                  </button>
+                )}
               </motion.div>
             );
           })}

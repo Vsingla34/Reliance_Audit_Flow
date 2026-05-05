@@ -167,16 +167,18 @@ export function SchedulerModule() {
       const existingTicket = tickets.find(t => t.distributorId === createData.distributorId && t.status === 'tentative');
 
       if (existingTicket) {
-        await supabase.from('auditTickets').update({
+        const { error } = await supabase.from('auditTickets').update({
           proposedDate: createData.proposedDate,
           scheduledDate: createData.proposedDate,
           auditDays: autoAuditDays,
           status: 'scheduled',
           updatedAt: new Date().toISOString()
         }).eq('id', existingTicket.id);
+        
+        if (error) throw error;
       } else {
-        const newTicket: Partial<AuditTicket> = {
-          id: Math.random().toString(36).substring(7),
+        // Omitting 'id' so Supabase auto-generates the UUID securely
+        const newTicket = {
           distributorId: createData.distributorId,
           proposedDate: createData.proposedDate,
           auditorIds: [], 
@@ -193,7 +195,9 @@ export function SchedulerModule() {
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString()
         };
-        await supabase.from('auditTickets').insert([newTicket]);
+        
+        const { error } = await supabase.from('auditTickets').insert([newTicket]);
+        if (error) throw error;
       }
 
       logActivity(user, profile, "Audit Scheduled", `${profile?.role.toUpperCase()} scheduled audit for ${dist?.name} on ${createData.proposedDate} (${autoAuditDays} Days)`);
@@ -202,7 +206,11 @@ export function SchedulerModule() {
       setIsCreateModalOpen(false);
       setCreateData({ distributorId: '', proposedDate: '' });
       setCreateAseId('');
-    } catch (error) { console.error("Error creating audit ticket:", error); }
+      alert("Audit Scheduled Successfully!");
+    } catch (error: any) { 
+      console.error("Error creating audit ticket:", error);
+      alert(`Failed to schedule audit: ${error.message}`); 
+    }
   };
 
   const handleEditActiveTicketSubmit = async (e: React.FormEvent) => {
@@ -213,7 +221,7 @@ export function SchedulerModule() {
       const dist = distMap[editingActiveTicket.distributorId];
       const autoAuditDays = calculateAuditDays(dist?.approvedValue || 0);
 
-      await supabase.from('auditTickets').update({
+      const { error } = await supabase.from('auditTickets').update({
         scheduledDate: editTicketData.scheduledDate,
         proposedDate: editTicketData.scheduledDate,
         auditorIds: editTicketData.auditorIds,
@@ -221,12 +229,18 @@ export function SchedulerModule() {
         updatedAt: new Date().toISOString()
       }).eq('id', editingActiveTicket.id);
 
+      if (error) throw error;
+
       logActivity(user, profile, "Audit Re-scheduled/Assigned", `${profile?.role.toUpperCase()} modified the schedule/auditors for ${dist?.name}`);
       notifyLinkedUsers(editingActiveTicket.distributorId, "Schedule Updated", `The audit schedule and/or auditors for ${dist?.name} have been updated.`);
 
       setEditingActiveTicket(null);
       setAuditorSearch('');
-    } catch (error) { console.error("Error updating ticket:", error); }
+      alert("Changes Saved Successfully!");
+    } catch (error: any) { 
+      console.error("Error updating ticket:", error);
+      alert(`Failed to save changes: ${error.message}`);
+    }
   };
 
   const handleAdminRequestDate = async () => {
@@ -253,16 +267,20 @@ export function SchedulerModule() {
         await supabase.from('auditTickets').update({ dateProposals: updatedProposals, updatedAt: new Date().toISOString() }).eq('id', currentNegTicket.id);
       } else {
         const dist = distMap[negDistId];
-        const newTicket: Partial<AuditTicket> = {
-          id: Math.random().toString(36).substring(7), distributorId: negDistId, proposedDate: null, auditorIds: [], auditDays: calculateAuditDays(dist.approvedValue), approvedValue: dist.approvedValue, maxAllowedValue: dist.approvedValue * 1.05, status: 'tentative', scheduledDate: null, verifiedTotal: 0, presenceLogs: [], signOffs: {}, media: [], dateProposals: [newProposal], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
+        const newTicket = {
+          distributorId: negDistId, proposedDate: null, auditorIds: [], auditDays: calculateAuditDays(dist.approvedValue), approvedValue: dist.approvedValue, maxAllowedValue: dist.approvedValue * 1.05, status: 'tentative', scheduledDate: null, verifiedTotal: 0, presenceLogs: [], signOffs: {}, media: [], dateProposals: [newProposal], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
         };
-        await supabase.from('auditTickets').insert([newTicket]);
+        const { error } = await supabase.from('auditTickets').insert([newTicket]);
+        if (error) throw error;
         logActivity(user, profile, "Date Requested", `Admin requested a date proposal from ASE for ${dist?.name}`);
       }
 
       notifyLinkedUsers(negDistId, "Date Requested", `Admin requested a date proposal for ${distMap[negDistId]?.name}.`);
       setProposalData({ date: '', remarks: '' });
-    } catch (error) { console.error("Error requesting date:", error); }
+    } catch (error: any) { 
+      console.error("Error requesting date:", error);
+      alert(`Failed to request date: ${error.message}`); 
+    }
   };
 
   const submitProposal = async (e: React.FormEvent) => {
@@ -326,17 +344,19 @@ export function SchedulerModule() {
         
         const newStatus = targetTicket.status === 'scheduled' && profile?.role === 'ase' ? 'tentative' : targetTicket.status;
 
-        await supabase.from('auditTickets').update({ proposedDate: newMainDate, dateProposals: updatedProposals, status: newStatus, updatedAt: new Date().toISOString() }).eq('id', targetTicket.id);
+        const { error } = await supabase.from('auditTickets').update({ proposedDate: newMainDate, dateProposals: updatedProposals, status: newStatus, updatedAt: new Date().toISOString() }).eq('id', targetTicket.id);
+        if (error) throw error;
         
         if (newStatus === 'tentative' && targetTicket.status === 'scheduled') {
            logActivity(user, profile, "Reschedule Requested", `ASE requested a reschedule for ${distMap[finalTargetDistId]?.name}. Reason: "${rescheduleReason}"`);
         }
       } else {
         const dist = distMap[finalTargetDistId];
-        const newTicket: Partial<AuditTicket> = {
-          id: Math.random().toString(36).substring(7), distributorId: finalTargetDistId, proposedDate: proposalData.date || null, auditorIds: [], auditDays: calculateAuditDays(dist.approvedValue), approvedValue: dist.approvedValue, maxAllowedValue: dist.approvedValue * 1.05, status: 'tentative', scheduledDate: null, verifiedTotal: 0, presenceLogs: [], signOffs: {}, media: [], dateProposals: [newProposal], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
+        const newTicket = {
+          distributorId: finalTargetDistId, proposedDate: proposalData.date || null, auditorIds: [], auditDays: calculateAuditDays(dist.approvedValue), approvedValue: dist.approvedValue, maxAllowedValue: dist.approvedValue * 1.05, status: 'tentative', scheduledDate: null, verifiedTotal: 0, presenceLogs: [], signOffs: {}, media: [], dateProposals: [newProposal], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
         };
-        await supabase.from('auditTickets').insert([newTicket]);
+        const { error } = await supabase.from('auditTickets').insert([newTicket]);
+        if (error) throw error;
         logActivity(user, profile, "Date Proposed", `${profile?.role.toUpperCase()} initiated a date proposal for ${dist?.name}`);
       }
 
@@ -344,7 +364,10 @@ export function SchedulerModule() {
 
       setProposalData({ date: '', remarks: '' });
       setNegDistId(finalTargetDistId); 
-    } catch (error) { console.error("Error submitting proposal:", error); }
+    } catch (error: any) { 
+      console.error("Error submitting proposal:", error);
+      alert(`Failed to submit proposal: ${error.message}`);
+    }
   };
 
   const cancelAssignment = async () => {
@@ -368,7 +391,7 @@ export function SchedulerModule() {
 
       const updatedProposals = [...(currentNegTicket.dateProposals || []), newProposal];
 
-      await supabase.from('auditTickets').update({ 
+      const { error } = await supabase.from('auditTickets').update({ 
         status: 'tentative', 
         scheduledDate: null, 
         proposedDate: null, 
@@ -376,6 +399,8 @@ export function SchedulerModule() {
         updatedAt: new Date().toISOString() 
       }).eq('id', currentNegTicket.id);
       
+      if (error) throw error;
+
       const dist = distMap[currentNegTicket.distributorId];
       logActivity(user, profile, "Audit Cancelled", `ASE cancelled the audit for ${dist?.name} past 12 PM on execution day. Reason: "${cancelReason}"`);
       notifyLinkedUsers(currentNegTicket.distributorId, "Audit Cancelled", `The audit for ${dist?.name} was cancelled late by ${profile.name}. Reason: "${cancelReason}"`);
@@ -383,9 +408,9 @@ export function SchedulerModule() {
       setIsNegotiationModalOpen(false);
       setNegDistId('');
       alert("Audit has been cancelled and returned to the Admin for review.");
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error cancelling assignment:", error);
-      alert("Failed to cancel the assignment.");
+      alert(`Failed to cancel the assignment: ${error.message}`);
     }
   };
 
@@ -395,19 +420,25 @@ export function SchedulerModule() {
       const dist = distMap[currentNegTicket.distributorId];
       const autoAuditDays = calculateAuditDays(dist?.approvedValue || 0);
 
-      await supabase.from('auditTickets').update({ 
+      const { error } = await supabase.from('auditTickets').update({ 
         status: 'scheduled', 
         scheduledDate: proposalDate, 
         auditDays: autoAuditDays, 
         updatedAt: new Date().toISOString() 
       }).eq('id', currentNegTicket.id);
       
+      if (error) throw error;
+
       logActivity(user, profile, "Date Approved", `${profile?.role.toUpperCase()} approved date proposal for ${dist?.name} on ${proposalDate}`);
       notifyLinkedUsers(currentNegTicket.distributorId, "Schedule Approved", `The audit schedule for ${dist?.name} has been approved for ${proposalDate}.`);
 
       setIsNegotiationModalOpen(false);
       setNegDistId('');
-    } catch (error) { console.error("Error approving schedule:", error); }
+      alert("Schedule Approved successfully!");
+    } catch (error: any) { 
+      console.error("Error approving schedule:", error);
+      alert(`Failed to approve schedule: ${error.message}`);
+    }
   };
 
   const openNegotiationModal = (distId: string) => {
@@ -683,16 +714,20 @@ export function SchedulerModule() {
         {editingActiveTicket && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6">
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => { setEditingActiveTicket(null); setAuditorSearch(''); }} className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
-            <motion.div initial={{ opacity: 0, scale: 0.9, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9, y: 20 }} className="relative w-full max-w-md bg-white rounded-[1.5rem] sm:rounded-[2.5rem] shadow-2xl overflow-hidden p-5 sm:p-8 flex flex-col max-h-[90vh]">
-              <div className="flex justify-between items-start sm:items-center mb-5 sm:mb-6 shrink-0">
-                <div>
-                  <h3 className="text-lg sm:text-xl font-bold flex items-center gap-2"><Edit2 size={18} className="text-blue-600 sm:w-5 sm:h-5" /> Edit Assignment</h3>
-                  <p className="text-xs sm:text-sm text-zinc-500 mt-1">{distMap[editingActiveTicket.distributorId]?.name}</p>
+            <motion.div initial={{ opacity: 0, scale: 0.9, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9, y: 20 }} className="relative w-full max-w-md bg-white rounded-[1.5rem] sm:rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+              
+              {/* Form wrapping the entire modal content */}
+              <form id="edit-ticket-form" onSubmit={handleEditActiveTicketSubmit} className="flex flex-col h-full">
+                
+                <div className="flex justify-between items-start sm:items-center p-5 sm:p-8 mb-0 shrink-0 border-b border-zinc-100">
+                  <div>
+                    <h3 className="text-lg sm:text-xl font-bold flex items-center gap-2"><Edit2 size={18} className="text-blue-600 sm:w-5 sm:h-5" /> Edit Assignment</h3>
+                    <p className="text-xs sm:text-sm text-zinc-500 mt-1">{distMap[editingActiveTicket.distributorId]?.name}</p>
+                  </div>
+                  <button type="button" onClick={() => { setEditingActiveTicket(null); setAuditorSearch(''); }} className="p-1.5 sm:p-2 hover:bg-zinc-100 rounded-lg sm:rounded-xl shrink-0"><X size={18} className="sm:w-5 sm:h-5"/></button>
                 </div>
-                <button onClick={() => { setEditingActiveTicket(null); setAuditorSearch(''); }} className="p-1.5 sm:p-2 hover:bg-zinc-100 rounded-lg sm:rounded-xl shrink-0"><X size={18} className="sm:w-5 sm:h-5"/></button>
-              </div>
-              <div className="overflow-y-auto custom-scrollbar flex-1 pr-2">
-                <form id="edit-ticket-form" onSubmit={handleEditActiveTicketSubmit} className="space-y-4">
+                
+                <div className="overflow-y-auto custom-scrollbar flex-1 p-5 sm:p-8 space-y-4">
                   <div>
                     <label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-400">Start Date</label>
                     <input required type="date" className="w-full mt-1 px-3 sm:px-4 py-2.5 sm:py-3 bg-zinc-50 border border-zinc-200 sm:border-none rounded-xl focus:ring-2 focus:ring-black transition-all cursor-pointer text-sm" value={editTicketData.scheduledDate} onChange={e => setEditTicketData({...editTicketData, scheduledDate: e.target.value})} />
@@ -713,12 +748,13 @@ export function SchedulerModule() {
                       )) : <div className="col-span-full text-center py-4 text-xs font-medium text-zinc-400">No auditors found.</div>}
                     </div>
                   </div>
-                </form>
-              </div>
-              <div className="flex flex-col sm:flex-row items-center gap-2 sm:gap-3 pt-4 border-t border-zinc-100 shrink-0 mt-4">
-                <button type="button" onClick={() => deleteTicket(editingActiveTicket.id)} className="w-full sm:w-auto px-4 py-3 sm:py-4 bg-red-50 text-red-600 rounded-xl sm:rounded-2xl font-bold hover:bg-red-100 transition-colors flex justify-center items-center gap-2" title="Delete Ticket"><Trash2 size={18} className="sm:w-5 sm:h-5" /> <span className="sm:hidden">Delete Ticket</span></button>
-                <button type="submit" form="edit-ticket-form" className="w-full sm:flex-1 py-3 sm:py-4 bg-black text-white rounded-xl sm:rounded-2xl font-bold hover:bg-zinc-800 transition-all shadow-md sm:shadow-xl sm:shadow-black/10 active:scale-95 text-sm sm:text-base">Save Changes</button>
-              </div>
+                </div>
+
+                <div className="flex flex-col sm:flex-row items-center gap-2 sm:gap-3 p-5 sm:p-8 pt-4 border-t border-zinc-100 shrink-0">
+                  <button type="button" onClick={() => deleteTicket(editingActiveTicket.id)} className="w-full sm:w-auto px-4 py-3 sm:py-4 bg-red-50 text-red-600 rounded-xl sm:rounded-2xl font-bold hover:bg-red-100 transition-colors flex justify-center items-center gap-2" title="Delete Ticket"><Trash2 size={18} className="sm:w-5 sm:h-5" /> <span className="sm:hidden">Delete Ticket</span></button>
+                  <button type="submit" className="w-full sm:flex-1 py-3 sm:py-4 bg-black text-white rounded-xl sm:rounded-2xl font-bold hover:bg-zinc-800 transition-all shadow-md sm:shadow-xl sm:shadow-black/10 active:scale-95 text-sm sm:text-base">Save Changes</button>
+                </div>
+              </form>
             </motion.div>
           </div>
         )}
@@ -864,6 +900,56 @@ export function SchedulerModule() {
                   )}
                 </div>
               )}
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* --- FORCE SCHEDULE MODAL --- */}
+      <AnimatePresence>
+        {isCreateModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsCreateModalOpen(false)} className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
+            <motion.div initial={{ opacity: 0, scale: 0.9, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9, y: 20 }} className="relative w-full max-w-md bg-white rounded-[1.5rem] sm:rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+              
+              {/* Form wrapping the entire modal content */}
+              <form id="force-schedule-form" onSubmit={handleCreateSubmit} className="flex flex-col h-full">
+                
+                <div className="flex justify-between items-center p-5 sm:p-6 border-b border-zinc-100 shrink-0">
+                  <h3 className="text-lg sm:text-xl font-bold">Force Schedule Audit</h3>
+                  <button type="button" onClick={() => setIsCreateModalOpen(false)} className="p-1.5 sm:p-2 hover:bg-zinc-100 rounded-lg sm:rounded-xl"><X size={18} className="sm:w-5 sm:h-5"/></button>
+                </div>
+
+                <div className="p-5 sm:p-6 overflow-y-auto custom-scrollbar flex-1 min-h-0 space-y-3 sm:space-y-4">
+                  {isAdminOrHO && (
+                    <div>
+                      <label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-400">Filter by ASE (Optional)</label>
+                      <select className="w-full mt-1 px-3 sm:px-4 py-2.5 sm:py-3 bg-zinc-50 border border-zinc-200 sm:border-none rounded-xl focus:ring-2 focus:ring-black transition-all cursor-pointer text-sm" value={createAseId} onChange={e => { setCreateAseId(e.target.value); setCreateData({...createData, distributorId: ''}); }}>
+                        <option value="">All ASEs...</option>
+                        {allUsers.filter(u => u.role === 'ase' && u.active).map(u => <option key={u.uid} value={u.uid}>{u.name} {u.region ? `(${u.region})` : ''}</option>)}
+                      </select>
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-400">Select Distributor *</label>
+                    <select required className="w-full mt-1 px-3 sm:px-4 py-2.5 sm:py-3 bg-zinc-50 border border-zinc-200 sm:border-none rounded-xl focus:ring-2 focus:ring-black transition-all cursor-pointer text-sm" value={createData.distributorId} onChange={e => setCreateData({...createData, distributorId: e.target.value})}>
+                      <option value="">Choose a distributor...</option>
+                      {distributors.filter(d => d.active && !forceScheduleBlockedIds.has(d.id) && (!createAseId || (d.aseIds && d.aseIds.includes(createAseId)))).map(d => <option key={d.id} value={d.id}>{d.name} ({d.code})</option>)}
+                    </select>
+                  </div>
+                  
+                  <div>
+                    <label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-400">Start Date</label>
+                    <input required type="date" min={new Date().toISOString().split('T')[0]} className="w-full mt-1 px-3 sm:px-4 py-2.5 sm:py-3 bg-zinc-50 border border-zinc-200 sm:border-none rounded-xl focus:ring-2 focus:ring-black transition-all cursor-pointer text-sm" value={createData.proposedDate} onChange={e => setCreateData({...createData, proposedDate: e.target.value})} />
+                  </div>
+                </div>
+
+                <div className="p-5 sm:p-6 border-t border-zinc-100 shrink-0">
+                  <button type="submit" className="w-full py-3 sm:py-4 bg-black text-white rounded-xl sm:rounded-2xl font-bold hover:bg-zinc-800 transition-all shadow-md sm:shadow-xl sm:shadow-black/10 active:scale-95 text-sm sm:text-base">Schedule Audit</button>
+                </div>
+              </form>
+
             </motion.div>
           </div>
         )}
