@@ -81,18 +81,73 @@ export function DashboardModule() {
   // --- RECENT TICKETS FOR TABLE ---
   const recentTickets = useMemo(() => {
     return [...tickets]
-      .filter(t => t.status !== 'tentative') // Hide raw negotiations from dashboard view
+      .filter(t => t.status !== 'tentative') 
       .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
       .slice(0, 6);
   }, [tickets]);
 
+  // --- SKELETON UI LOADING STATE ---
   if (isLoading) {
     return (
-      <div className="space-y-6">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6 animate-pulse">
-          {[1, 2, 3, 4].map(i => <div key={i} className="bg-slate-200 h-32 rounded-[2rem]"></div>)}
+      <div className="space-y-6 sm:space-y-8 pb-12 w-full min-w-0 animate-[pulse_1.2s_ease-in-out_infinite]">
+        {/* Header Skeleton */}
+        <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
+          <div>
+            <div className="h-8 w-48 bg-slate-200 rounded-lg mb-2"></div>
+            <div className="h-4 w-64 bg-slate-200 rounded-md"></div>
+          </div>
+          <div className="h-10 w-40 bg-slate-200 rounded-2xl"></div>
         </div>
-        <div className="bg-slate-200 h-96 rounded-[2rem] animate-pulse mt-8"></div>
+
+        {/* Metric Cards Skeleton */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6 w-full">
+          {[...Array(4)].map((_, i) => (
+            <div key={i} className="bg-white p-6 rounded-[2rem] border border-slate-200 shadow-sm h-[170px] flex flex-col justify-between">
+              <div className="w-12 h-12 bg-slate-200 rounded-2xl"></div>
+              <div>
+                <div className="h-3 w-24 bg-slate-100 rounded mb-3"></div>
+                <div className="h-8 w-16 bg-slate-200 rounded-lg"></div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Recent Activity Table Skeleton */}
+        <div className="bg-white rounded-[2rem] border border-slate-200 shadow-sm overflow-hidden w-full">
+          <div className="p-6 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
+            <div className="h-6 w-48 bg-slate-200 rounded-lg"></div>
+            <div className="h-4 w-20 bg-slate-200 rounded-md"></div>
+          </div>
+          
+          <div className="w-full">
+            <div className="px-6 py-4 border-b border-slate-100 flex justify-between gap-4">
+               <div className="h-4 w-1/4 bg-slate-200 rounded opacity-70"></div>
+               <div className="h-4 w-1/4 bg-slate-200 rounded opacity-70 hidden sm:block"></div>
+               <div className="h-4 w-1/4 bg-slate-200 rounded opacity-70 hidden md:block"></div>
+               <div className="h-4 w-24 bg-slate-200 rounded opacity-70 ml-auto"></div>
+            </div>
+            <div className="divide-y divide-slate-50">
+              {[...Array(5)].map((_, i) => (
+                <div key={i} className="p-4 sm:p-6 flex items-center justify-between">
+                  <div className="flex items-center gap-4 w-1/3">
+                    <div className="w-10 h-10 rounded-[12px] bg-slate-200 shrink-0"></div>
+                    <div className="w-full">
+                      <div className="h-4 w-3/4 bg-slate-200 rounded mb-1.5"></div>
+                      <div className="h-3 w-1/2 bg-slate-100 rounded"></div>
+                    </div>
+                  </div>
+                  <div className="w-1/4 hidden sm:block">
+                    <div className="h-4 w-24 bg-slate-200 rounded"></div>
+                  </div>
+                  <div className="w-1/5 hidden md:block">
+                    <div className="h-4 w-20 bg-slate-200 rounded"></div>
+                  </div>
+                  <div className="h-6 w-24 bg-slate-200 rounded-md shrink-0 ml-auto"></div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
       </div>
     );
   }
@@ -102,20 +157,20 @@ export function DashboardModule() {
       
       {/* HEADER SECTION */}
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
-        <div>
+        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3 }}>
           <h2 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">Overview</h2>
           <p className="text-sm font-medium text-slate-500 mt-1">Here is what's happening with your audits today.</p>
-        </div>
-        <div className="flex items-center gap-2 bg-white px-4 py-2 rounded-2xl border border-slate-200 shadow-sm w-fit">
+        </motion.div>
+        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3 }} className="flex items-center gap-2 bg-white px-4 py-2 rounded-2xl border border-slate-200 shadow-sm w-fit">
           <CalendarDays size={16} className="text-indigo-600" />
           <span className="text-xs font-bold text-slate-700">{new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}</span>
-        </div>
+        </motion.div>
       </div>
 
       {/* METRIC CARDS */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6 w-full">
         
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }} className="bg-white p-6 rounded-[2rem] border border-slate-200 shadow-sm hover:shadow-md transition-shadow relative overflow-hidden group">
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05, duration: 0.4 }} className="bg-white p-6 rounded-[2rem] border border-slate-200 shadow-sm hover:shadow-md transition-shadow relative overflow-hidden group">
           <div className="absolute top-0 right-0 p-6 opacity-20 group-hover:opacity-100 transition-opacity">
             <Activity size={48} className="text-indigo-500 translate-x-4 -translate-y-4" />
           </div>
@@ -129,7 +184,7 @@ export function DashboardModule() {
           </div>
         </motion.div>
 
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className="bg-white p-6 rounded-[2rem] border border-slate-200 shadow-sm hover:shadow-md transition-shadow relative overflow-hidden group">
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1, duration: 0.4 }} className="bg-white p-6 rounded-[2rem] border border-slate-200 shadow-sm hover:shadow-md transition-shadow relative overflow-hidden group">
           <div className="absolute top-0 right-0 p-6 opacity-20 group-hover:opacity-100 transition-opacity">
             <AlertCircle size={48} className="text-amber-500 translate-x-4 -translate-y-4" />
           </div>
@@ -143,7 +198,7 @@ export function DashboardModule() {
           </div>
         </motion.div>
 
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }} className="bg-white p-6 rounded-[2rem] border border-slate-200 shadow-sm hover:shadow-md transition-shadow relative overflow-hidden group">
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15, duration: 0.4 }} className="bg-white p-6 rounded-[2rem] border border-slate-200 shadow-sm hover:shadow-md transition-shadow relative overflow-hidden group">
           <div className="absolute top-0 right-0 p-6 opacity-20 group-hover:opacity-100 transition-opacity">
             <CheckCircle2 size={48} className="text-emerald-500 translate-x-4 -translate-y-4" />
           </div>
@@ -156,7 +211,7 @@ export function DashboardModule() {
           </div>
         </motion.div>
 
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4 }} className="bg-white p-6 rounded-[2rem] border border-slate-200 shadow-sm hover:shadow-md transition-shadow relative overflow-hidden group">
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2, duration: 0.4 }} className="bg-white p-6 rounded-[2rem] border border-slate-200 shadow-sm hover:shadow-md transition-shadow relative overflow-hidden group">
           <div className="absolute top-0 right-0 p-6 opacity-10 group-hover:opacity-40 transition-opacity">
             <TrendingUp size={64} className="text-cyan-500 translate-x-2 -translate-y-2" />
           </div>
@@ -174,7 +229,7 @@ export function DashboardModule() {
       </div>
 
       {/* RECENT ACTIVITY TABLE */}
-      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.5 }} className="bg-white rounded-[2rem] border border-slate-200 shadow-sm overflow-hidden w-full">
+      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.25, duration: 0.4 }} className="bg-white rounded-[2rem] border border-slate-200 shadow-sm overflow-hidden w-full">
         <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
           <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2"><LayoutDashboard size={20} className="text-indigo-600"/> Recent Executions</h3>
           <button className="text-xs font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-1 transition-colors group">
