@@ -14,7 +14,7 @@ import { motion } from 'motion/react';
 const BATCH_SIZE = 2000; 
 
 export function MastersModule() {
-  const { profile, user } = useAuth(); // Brought in 'user' for the activity log
+  const { profile, user } = useAuth(); 
   
   const [isUploadingItem, setIsUploadingItem] = useState(false);
   const [itemProgress, setItemProgress] = useState({ current: 0, total: 0 });
@@ -65,7 +65,7 @@ export function MastersModule() {
 
         const headers = lines[0].split(',').map(h => h.trim().replace(/['"\r]/g, ''));
         
-        const items = lines.slice(1).map(line => {
+        const rawItems = lines.slice(1).map(line => {
           const cols = line.split(',');
           
           const itemCode = getColValue(headers, cols, ['ItemCode', 'MaterialNo']);
@@ -88,7 +88,19 @@ export function MastersModule() {
           };
         }).filter(Boolean);
 
-        if (items.length === 0) throw new Error("No valid data found in CSV.");
+        if (rawItems.length === 0) throw new Error("No valid data found in CSV.");
+
+        // --- 🔥 DEDUPLICATION FIX 🔥 ---
+        // Automatically removes duplicate ItemCodes before sending to Supabase
+        const uniqueDataMap = new Map();
+        rawItems.forEach((item: any) => {
+          uniqueDataMap.set(item.itemCode, item);
+        });
+        
+        const items = Array.from(uniqueDataMap.values());
+        const duplicatesRemoved = rawItems.length - items.length;
+        // ---------------------------------
+
         setItemProgress({ current: 0, total: items.length });
 
         let processed = 0;
@@ -102,7 +114,7 @@ export function MastersModule() {
         // --- ACTIVITY LOG TRIGGER ---
         logActivity(user, profile, "Master Data Uploaded", `Uploaded/Updated ${items.length} items in the Item Master.`);
         
-        alert(`Success! ${items.length} items uploaded to the Master.`);
+        alert(`Success! ${items.length} items uploaded to the Master.\n${duplicatesRemoved > 0 ? `(Skipped ${duplicatesRemoved} duplicate entries found in your file)` : ''}`);
       } catch (error: any) { alert(`Upload failed: ${error.message || 'Invalid CSV format'}`); } 
       finally { setIsUploadingItem(false); setItemProgress({ current: 0, total: 0 }); if (itemFileRef.current) itemFileRef.current.value = ''; }
     };
