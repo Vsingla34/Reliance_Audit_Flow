@@ -50,6 +50,7 @@ export function ExecutionModule() {
 
   // --- STRICT GLOBAL ROLE FLAGS ---
   const isSuperAdmin = profile?.role === 'superadmin';
+  const isAdminOrSuperadmin = ['superadmin', 'admin'].includes(profile?.role || '');
   const isAuditor = profile?.role === 'auditor';
   const isASE = profile?.role === 'ase';
 
@@ -179,7 +180,7 @@ export function ExecutionModule() {
       setActiveTicket({ ...activeTicket, status: newStatus as any });
       
       const dist = distMap[activeTicket.distributorId];
-      logActivity(user, profile, "Status Overridden", `Super Admin manually changed status to ${newStatus.replace('_', ' ')} for ${dist?.name}`);
+      logActivity(user, profile, "Status Overridden", `Admin manually changed status to ${newStatus.replace('_', ' ')} for ${dist?.name}`);
     } catch (error) {
       console.error("Failed to force update status:", error);
     }
@@ -196,7 +197,7 @@ export function ExecutionModule() {
       }).eq('id', activeTicket.id);
       
       const dist = distMap[activeTicket.distributorId];
-      logActivity(user, profile, "Audit Reset", `Super Admin reset the audit for ${dist?.name} back to Scheduler`);
+      logActivity(user, profile, "Audit Reset", `Admin reset the audit for ${dist?.name} back to Scheduler`);
 
       setTickets(prev => prev.filter(t => t.id !== activeTicket.id)); setActiveTicket(null);
       alert("Ticket cleared successfully! It is now back in the Scheduler page.");
@@ -213,7 +214,7 @@ export function ExecutionModule() {
       setActiveTicket({ ...activeTicket, signOffs: newSignOffs });
       
       const dist = distMap[activeTicket.distributorId];
-      logActivity(user, profile, "WhatsApp Media Confirmed", `Super Admin marked WhatsApp audit evidence as ${newStatus ? 'Approved' : 'Pending'} for ${dist?.name}`);
+      logActivity(user, profile, "WhatsApp Media Confirmed", `Admin marked WhatsApp audit evidence as ${newStatus ? 'Approved' : 'Pending'} for ${dist?.name}`);
     } catch (error) { console.error("Failed to update WhatsApp approval:", error); }
   };
 
@@ -227,7 +228,7 @@ export function ExecutionModule() {
       setActiveTicket({ ...activeTicket, signOffs: newSignOffs });
       
       const dist = distMap[activeTicket.distributorId];
-      logActivity(user, profile, "Drainage Media Confirmed", `Super Admin marked Drainage evidence as ${newStatus ? 'Approved' : 'Pending'} for ${dist?.name}`);
+      logActivity(user, profile, "Drainage Media Confirmed", `Admin marked Drainage evidence as ${newStatus ? 'Approved' : 'Pending'} for ${dist?.name}`);
     } catch (error) { console.error("Failed to update Drainage Media approval:", error); }
   };
 
@@ -261,7 +262,7 @@ export function ExecutionModule() {
       setActiveTicket({ ...activeTicket, signOffs: newSignOffs });
       
       const dist = distMap[activeTicket.distributorId];
-      logActivity(user, profile, "Sign-off Document Confirmed", `Super Admin marked physical sign-off sheet as ${newStatus ? 'Approved' : 'Pending'} for ${dist?.name}`);
+      logActivity(user, profile, "Sign-off Document Confirmed", `Admin marked physical sign-off sheet as ${newStatus ? 'Approved' : 'Pending'} for ${dist?.name}`);
     } catch (error) { console.error("Failed to update Sign-off approval:", error); }
   };
 
@@ -276,7 +277,7 @@ export function ExecutionModule() {
     }
 
     try {
-      const rejectionMessage = `🚨 Sign-off Document Rejected by Super Admin: ${reason}`;
+      const rejectionMessage = `🚨 Sign-off Document Rejected by Admin: ${reason}`;
       const newComment = {
         id: Math.random().toString(36).substring(7),
         userId: user.id,
@@ -304,7 +305,7 @@ export function ExecutionModule() {
       });
       
       const dist = distMap[activeTicket.distributorId];
-      logActivity(user, profile, "Sign-off Rejected", `Super Admin rejected physical sign-off sheet for ${dist?.name}. Reason: "${reason}"`);
+      logActivity(user, profile, "Sign-off Rejected", `Admin rejected physical sign-off sheet for ${dist?.name}. Reason: "${reason}"`);
       notifyLinkedUsers(activeTicket.distributorId, "Sign-off Rejected", `The Sign-off Document for ${dist?.name} was rejected. Reason: "${reason}". Please upload a new copy.`);
       
       alert("Document rejected successfully. The reason has been posted to the discussion board.");
@@ -343,7 +344,7 @@ export function ExecutionModule() {
        } else { updatedItem.productLife = '-'; }
     }
     
-    if (field === 'mfgDate' && value && activeTicket?.scheduledDate && !isSuperAdmin) {
+    if (field === 'mfgDate' && value && activeTicket?.scheduledDate && !isAdminOrSuperadmin) {
         const mfgDateObj = new Date(value);
         const auditDateObj = new Date(activeTicket.scheduledDate);
         mfgDateObj.setHours(0,0,0,0);
@@ -363,7 +364,7 @@ export function ExecutionModule() {
         auditDateObj.setHours(0,0,0,0);
         
         if (expDateObj > auditDateObj) {
-            if (isSuperAdmin) {
+            if (isAdminOrSuperadmin) {
               updatedItem.bbdApprovalStatus = 'approved';
             } else if (oldItem.bbdApprovalStatus !== 'pending' && oldItem.bbdApprovalStatus !== 'approved') {
               const confirmMsg = `WARNING: You selected a date (${currentExp}) that is BEYOND the scheduled audit date.\n\nFuture dates cannot be recorded without Admin Approval.\n\nDo you want to request special Admin Approval to allow this exception? Click OK to request, or Cancel to revert.`;
@@ -462,7 +463,7 @@ export function ExecutionModule() {
     try {
       await supabase.from('auditLineItems').update({ bbdApprovalStatus: 'approved' }).eq('id', item.id);
       setItems(prev => prev.map(i => i.id === item.id ? { ...i, bbdApprovalStatus: 'approved' } : i));
-      logActivity(user, profile, "Future Expiry Approved", `Super Admin approved an exception for a future-dated expiry item: ${item.articleNumber}`);
+      logActivity(user, profile, "Future Expiry Approved", `Admin approved an exception for a future-dated expiry item: ${item.articleNumber}`);
     } catch (e) { console.error(e); }
   };
 
@@ -480,7 +481,7 @@ export function ExecutionModule() {
       }).eq('id', item.id);
       
       setItems(prev => prev.map(i => i.id === item.id ? { ...i, qtyBBD: 0, quantity: newTotalQty, totalValue: newTotalValue, bbdApprovalStatus: 'rejected' } : i));
-      logActivity(user, profile, "Future Expiry Rejected", `Super Admin rejected exception for future expiry date on ${item.articleNumber}. BBD quantity reset to 0.`);
+      logActivity(user, profile, "Future Expiry Rejected", `Admin rejected exception for future expiry date on ${item.articleNumber}. BBD quantity reset to 0.`);
     } catch (e) { console.error(e); }
   };
 
@@ -518,12 +519,12 @@ export function ExecutionModule() {
     
     const hasPendingItems = items.some(i => i.bbdApprovalStatus === 'pending');
     if (hasPendingItems) {
-       alert("You have items marked as Expired that have future expiry dates. A Super Admin must approve these exceptions before you can submit the audit.");
+       alert("You have items marked as Expired that have future expiry dates. An Admin must approve these exceptions before you can submit the audit.");
        return;
     }
 
     if (!activeTicket.signOffs?.whatsappMediaApproved || !activeTicket.signOffs?.signoffDocumentApproved) {
-       alert("WhatsApp Evidence and Physical Sign-off must be approved by a Super Admin before submitting.");
+       alert("WhatsApp Evidence and Physical Sign-off must be approved by an Admin before submitting.");
        return;
     }
 
@@ -593,8 +594,8 @@ export function ExecutionModule() {
   const signOff = async (roleRequired: 'auditor' | 'ase' | 'distributor') => {
     if (!activeTicket || !user || !profile) return;
     
-    if (profile.role !== roleRequired && !isSuperAdmin) { 
-      alert(`Action Denied: Must be an ${roleRequired.toUpperCase()} or Super Admin to sign.`); 
+    if (profile.role !== roleRequired && !isAdminOrSuperadmin) { 
+      alert(`Action Denied: Must be an ${roleRequired.toUpperCase()} or Admin to sign.`); 
       return; 
     }
     
@@ -661,14 +662,14 @@ export function ExecutionModule() {
 
         {/* --- DYNAMIC HEADER WITH ADMIN FORCE STATUS DROPDOWN --- */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 w-full">
-          <button onClick={() => setActiveTicket(null)} className="flex items-center gap-2 text-sm font-bold text-zinc-500 hover:text-black transition-colors w-fit">
+          <button onClick={() => setActiveTicket(null)} className="flex items-center gap-2 text-sm font-bold text-slate-500 hover:text-black transition-colors w-fit">
             <ArrowLeft size={16} /> Back to List
           </button>
           
           <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-            {isSuperAdmin && (
-              <div className="flex items-center gap-2 bg-white border border-zinc-200 px-3 py-2 rounded-xl shadow-sm w-full sm:w-auto">
-                <span className="text-[10px] sm:text-xs font-bold text-zinc-500 uppercase tracking-wider hidden md:inline">Force Status:</span>
+            {isAdminOrSuperadmin && (
+              <div className="flex items-center gap-2 bg-white border border-slate-200 px-3 py-2 rounded-xl shadow-sm w-full sm:w-auto">
+                <span className="text-[10px] sm:text-xs font-bold text-slate-500 uppercase tracking-wider hidden md:inline">Force Status:</span>
                 <select
                   className="text-xs sm:text-sm font-bold bg-transparent outline-none cursor-pointer text-black w-full disabled:opacity-50"
                   value={activeTicket.status}
@@ -686,34 +687,34 @@ export function ExecutionModule() {
             )}
 
             <div className="flex w-full sm:w-auto gap-2 sm:gap-3">
-              {isSuperAdmin && !isClosedPhase && (
-                <button onClick={resetAuditTicket} className="flex-1 sm:flex-none flex justify-center items-center gap-2 px-3 sm:px-4 py-2 bg-red-50 text-red-600 rounded-xl text-xs sm:text-sm font-bold hover:bg-red-100 transition-all border border-red-100"><RotateCcw size={16} /> <span className="hidden sm:inline">Reset</span></button>
+              {isAdminOrSuperadmin && !isClosedPhase && (
+                <button onClick={resetAuditTicket} className="flex-1 sm:flex-none flex justify-center items-center gap-2 px-3 sm:px-4 py-2 bg-rose-50 text-rose-600 rounded-xl text-xs sm:text-sm font-bold hover:bg-rose-100 transition-all border border-rose-100"><RotateCcw size={16} /> <span className="hidden sm:inline">Reset</span></button>
               )}
-              <button onClick={() => setIsChatOpen(true)} className="flex-1 sm:flex-none flex justify-center items-center gap-2 px-3 sm:px-4 py-2 bg-blue-50 text-blue-600 rounded-xl text-xs sm:text-sm font-bold hover:bg-blue-100 transition-all border border-blue-100"><MessageSquare size={16} /> Discussion {activeTicket.comments?.length ? `(${activeTicket.comments.length})` : ''}</button>
+              <button onClick={() => setIsChatOpen(true)} className="flex-1 sm:flex-none flex justify-center items-center gap-2 px-3 sm:px-4 py-2 bg-indigo-50 text-indigo-600 rounded-xl text-xs sm:text-sm font-bold hover:bg-indigo-100 transition-all border border-indigo-100"><MessageSquare size={16} /> Discussion {activeTicket.comments?.length ? `(${activeTicket.comments.length})` : ''}</button>
             </div>
           </div>
         </div>
 
         {/* --- MAIN DISTRIBUTOR & BUDGET CARD --- */}
-        <div className="bg-white rounded-[1.5rem] sm:rounded-[2.5rem] p-5 sm:p-8 border border-zinc-200 shadow-sm w-full">
+        <div className="bg-white rounded-[1.5rem] sm:rounded-[2.5rem] p-5 sm:p-8 border border-slate-200 shadow-sm w-full">
           <div className="flex flex-col md:flex-row md:items-start justify-between gap-6 mb-6 sm:mb-8 w-full">
             <div className="flex items-center gap-3 sm:gap-4">
-              <div className="w-12 h-12 sm:w-16 sm:h-16 bg-zinc-100 rounded-xl sm:rounded-2xl flex items-center justify-center shrink-0"><Store className="text-black" size={24} /></div>
+              <div className="w-12 h-12 sm:w-16 sm:h-16 bg-slate-100 rounded-xl sm:rounded-2xl flex items-center justify-center shrink-0"><Store className="text-black" size={24} /></div>
               <div>
                 <h3 className="text-xl sm:text-2xl font-bold tracking-tight">{dist?.name || 'Unknown Distributor'}</h3>
-                <div className="flex items-center gap-2 mt-1 text-xs sm:text-sm text-zinc-500 flex-wrap"><span className="font-mono bg-zinc-100 px-2 py-0.5 rounded">{dist?.code}</span><MapPin size={14} /> {dist?.city || 'No city'}, {dist?.state}</div>
+                <div className="flex items-center gap-2 mt-1 text-xs sm:text-sm text-slate-500 flex-wrap"><span className="font-mono bg-slate-100 px-2 py-0.5 rounded-md text-slate-700">{dist?.code}</span><MapPin size={14} /> {dist?.city || 'No city'}, {dist?.state}</div>
               </div>
             </div>
             
-            <div className="flex flex-col items-start md:items-end gap-2 w-full md:w-auto bg-zinc-50 md:bg-transparent p-4 md:p-0 rounded-2xl md:rounded-none border md:border-none border-zinc-100">
+            <div className="flex flex-col items-start md:items-end gap-2 w-full md:w-auto bg-slate-50 md:bg-transparent p-4 md:p-0 rounded-2xl md:rounded-none border md:border-none border-slate-100">
               <div className="text-left md:text-right w-full">
-                <p className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-400 mb-1">Total Verified Value</p>
+                <p className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-slate-400 mb-1">Total Verified Value</p>
                 <p className="text-2xl sm:text-3xl font-black text-emerald-600">₹{(activeTicket.verifiedTotal || 0).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</p>
               </div>
-              <div className="w-full max-w-full md:max-w-[200px] h-2 bg-zinc-200 md:bg-zinc-100 rounded-full overflow-hidden mt-1">
-                <div className={cn("h-full rounded-full transition-all", percentUsed > 100 ? "bg-red-500" : percentUsed > 90 ? "bg-amber-500" : "bg-emerald-500")} style={{ width: `${Math.min(percentUsed, 100)}%` }} />
+              <div className="w-full max-w-full md:max-w-[200px] h-2 bg-slate-200 md:bg-slate-100 rounded-full overflow-hidden mt-1">
+                <div className={cn("h-full rounded-full transition-all", percentUsed > 100 ? "bg-rose-500" : percentUsed > 90 ? "bg-amber-500" : "bg-emerald-500")} style={{ width: `${Math.min(percentUsed, 100)}%` }} />
               </div>
-              <p className="text-[10px] sm:text-xs text-zinc-500">of ₹{activeTicket.approvedValue.toLocaleString()} limit</p>
+              <p className="text-[10px] sm:text-xs text-slate-500 font-medium">of ₹{activeTicket.approvedValue.toLocaleString()} limit</p>
             </div>
           </div>
 
@@ -728,11 +729,11 @@ export function ExecutionModule() {
           )}
 
           {isActionableDate && canUploadFiles && !hasApprovedCheckIn && !isClosedPhase && (
-            <div className="mb-6 sm:mb-8 p-4 sm:p-5 bg-blue-50 border border-blue-100 rounded-xl sm:rounded-2xl flex items-start gap-3 sm:gap-4">
-              <Lock className="text-blue-500 shrink-0 mt-0.5" size={20} />
+            <div className="mb-6 sm:mb-8 p-4 sm:p-5 bg-indigo-50 border border-indigo-100 rounded-xl sm:rounded-2xl flex items-start gap-3 sm:gap-4">
+              <Lock className="text-indigo-500 shrink-0 mt-0.5" size={20} />
               <div>
-                <h4 className="font-bold text-blue-900 text-sm sm:text-base">Awaiting Selfie Approval</h4>
-                <p className="text-xs sm:text-sm text-blue-800 mt-1">Your check-in selfie must be <strong>approved by a Super Admin</strong> before you can begin counting line items.</p>
+                <h4 className="font-bold text-indigo-900 text-sm sm:text-base">Awaiting Selfie Approval</h4>
+                <p className="text-xs sm:text-sm text-indigo-800 mt-1">Your check-in selfie must be <strong>approved by an Admin</strong> before you can begin counting line items.</p>
               </div>
             </div>
           )}
@@ -748,21 +749,21 @@ export function ExecutionModule() {
           )}
 
           {isMaxedOut && !isClosedPhase && (
-            <div className="mb-6 sm:mb-8 p-4 sm:p-5 bg-red-50 border border-red-100 rounded-xl sm:rounded-2xl flex items-start gap-3 sm:gap-4">
-              <Lock className="text-red-500 shrink-0 mt-0.5" size={20} />
+            <div className="mb-6 sm:mb-8 p-4 sm:p-5 bg-rose-50 border border-rose-100 rounded-xl sm:rounded-2xl flex items-start gap-3 sm:gap-4">
+              <Lock className="text-rose-500 shrink-0 mt-0.5" size={20} />
               <div>
-                <h4 className="font-bold text-red-900 text-sm sm:text-base">Maximum Limit Reached</h4>
-                <p className="text-xs sm:text-sm text-red-800 mt-1">The verified total has reached the hard limit of <strong>₹{activeTicket.maxAllowedValue.toLocaleString()}</strong> (Approved + 5%). You cannot add any more items to this audit.</p>
+                <h4 className="font-bold text-rose-900 text-sm sm:text-base">Maximum Limit Reached</h4>
+                <p className="text-xs sm:text-sm text-rose-800 mt-1">The verified total has reached the hard limit of <strong>₹{activeTicket.maxAllowedValue.toLocaleString()}</strong> (Approved + 5%). You cannot add any more items to this audit.</p>
               </div>
             </div>
           )}
 
           {activeTicket.status === 'auditor_submitted' && !isClosedPhase && (
-            <div className="mb-6 sm:mb-8 p-4 sm:p-5 bg-blue-50 border border-blue-100 rounded-xl sm:rounded-2xl flex items-start gap-3 sm:gap-4">
-              <AlertCircle className="text-blue-600 shrink-0 mt-0.5" size={20} />
+            <div className="mb-6 sm:mb-8 p-4 sm:p-5 bg-indigo-50 border border-indigo-100 rounded-xl sm:rounded-2xl flex items-start gap-3 sm:gap-4">
+              <AlertCircle className="text-indigo-600 shrink-0 mt-0.5" size={20} />
               <div>
-                <h4 className="font-bold text-blue-900 text-sm sm:text-base">Awaiting ASE Review</h4>
-                <p className="text-xs sm:text-sm text-blue-800 mt-1">The Auditor has completed their count. This audit is currently locked waiting for the ASE to review the counts.</p>
+                <h4 className="font-bold text-indigo-900 text-sm sm:text-base">Awaiting ASE Review</h4>
+                <p className="text-xs sm:text-sm text-indigo-800 mt-1">The Auditor has completed their count. This audit is currently locked waiting for the ASE to review the counts.</p>
               </div>
             </div>
           )}
@@ -779,30 +780,30 @@ export function ExecutionModule() {
 
           {/* --- 🔥 STRICT DRAINAGE LOCK WARNING BANNER 🔥 --- */}
           {activeTicket.status === 'drainage_pending' && !isClosedPhase && (
-            <div className="mb-6 sm:mb-8 p-4 sm:p-5 bg-teal-50 border border-teal-100 rounded-xl sm:rounded-2xl flex items-start gap-3 sm:gap-4">
-              <CalendarClock className="text-teal-500 shrink-0 mt-0.5" size={20} />
+            <div className="mb-6 sm:mb-8 p-4 sm:p-5 bg-cyan-50 border border-cyan-100 rounded-xl sm:rounded-2xl flex items-start gap-3 sm:gap-4">
+              <CalendarClock className="text-cyan-500 shrink-0 mt-0.5" size={20} />
               <div className="w-full">
-                <h4 className="font-bold text-teal-900 text-sm sm:text-base">Drainage Phase Active</h4>
-                {isSuperAdmin ? (
+                <h4 className="font-bold text-cyan-900 text-sm sm:text-base">Drainage Phase Active</h4>
+                {isAdminOrSuperadmin ? (
                   <>
-                    <p className="text-xs sm:text-sm text-teal-800 mt-1 mb-3 sm:mb-4">
+                    <p className="text-xs sm:text-sm text-cyan-800 mt-1 mb-3 sm:mb-4">
                       Original counts are frozen. The <strong>Drained Qty</strong> column is unlocked. Confirm the scheduled drainage date below to finalize.
                     </p>
                     <div className="flex flex-col sm:flex-row gap-2 sm:gap-3 max-w-sm">
-                      <input type="date" className="w-full sm:flex-1 px-4 py-3 sm:py-2 rounded-xl border border-teal-200 outline-none focus:ring-2 focus:ring-teal-500 text-sm font-bold bg-white" value={drainageDateInput || activeTicket.signOffs?.drainageDate || ''} onChange={(e) => setDrainageDateInput(e.target.value)} />
-                      <button onClick={setDrainageDate} disabled={!drainageDateInput} className="w-full sm:w-auto px-6 py-3 sm:py-2 bg-teal-600 text-white font-bold rounded-xl hover:bg-teal-700 transition-colors disabled:opacity-50">Save Date</button>
+                      <input type="date" className="w-full sm:flex-1 px-4 py-3 sm:py-2 rounded-xl border border-cyan-200 outline-none focus:ring-2 focus:ring-cyan-500 text-sm font-bold bg-white shadow-sm" value={drainageDateInput || activeTicket.signOffs?.drainageDate || ''} onChange={(e) => setDrainageDateInput(e.target.value)} />
+                      <button onClick={setDrainageDate} disabled={!drainageDateInput} className="w-full sm:w-auto px-6 py-3 sm:py-2 bg-cyan-600 text-white font-bold rounded-xl hover:bg-cyan-700 transition-colors disabled:opacity-50 shadow-sm">Save Date</button>
                     </div>
                     {!isDrainageToday && activeTicket.signOffs?.drainageDate && (
-                      <p className="mt-3 text-[11px] sm:text-xs font-bold text-red-600 flex items-center gap-1.5"><AlertCircle size={14} /> Inputs are currently locked. The Drainage Date must be set to today ({todayStr}) to edit quantities.</p>
+                      <p className="mt-3 text-[11px] sm:text-xs font-bold text-rose-600 flex items-center gap-1.5"><AlertCircle size={14} /> Inputs are currently locked. The Drainage Date must be set to today ({todayStr}) to edit quantities.</p>
                     )}
                   </>
                 ) : (
                   <>
-                    <p className="text-xs sm:text-sm text-teal-800 mt-1 mb-3 sm:mb-4">
-                       Original counts are frozen. <strong>Drainage Date: {activeTicket.signOffs?.drainageDate || 'Pending Super Admin to schedule'}</strong>
+                    <p className="text-xs sm:text-sm text-cyan-800 mt-1 mb-3 sm:mb-4">
+                       Original counts are frozen. <strong>Drainage Date: {activeTicket.signOffs?.drainageDate || 'Pending Admin to schedule'}</strong>
                     </p>
                     {!isDrainageToday && activeTicket.signOffs?.drainageDate && (
-                      <p className="mt-3 text-[11px] sm:text-xs font-bold text-red-600 flex items-center gap-1.5"><AlertCircle size={14} /> Drained Qty inputs are locked because the drainage date is not today.</p>
+                      <p className="mt-3 text-[11px] sm:text-xs font-bold text-rose-600 flex items-center gap-1.5"><AlertCircle size={14} /> Drained Qty inputs are locked because the drainage date is not today.</p>
                     )}
                   </>
                 )}
@@ -810,23 +811,23 @@ export function ExecutionModule() {
             </div>
           )}
 
-          {!isSubmittedPhase && activeTicket.status !== 'auditor_submitted' && activeTicket.status !== 'drainage_pending' && (isAuditor || isSuperAdmin) && (
-            <CheckInBlock activeTicket={activeTicket} setActiveTicket={setActiveTicket} user={user} profile={profile} isSuperAdmin={isSuperAdmin} isActionableDate={isActionableDate} />
+          {!isSubmittedPhase && activeTicket.status !== 'auditor_submitted' && activeTicket.status !== 'drainage_pending' && (isAuditor || isAdminOrSuperadmin) && (
+            <CheckInBlock activeTicket={activeTicket} setActiveTicket={setActiveTicket} user={user} profile={profile} isAdminOrSuperadmin={isAdminOrSuperadmin} isActionableDate={isActionableDate} />
           )}
 
           <div className="space-y-6 sm:space-y-8 w-full min-w-0">
             <div className="w-full min-w-0">
               
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 md:gap-4 mb-4 w-full">
-                <h4 className="font-bold text-base sm:text-lg flex items-center gap-2 shrink-0"><ClipboardCheck className="text-zinc-400" size={20} /> Audit Line Items</h4>
+                <h4 className="font-bold text-base sm:text-lg flex items-center gap-2 shrink-0 text-slate-900"><ClipboardCheck className="text-indigo-600" size={20} /> Audit Line Items</h4>
                 
                 <div className="flex flex-col sm:flex-row items-center gap-3 w-full md:w-auto flex-1 md:justify-end">
                   <div className="relative w-full sm:w-64 md:w-72">
-                    <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-400" size={16} />
+                    <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
                     <input 
                       type="text" 
                       placeholder="Search article no or desc..." 
-                      className="w-full pl-9 pr-3 py-2 sm:py-2.5 bg-zinc-50 border border-zinc-200 rounded-xl text-xs sm:text-sm font-medium focus:ring-2 focus:ring-black outline-none transition-all shadow-sm"
+                      className="w-full pl-9 pr-3 py-2 sm:py-2.5 bg-white border border-slate-200 rounded-xl text-xs sm:text-sm font-medium focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all shadow-sm placeholder:text-slate-400"
                       value={itemSearchQuery}
                       onChange={(e) => setItemSearchQuery(e.target.value)}
                     />
@@ -835,7 +836,7 @@ export function ExecutionModule() {
                     <button 
                       onClick={() => setIsAddModalOpen(true)} 
                       disabled={isMaxedOut}
-                      className={cn("w-full sm:w-auto flex justify-center items-center gap-2 px-6 py-2.5 sm:py-2.5 rounded-xl text-sm font-bold transition-all shadow-md active:scale-95 whitespace-nowrap", !isMaxedOut ? "bg-black text-white hover:bg-zinc-800" : "bg-zinc-200 text-zinc-400 cursor-not-allowed")}
+                      className={cn("w-full sm:w-auto flex justify-center items-center gap-2 px-6 py-2.5 sm:py-2.5 rounded-xl text-sm font-bold transition-all shadow-md active:scale-95 whitespace-nowrap", !isMaxedOut ? "bg-slate-900 text-white hover:bg-slate-800" : "bg-slate-200 text-slate-400 cursor-not-allowed")}
                     >
                       <Plus size={18} /> Add Item
                     </button>
@@ -844,32 +845,32 @@ export function ExecutionModule() {
               </div>
               
               {/* --- RESPONSIVE TABLE WRAPPER --- */}
-              <div className="bg-white border border-zinc-200 rounded-2xl sm:rounded-3xl overflow-hidden shadow-sm w-full">
+              <div className="bg-white border border-slate-200 rounded-2xl sm:rounded-3xl overflow-hidden shadow-sm w-full">
                 <div className="w-full overflow-x-auto custom-scrollbar">
                   <table className="w-full text-xs sm:text-sm min-w-[1100px]">
-                    <thead className="bg-zinc-50 border-b border-zinc-200">
+                    <thead className="bg-slate-50 border-b border-slate-200">
                       <tr>
-                        <th className="px-4 py-3 sm:py-4 text-left font-bold text-zinc-500 sticky left-0 bg-zinc-50 z-10 border-r sm:border-r-0 border-zinc-200">Article & Desc</th>
-                        <th className="px-3 py-3 sm:py-4 text-center font-bold text-zinc-500 bg-zinc-100 border-x border-zinc-200">Sys Qty</th>
+                        <th className="px-4 py-3 sm:py-4 text-left font-bold text-slate-500 sticky left-0 bg-slate-50 z-10 border-r sm:border-r-0 border-slate-200 uppercase tracking-wider text-[11px]">Article & Desc</th>
+                        <th className="px-3 py-3 sm:py-4 text-center font-bold text-slate-500 bg-slate-100/50 border-x border-slate-200 uppercase tracking-wider text-[11px]">Sys Qty</th>
                         
-                        <th className="px-3 py-3 sm:py-4 text-center font-bold text-purple-500 bg-purple-50 border-r border-purple-100">Primary Damage</th>
-                        <th className="px-3 py-3 sm:py-4 text-center font-bold text-red-500 bg-red-50 border-r border-red-100">Non-Saleable</th>
-                        <th className="px-3 py-3 sm:py-4 text-center font-bold text-amber-500 bg-amber-50 border-r border-amber-100">BBD (Expired)</th>
+                        <th className="px-3 py-3 sm:py-4 text-center font-bold text-indigo-600 bg-indigo-50/50 border-r border-indigo-100 uppercase tracking-wider text-[11px]">Primary Damage</th>
+                        <th className="px-3 py-3 sm:py-4 text-center font-bold text-rose-600 bg-rose-50/50 border-r border-rose-100 uppercase tracking-wider text-[11px]">Non-Saleable</th>
+                        <th className="px-3 py-3 sm:py-4 text-center font-bold text-amber-600 bg-amber-50/50 border-r border-amber-100 uppercase tracking-wider text-[11px]">BBD (Expired)</th>
                         
-                        <th className="px-3 py-3 sm:py-4 text-center font-black text-zinc-900 bg-zinc-100 border-r border-zinc-200">Total Count</th>
+                        <th className="px-3 py-3 sm:py-4 text-center font-black text-slate-900 bg-slate-100/50 border-r border-slate-200 uppercase tracking-wider text-[11px]">Total Count</th>
                         
-                        <th className="px-3 py-3 sm:py-4 text-center font-bold text-blue-600 bg-blue-50 border-r border-blue-100">Mfg Date</th>
-                        <th className="px-3 py-3 sm:py-4 text-center font-bold text-blue-600 bg-blue-50 border-r border-blue-100">Exp Date</th>
-                        <th className="px-3 py-3 sm:py-4 text-center font-bold text-blue-600 bg-blue-50 border-r border-blue-100">Life</th>
+                        <th className="px-3 py-3 sm:py-4 text-center font-bold text-indigo-600 bg-indigo-50/50 border-r border-indigo-100 uppercase tracking-wider text-[11px]">Mfg Date</th>
+                        <th className="px-3 py-3 sm:py-4 text-center font-bold text-indigo-600 bg-indigo-50/50 border-r border-indigo-100 uppercase tracking-wider text-[11px]">Exp Date</th>
+                        <th className="px-3 py-3 sm:py-4 text-center font-bold text-indigo-600 bg-indigo-50/50 border-r border-indigo-100 uppercase tracking-wider text-[11px]">Life</th>
                         
-                        <th className="px-3 py-3 sm:py-4 text-center font-bold text-teal-600 bg-teal-50 border-r border-teal-100">Drained Qty</th>
+                        <th className="px-3 py-3 sm:py-4 text-center font-bold text-cyan-600 bg-cyan-50/50 border-r border-cyan-100 uppercase tracking-wider text-[11px]">Drained Qty</th>
 
-                        <th className="px-4 py-3 sm:py-4 text-right font-bold text-zinc-500">Rate</th>
-                        <th className="px-4 py-3 sm:py-4 text-right font-bold text-zinc-500">Total Value</th>
-                        {canEditItems && <th className="px-3 py-3 sm:py-4 text-center font-bold text-zinc-500">Actions</th>}
+                        <th className="px-4 py-3 sm:py-4 text-right font-bold text-slate-500 uppercase tracking-wider text-[11px]">Rate</th>
+                        <th className="px-4 py-3 sm:py-4 text-right font-bold text-slate-500 uppercase tracking-wider text-[11px]">Total Value</th>
+                        {canEditItems && <th className="px-3 py-3 sm:py-4 text-center font-bold text-slate-500 uppercase tracking-wider text-[11px]">Actions</th>}
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-zinc-100 relative">
+                    <tbody className="divide-y divide-slate-100 relative">
                       {filteredItems.map((item, index) => {
                         const dumpMatch = dumpItemMap[item.articleNumber];
                         const systemQty = dumpMatch ? dumpMatch.expectedQty : 0;
@@ -877,92 +878,92 @@ export function ExecutionModule() {
                         const isFirstInstance = filteredItems.findIndex(i => i.articleNumber === item.articleNumber) === index;
 
                         return (
-                          <tr key={item.id} className="hover:bg-zinc-50/50 transition-colors group">
-                            <td className="px-4 py-3 sm:py-4 sticky left-0 bg-white group-hover:bg-zinc-50/50 z-10 border-r sm:border-r-0 border-zinc-100">
-                              <p className="font-bold text-zinc-900">{item.articleNumber}</p>
-                              <p className="text-[9px] sm:text-[10px] text-zinc-500 truncate max-w-[120px] sm:max-w-[150px]">{item.description}</p>
+                          <tr key={item.id} className="hover:bg-slate-50/80 transition-colors group">
+                            <td className="px-4 py-3 sm:py-4 sticky left-0 bg-white group-hover:bg-slate-50/80 z-10 border-r sm:border-r-0 border-slate-100">
+                              <p className="font-bold text-slate-900">{item.articleNumber}</p>
+                              <p className="text-[9px] sm:text-[10px] text-slate-500 truncate max-w-[120px] sm:max-w-[150px] font-medium">{item.description}</p>
                             </td>
                             
-                            <td className="px-3 py-3 sm:py-4 text-center bg-zinc-50/50 border-x border-zinc-100">
+                            <td className="px-3 py-3 sm:py-4 text-center bg-slate-50/30 border-x border-slate-100">
                               {isFirstInstance ? (
-                                <span className="font-mono text-zinc-500">{systemQty}</span>
+                                <span className="font-mono text-slate-500 font-semibold">{systemQty}</span>
                               ) : (
-                                <span className="font-mono text-zinc-300 font-bold" title="Split Row">↳</span>
+                                <span className="font-mono text-slate-300 font-bold" title="Split Row">↳</span>
                               )}
                             </td>
                             
-                            <td className="px-3 py-3 sm:py-4 text-center bg-purple-50/30 border-r border-purple-100">
-                              {canEditItems ? <input type="number" min="0" value={item.qtyDamaged || ''} onChange={(e) => handleInlineChange(item.id, 'qtyDamaged', e.target.value, e)} onBlur={() => saveInlineEdit(item.id)} className="w-12 text-center bg-white border text-xs font-bold rounded px-1 py-2 sm:py-1 focus:ring-2 focus:ring-purple-500 outline-none text-purple-700 border-purple-200" placeholder="0" /> : <span className="font-bold text-purple-700">{item.qtyDamaged}</span>}
+                            <td className="px-3 py-3 sm:py-4 text-center bg-indigo-50/10 border-r border-indigo-50">
+                              {canEditItems ? <input type="number" min="0" value={item.qtyDamaged || ''} onChange={(e) => handleInlineChange(item.id, 'qtyDamaged', e.target.value, e)} onBlur={() => saveInlineEdit(item.id)} className="w-12 text-center bg-white border border-slate-200 text-xs font-bold rounded-lg px-1 py-2 sm:py-1.5 focus:ring-2 focus:ring-indigo-500 outline-none text-indigo-700 shadow-sm" placeholder="0" /> : <span className="font-bold text-indigo-700">{item.qtyDamaged}</span>}
                             </td>
 
-                            <td className="px-3 py-3 sm:py-4 text-center bg-red-50/30 border-r border-red-100">
-                              {canEditItems ? <input type="number" min="0" value={item.qtyNonSaleable || ''} onChange={(e) => handleInlineChange(item.id, 'qtyNonSaleable', e.target.value, e)} onBlur={() => saveInlineEdit(item.id)} className="w-12 text-center bg-white border text-xs font-bold rounded px-1 py-2 sm:py-1 focus:ring-2 focus:ring-red-500 outline-none text-red-700 border-red-200" placeholder="0" /> : <span className="font-bold text-red-700">{item.qtyNonSaleable}</span>}
+                            <td className="px-3 py-3 sm:py-4 text-center bg-rose-50/10 border-r border-rose-50">
+                              {canEditItems ? <input type="number" min="0" value={item.qtyNonSaleable || ''} onChange={(e) => handleInlineChange(item.id, 'qtyNonSaleable', e.target.value, e)} onBlur={() => saveInlineEdit(item.id)} className="w-12 text-center bg-white border border-slate-200 text-xs font-bold rounded-lg px-1 py-2 sm:py-1.5 focus:ring-2 focus:ring-rose-500 outline-none text-rose-700 shadow-sm" placeholder="0" /> : <span className="font-bold text-rose-700">{item.qtyNonSaleable}</span>}
                             </td>
                             
-                            <td className="px-3 py-3 sm:py-4 text-center bg-amber-50/30 border-r border-amber-100 relative align-top">
+                            <td className="px-3 py-3 sm:py-4 text-center bg-amber-50/10 border-r border-amber-50 relative align-top">
                               {canEditItems ? (
                                  <input 
                                     type="number" min="0" value={item.qtyBBD || ''} 
                                     onChange={(e) => handleInlineChange(item.id, 'qtyBBD', e.target.value, e)} 
                                     onBlur={() => saveInlineEdit(item.id)} 
-                                    className={cn("w-12 text-center bg-white border text-xs font-bold rounded px-1 py-2 sm:py-1 focus:outline-none transition-colors", item.bbdApprovalStatus === 'pending' ? "border-red-400 ring-2 ring-red-400 text-red-700" : "border-amber-200 focus:ring-2 focus:ring-amber-500 text-amber-700")} 
+                                    className={cn("w-12 text-center bg-white border text-xs font-bold rounded-lg px-1 py-2 sm:py-1.5 focus:outline-none transition-colors shadow-sm", item.bbdApprovalStatus === 'pending' ? "border-rose-400 ring-2 ring-rose-400 text-rose-700" : "border-slate-200 focus:ring-2 focus:ring-amber-500 text-amber-700")} 
                                     placeholder="0"
                                  />
                               ) : (
                                  <span className="font-bold text-amber-700">{item.qtyBBD}</span>
                               )}
                               
-                              {item.bbdApprovalStatus === 'pending' && <div className="mt-1.5 flex flex-col items-center justify-center gap-1 text-[9px] leading-tight text-red-600 font-black uppercase tracking-wider"><AlertCircle size={10}/> Pending Super Admin</div>}
-                              {item.bbdApprovalStatus === 'rejected' && <div className="mt-1.5 flex items-center justify-center gap-1 text-[9px] text-red-600 font-black uppercase tracking-wider"><X size={10}/> Rejected</div>}
+                              {item.bbdApprovalStatus === 'pending' && <div className="mt-1.5 flex flex-col items-center justify-center gap-1 text-[9px] leading-tight text-rose-600 font-black uppercase tracking-wider"><AlertCircle size={10}/> Pending Admin</div>}
+                              {item.bbdApprovalStatus === 'rejected' && <div className="mt-1.5 flex items-center justify-center gap-1 text-[9px] text-rose-600 font-black uppercase tracking-wider"><X size={10}/> Rejected</div>}
                               {item.bbdApprovalStatus === 'approved' && <div className="mt-1.5 flex items-center justify-center gap-1 text-[9px] text-emerald-600 font-black uppercase tracking-wider"><CheckCircle2 size={10}/> Approved</div>}
                               
-                              {isSuperAdmin && item.bbdApprovalStatus === 'pending' && !isClosedPhase && (
+                              {isAdminOrSuperadmin && item.bbdApprovalStatus === 'pending' && !isClosedPhase && (
                                  <div className="flex gap-1.5 justify-center mt-2.5">
-                                    <button onClick={() => approveBBDItem(item)} className="text-emerald-600 bg-white hover:bg-emerald-50 p-1.5 rounded border border-emerald-200 shadow-sm transition-colors" title="Approve Exception"><CheckCircle2 size={12}/></button>
-                                    <button onClick={() => rejectBBDItem(item)} className="text-red-600 bg-white hover:bg-red-50 p-1.5 rounded border border-red-200 shadow-sm transition-colors" title="Reject Exception"><X size={12}/></button>
+                                    <button onClick={() => approveBBDItem(item)} className="text-emerald-600 bg-white hover:bg-emerald-50 p-1.5 rounded-md border border-emerald-200 shadow-sm transition-colors" title="Approve Exception"><CheckCircle2 size={12}/></button>
+                                    <button onClick={() => rejectBBDItem(item)} className="text-rose-600 bg-white hover:bg-rose-50 p-1.5 rounded-md border border-rose-200 shadow-sm transition-colors" title="Reject Exception"><X size={12}/></button>
                                  </div>
                               )}
                             </td>
 
-                            <td className="px-3 py-3 sm:py-4 text-center bg-zinc-50 border-r border-zinc-100">
-                              <span className={cn("font-black", item.quantity !== systemQty && item.reasonCode !== 'Surprise Find' ? "text-red-600" : "text-zinc-900")}>{item.quantity}</span>
+                            <td className="px-3 py-3 sm:py-4 text-center bg-slate-50/50 border-r border-slate-100">
+                              <span className={cn("font-black", item.quantity !== systemQty && item.reasonCode !== 'Surprise Find' ? "text-rose-600" : "text-slate-900")}>{item.quantity}</span>
                             </td>
 
-                            <td className="px-3 py-3 sm:py-4 text-center bg-blue-50/30 border-r border-blue-100">
+                            <td className="px-3 py-3 sm:py-4 text-center bg-indigo-50/10 border-r border-indigo-50">
                               {canEditItems ? (
                                 <input 
                                   type="date" 
-                                  max={!isSuperAdmin ? auditDateString : undefined} 
+                                  max={!isAdminOrSuperadmin ? auditDateString : undefined} 
                                   value={item.mfgDate || ''} 
                                   onChange={(e) => handleInlineChange(item.id, 'mfgDate', e.target.value, e)} 
                                   onBlur={() => saveInlineEdit(item.id)} 
-                                  className="w-[100px] sm:w-[110px] text-center bg-white border text-[10px] font-bold rounded px-1 py-2 sm:py-1 focus:ring-2 focus:ring-blue-500 outline-none text-blue-700 border-blue-200 cursor-pointer" 
+                                  className="w-[100px] sm:w-[110px] text-center bg-white border border-slate-200 text-[10px] font-bold rounded-lg px-1 py-2 sm:py-1.5 focus:ring-2 focus:ring-indigo-500 outline-none text-indigo-700 cursor-pointer shadow-sm" 
                                 />
                               ) : (
-                                <span className="font-bold text-blue-700 text-[10px]">{item.mfgDate || '-'}</span>
+                                <span className="font-bold text-indigo-700 text-[10px]">{item.mfgDate || '-'}</span>
                               )}
                             </td>
                             
-                            <td className="px-3 py-3 sm:py-4 text-center bg-blue-50/30 border-r border-blue-100">
+                            <td className="px-3 py-3 sm:py-4 text-center bg-indigo-50/10 border-r border-indigo-50">
                               {canEditItems ? (
                                 <input 
                                   type="date" 
-                                  max={!isSuperAdmin ? auditDateString : undefined} 
+                                  max={!isAdminOrSuperadmin ? auditDateString : undefined} 
                                   value={item.expDate || ''} 
                                   onChange={(e) => handleInlineChange(item.id, 'expDate', e.target.value, e)} 
                                   onBlur={() => saveInlineEdit(item.id)} 
-                                  className="w-[100px] sm:w-[110px] text-center bg-white border text-[10px] font-bold rounded px-1 py-2 sm:py-1 focus:ring-2 focus:ring-blue-500 outline-none text-blue-700 border-blue-200 cursor-pointer" 
+                                  className="w-[100px] sm:w-[110px] text-center bg-white border border-slate-200 text-[10px] font-bold rounded-lg px-1 py-2 sm:py-1.5 focus:ring-2 focus:ring-indigo-500 outline-none text-indigo-700 cursor-pointer shadow-sm" 
                                 />
                               ) : (
-                                <span className="font-bold text-blue-700 text-[10px]">{item.expDate || '-'}</span>
+                                <span className="font-bold text-indigo-700 text-[10px]">{item.expDate || '-'}</span>
                               )}
                             </td>
                             
-                            <td className="px-3 py-3 sm:py-4 text-center bg-blue-50/30 border-r border-blue-100">
-                              <span className="font-bold text-blue-900 text-[10px] sm:text-xs whitespace-nowrap">{item.productLife || '-'}</span>
+                            <td className="px-3 py-3 sm:py-4 text-center bg-indigo-50/10 border-r border-indigo-50">
+                              <span className="font-bold text-indigo-900 text-[10px] sm:text-xs whitespace-nowrap">{item.productLife || '-'}</span>
                             </td>
 
-                            <td className="px-3 py-3 sm:py-4 text-center bg-teal-50/30 border-r border-teal-100">
+                            <td className="px-3 py-3 sm:py-4 text-center bg-cyan-50/10 border-r border-cyan-50">
                               {canEditDrainage ? (
                                 <input 
                                   type="number" 
@@ -971,21 +972,21 @@ export function ExecutionModule() {
                                   value={item.qtyDrained ?? ''} 
                                   onChange={(e) => handleDrainageChange(item.id, e.target.value)} 
                                   onBlur={() => saveInlineDrainage(item.id)} 
-                                  className="w-14 text-center bg-white border text-xs font-bold rounded px-1 py-2 focus:ring-2 focus:ring-teal-500 outline-none text-teal-800 border-teal-200 shadow-sm" 
+                                  className="w-14 text-center bg-white border border-slate-200 text-xs font-bold rounded-lg px-1 py-2 sm:py-1.5 focus:ring-2 focus:ring-cyan-500 outline-none text-cyan-800 shadow-sm" 
                                   placeholder="0"
                                 />
                               ) : (
-                                <span className="font-bold text-teal-700">{item.qtyDrained || 0}</span>
+                                <span className="font-bold text-cyan-700">{item.qtyDrained || 0}</span>
                               )}
                             </td>
 
-                            <td className="px-4 py-3 sm:py-4 text-right text-zinc-500 text-[10px] sm:text-xs">₹{item.unitValue.toFixed(2)}</td>
-                            <td className="px-4 py-3 sm:py-4 text-right font-black text-zinc-900">₹{item.totalValue.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</td>
+                            <td className="px-4 py-3 sm:py-4 text-right text-slate-500 text-[10px] sm:text-xs font-medium">₹{item.unitValue.toFixed(2)}</td>
+                            <td className="px-4 py-3 sm:py-4 text-right font-black text-slate-900">₹{item.totalValue.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</td>
 
                             {canEditItems && (
                               <td className="px-2 py-3 sm:py-4 text-center align-middle">
                                 <div className="flex items-center justify-center opacity-100 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity">
-                                  <button onClick={() => deleteItem(item)} className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg transition-colors" title="Delete Row">
+                                  <button onClick={() => deleteItem(item)} className="p-1.5 text-rose-500 hover:bg-rose-50 rounded-lg transition-colors" title="Delete Row">
                                     <Trash2 size={16} />
                                   </button>
                                 </div>
@@ -996,17 +997,17 @@ export function ExecutionModule() {
                       })}
                       {items.length === 0 && (
                         <tr>
-                          <td colSpan={canEditItems ? 13 : 12} className="px-4 py-12 text-center text-zinc-400">
-                            <PackageSearch size={32} className="mx-auto mb-3 opacity-30" />
-                            <p className="font-bold text-sm text-zinc-600">No items counted yet.</p>
+                          <td colSpan={canEditItems ? 13 : 12} className="px-4 py-16 text-center text-slate-400">
+                            <PackageSearch size={32} className="mx-auto mb-3 opacity-30 text-indigo-500" />
+                            <p className="font-bold text-sm text-slate-500">No items counted yet.</p>
                           </td>
                         </tr>
                       )}
                       {items.length > 0 && filteredItems.length === 0 && (
                         <tr>
-                          <td colSpan={canEditItems ? 13 : 12} className="px-4 py-12 text-center text-zinc-400">
-                            <Search size={32} className="mx-auto mb-3 opacity-30" />
-                            <p className="font-bold text-sm text-zinc-600">No items match your search.</p>
+                          <td colSpan={canEditItems ? 13 : 12} className="px-4 py-16 text-center text-slate-400">
+                            <Search size={32} className="mx-auto mb-3 opacity-30 text-indigo-500" />
+                            <p className="font-bold text-sm text-slate-500">No items match your search.</p>
                           </td>
                         </tr>
                       )}
@@ -1017,107 +1018,108 @@ export function ExecutionModule() {
             </div>
 
             {/* --- EVIDENCE AND SIGN OFFS --- */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6 pt-4 border-t border-zinc-100 w-full">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6 pt-4 border-t border-slate-100 w-full">
               
               <div className="space-y-3 sm:space-y-4">
-                <h4 className="font-bold text-base sm:text-lg">Verification Evidence</h4>
+                <h4 className="font-bold text-base sm:text-lg text-slate-900">Verification Evidence</h4>
                 
-                <div className="p-4 sm:p-5 bg-zinc-50 border border-zinc-200 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="p-4 sm:p-5 bg-white border border-slate-200 shadow-sm rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div className="flex items-center gap-3">
-                    <div className={cn("w-10 h-10 sm:w-12 sm:h-12 rounded-xl flex items-center justify-center shrink-0 shadow-inner", activeTicket.signOffs?.whatsappMediaApproved ? "bg-emerald-100 text-emerald-600" : "bg-zinc-200 text-zinc-500")}>
+                    <div className={cn("w-10 h-10 sm:w-12 sm:h-12 rounded-[14px] flex items-center justify-center shrink-0 border", activeTicket.signOffs?.whatsappMediaApproved ? "bg-emerald-50 text-emerald-600 border-emerald-100" : "bg-slate-50 text-slate-500 border-slate-200")}>
                       {activeTicket.signOffs?.whatsappMediaApproved ? <CheckCircle2 size={20} /> : <MessageSquare size={20} />}
                     </div>
                     <div>
-                      <h5 className="font-bold text-zinc-900 text-xs sm:text-sm">WhatsApp Evidence</h5>
-                      <p className="text-[10px] sm:text-xs text-zinc-500">Stock images & large videos</p>
+                      <h5 className="font-bold text-slate-900 text-xs sm:text-sm">WhatsApp Evidence</h5>
+                      <p className="text-[10px] sm:text-xs text-slate-500 font-medium">Stock images & large videos</p>
                     </div>
                   </div>
                   
-                  {isSuperAdmin && !isClosedPhase ? (
+                  {isAdminOrSuperadmin && !isClosedPhase ? (
                     <button
                       onClick={toggleWhatsappApproval}
-                      className={cn("w-full sm:w-auto px-4 py-2 text-xs font-bold rounded-xl transition-all active:scale-95", activeTicket.signOffs?.whatsappMediaApproved ? "bg-emerald-600 text-white shadow-lg shadow-emerald-600/20" : "bg-black text-white hover:bg-zinc-800 shadow-md")}
+                      className={cn("w-full sm:w-auto px-4 py-2 text-xs font-bold rounded-xl transition-all active:scale-95", activeTicket.signOffs?.whatsappMediaApproved ? "bg-emerald-600 text-white shadow-lg shadow-emerald-600/20" : "bg-slate-900 text-white hover:bg-slate-800 shadow-md")}
                     >
                       {activeTicket.signOffs?.whatsappMediaApproved ? 'Approved' : 'Mark Received'}
                     </button>
                   ) : (
-                    <span className={cn("w-full sm:w-auto text-center px-3 py-2 sm:py-1.5 text-[10px] sm:text-xs font-bold rounded-xl", activeTicket.signOffs?.whatsappMediaApproved ? "bg-emerald-50 border border-emerald-200 text-emerald-700" : "bg-zinc-100 text-zinc-500")}>
-                      {activeTicket.signOffs?.whatsappMediaApproved ? 'Approved by Super Admin' : 'Pending Super Admin'}
+                    <span className={cn("w-full sm:w-auto text-center px-3 py-2 sm:py-1.5 text-[10px] sm:text-xs font-bold rounded-xl", activeTicket.signOffs?.whatsappMediaApproved ? "bg-emerald-50 border border-emerald-200 text-emerald-700" : "bg-slate-100 text-slate-600")}>
+                      {activeTicket.signOffs?.whatsappMediaApproved ? 'Approved by Admin' : 'Pending Admin'}
                     </span>
                   )}
                 </div>
 
                 {/* --- DRAINAGE EVIDENCE CARD (ONLY VISIBLE POST-AUDIT) --- */}
                 {isDrainagePhase && (
-                  <div className="p-4 sm:p-5 bg-zinc-50 border border-zinc-200 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="p-4 sm:p-5 bg-white border border-slate-200 shadow-sm rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     <div className="flex items-center gap-3">
-                      <div className={cn("w-10 h-10 sm:w-12 sm:h-12 rounded-xl flex items-center justify-center shrink-0 shadow-inner", activeTicket.signOffs?.drainageMediaApproved ? "bg-emerald-100 text-emerald-600" : "bg-zinc-200 text-zinc-500")}>
+                      <div className={cn("w-10 h-10 sm:w-12 sm:h-12 rounded-[14px] flex items-center justify-center shrink-0 border", activeTicket.signOffs?.drainageMediaApproved ? "bg-emerald-50 text-emerald-600 border-emerald-100" : "bg-slate-50 text-slate-500 border-slate-200")}>
                         {activeTicket.signOffs?.drainageMediaApproved ? <CheckCircle2 size={20} /> : <Droplets size={20} />}
                       </div>
                       <div>
-                        <h5 className="font-bold text-zinc-900 text-xs sm:text-sm">Drainage Evidence</h5>
-                        <p className="text-[10px] sm:text-xs text-zinc-500">Photos/videos of destruction</p>
+                        <h5 className="font-bold text-slate-900 text-xs sm:text-sm">Drainage Evidence</h5>
+                        <p className="text-[10px] sm:text-xs text-slate-500 font-medium">Photos/videos of destruction</p>
                       </div>
                     </div>
                     
-                    {isSuperAdmin && !isClosedPhase ? (
+                    {isAdminOrSuperadmin && !isClosedPhase ? (
                       <button
                         onClick={toggleDrainageMediaApproval}
-                        className={cn("w-full sm:w-auto px-4 py-2 text-xs font-bold rounded-xl transition-all active:scale-95", activeTicket.signOffs?.drainageMediaApproved ? "bg-emerald-600 text-white shadow-lg shadow-emerald-600/20" : "bg-black text-white hover:bg-zinc-800 shadow-md")}
+                        className={cn("w-full sm:w-auto px-4 py-2 text-xs font-bold rounded-xl transition-all active:scale-95", activeTicket.signOffs?.drainageMediaApproved ? "bg-emerald-600 text-white shadow-lg shadow-emerald-600/20" : "bg-slate-900 text-white hover:bg-slate-800 shadow-md")}
                       >
                         {activeTicket.signOffs?.drainageMediaApproved ? 'Approved' : 'Mark Received'}
                       </button>
                     ) : (
-                      <span className={cn("w-full sm:w-auto text-center px-3 py-2 sm:py-1.5 text-[10px] sm:text-xs font-bold rounded-xl", activeTicket.signOffs?.drainageMediaApproved ? "bg-emerald-50 border border-emerald-200 text-emerald-700" : "bg-zinc-100 text-zinc-500")}>
-                        {activeTicket.signOffs?.drainageMediaApproved ? 'Approved by Super Admin' : 'Pending Super Admin'}
+                      <span className={cn("w-full sm:w-auto text-center px-3 py-2 sm:py-1.5 text-[10px] sm:text-xs font-bold rounded-xl", activeTicket.signOffs?.drainageMediaApproved ? "bg-emerald-50 border border-emerald-200 text-emerald-700" : "bg-slate-100 text-slate-600")}>
+                        {activeTicket.signOffs?.drainageMediaApproved ? 'Approved by Admin' : 'Pending Admin'}
                       </span>
                     )}
                   </div>
                 )}
 
-                <div className="p-4 sm:p-5 bg-zinc-50 border border-zinc-200 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="p-4 sm:p-5 bg-white border border-slate-200 shadow-sm rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div className="flex items-center gap-3">
-                    <div className={cn("w-10 h-10 sm:w-12 sm:h-12 rounded-xl flex items-center justify-center shrink-0 shadow-inner", activeTicket.signOffs?.signoffDocumentApproved ? "bg-emerald-100 text-emerald-600" : activeTicket.signOffs?.signoffDocumentUrl ? "bg-amber-100 text-amber-600" : "bg-zinc-200 text-zinc-500")}>
+                    <div className={cn("w-10 h-10 sm:w-12 sm:h-12 rounded-[14px] flex items-center justify-center shrink-0 border", activeTicket.signOffs?.signoffDocumentApproved ? "bg-emerald-50 text-emerald-600 border-emerald-100" : activeTicket.signOffs?.signoffDocumentUrl ? "bg-amber-50 text-amber-600 border-amber-100" : "bg-slate-50 text-slate-500 border-slate-200")}>
                       {activeTicket.signOffs?.signoffDocumentApproved ? <CheckCircle2 size={20} /> : <FileText size={20} />}
                     </div>
                     <div>
-                      <h5 className="font-bold text-zinc-900 text-xs sm:text-sm">Physical Sign-off</h5>
+                      <h5 className="font-bold text-slate-900 text-xs sm:text-sm">Physical Sign-off</h5>
                       {activeTicket.signOffs?.signoffDocumentUrl ? (
-                        <a href={activeTicket.signOffs.signoffDocumentUrl} target="_blank" rel="noreferrer" className="text-[10px] sm:text-xs text-blue-600 hover:underline font-bold flex items-center gap-1 mt-0.5">View Document</a>
+                        <a href={activeTicket.signOffs.signoffDocumentUrl} target="_blank" rel="noreferrer" className="text-[10px] sm:text-xs text-indigo-600 hover:underline font-bold flex items-center gap-1 mt-0.5">View Document</a>
                       ) : (
-                        <p className="text-[10px] sm:text-xs text-zinc-500">Scanned sheet</p>
+                        <p className="text-[10px] sm:text-xs text-slate-500 font-medium">Scanned sheet</p>
                       )}
                     </div>
                   </div>
                   
                   <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                    {/* Only Auditors or ASE can upload, and only if not closed and URL doesn't exist */}
                     {!activeTicket.signOffs?.signoffDocumentUrl && (isAuditor || isASE) && !isClosedPhase && (
                       <>
                         <input type="file" accept="image/*,application/pdf" capture="environment" className="hidden" ref={signoffFileRef} onChange={handleSignoffUpload} />
-                        <button onClick={() => signoffFileRef.current?.click()} disabled={isUploadingSignoff} className="w-full sm:w-auto px-4 py-2 bg-white border border-zinc-200 text-zinc-700 text-xs font-bold rounded-xl hover:bg-zinc-50 transition-all shadow-sm">
+                        <button onClick={() => signoffFileRef.current?.click()} disabled={isUploadingSignoff} className="w-full sm:w-auto px-4 py-2 bg-white border border-slate-200 text-slate-700 text-xs font-bold rounded-xl hover:bg-slate-50 transition-all shadow-sm">
                           {isUploadingSignoff ? <Loader2 className="animate-spin inline" size={14} /> : 'Upload'}
                         </button>
                       </>
                     )}
                     
-                    {activeTicket.signOffs?.signoffDocumentUrl && isSuperAdmin && !isClosedPhase ? (
+                    {activeTicket.signOffs?.signoffDocumentUrl && isAdminOrSuperadmin && !isClosedPhase ? (
                       <div className="flex items-center gap-2 w-full sm:w-auto">
                         {!activeTicket.signOffs?.signoffDocumentApproved && (
-                           <button onClick={rejectSignoffDocument} className="flex-1 sm:flex-none px-3 py-2 text-xs font-bold rounded-xl transition-all active:scale-95 bg-red-50 border border-red-100 text-red-600 hover:bg-red-100 shadow-sm">
+                           <button onClick={rejectSignoffDocument} className="flex-1 sm:flex-none px-3 py-2 text-xs font-bold rounded-xl transition-all active:scale-95 bg-rose-50 border border-rose-200 text-rose-600 hover:bg-rose-100 shadow-sm">
                              Reject
                            </button>
                         )}
                         
                         <button
                           onClick={toggleSignoffApproval}
-                          className={cn("flex-1 sm:flex-none px-4 py-2 text-xs font-bold rounded-xl transition-all active:scale-95", activeTicket.signOffs?.signoffDocumentApproved ? "bg-emerald-600 text-white shadow-lg shadow-emerald-600/20" : "bg-black text-white hover:bg-zinc-800 shadow-md")}
+                          className={cn("flex-1 sm:flex-none px-4 py-2 text-xs font-bold rounded-xl transition-all active:scale-95", activeTicket.signOffs?.signoffDocumentApproved ? "bg-emerald-600 text-white shadow-lg shadow-emerald-600/20" : "bg-slate-900 text-white hover:bg-slate-800 shadow-md")}
                         >
                           {activeTicket.signOffs?.signoffDocumentApproved ? 'Approved' : 'Approve'}
                         </button>
                       </div>
                     ) : activeTicket.signOffs?.signoffDocumentUrl ? (
                       <span className={cn("w-full sm:w-auto text-center px-3 py-2 sm:py-1.5 text-[10px] sm:text-xs font-bold rounded-xl", activeTicket.signOffs?.signoffDocumentApproved ? "bg-emerald-50 border border-emerald-200 text-emerald-700" : "bg-amber-50 border border-amber-200 text-amber-700")}>
-                        {activeTicket.signOffs?.signoffDocumentApproved ? 'Approved by Super Admin' : 'Pending Super Admin'}
+                        {activeTicket.signOffs?.signoffDocumentApproved ? 'Approved by Admin' : 'Pending Admin'}
                       </span>
                     ) : null}
                   </div>
@@ -1125,17 +1127,17 @@ export function ExecutionModule() {
               </div>
 
               <div className="space-y-3 sm:space-y-4">
-                <h4 className="font-bold text-base sm:text-lg">Digital Sign-offs</h4>
+                <h4 className="font-bold text-base sm:text-lg text-slate-900">Digital Sign-offs</h4>
                 {(isSubmittedPhase || isAuditor) && (
                   <div className="space-y-2 sm:space-y-3">
                     {['auditor', 'ase', 'distributor'].map((role) => {
                       const signedData = activeTicket.signOffs?.[role as keyof SignOff];
-                      const isMyRole = profile?.role === role || isSuperAdmin;
+                      const isMyRole = profile?.role === role || isAdminOrSuperadmin;
                       return (
-                        <div key={role} className="flex items-center justify-between p-3 sm:p-4 bg-zinc-50 rounded-xl sm:rounded-2xl border border-zinc-100">
-                          <div><span className="text-xs sm:text-sm font-bold uppercase tracking-wider text-zinc-600">{role}</span></div>
-                          {signedData ? <span className="flex items-center gap-1 text-[10px] sm:text-xs font-bold text-emerald-600 bg-emerald-50 px-2 sm:px-3 py-1 sm:py-1.5 rounded-lg sm:rounded-xl"><CheckCircle2 size={12} className="sm:w-[14px] sm:h-[14px]" /> Signed</span>
-                           : <button onClick={() => signOff(role as any)} disabled={!isMyRole || activeTicket.status !== 'submitted' || isClosedPhase} className={cn("px-3 sm:px-4 py-1.5 sm:py-2 text-[10px] sm:text-xs font-bold rounded-lg sm:rounded-xl", (isMyRole && activeTicket.status === 'submitted' && !isClosedPhase) ? "bg-black text-white hover:bg-zinc-800" : "bg-zinc-200 text-zinc-400")}>{isMyRole && !isClosedPhase ? 'Sign Off' : 'Awaiting'}</button>}
+                        <div key={role} className="flex items-center justify-between p-3 sm:p-4 bg-white shadow-sm rounded-xl sm:rounded-2xl border border-slate-200">
+                          <div><span className="text-xs sm:text-sm font-bold uppercase tracking-wider text-slate-600">{role}</span></div>
+                          {signedData ? <span className="flex items-center gap-1 text-[10px] sm:text-xs font-bold text-emerald-700 bg-emerald-50 px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-lg sm:rounded-xl border border-emerald-100/50"><CheckCircle2 size={12} className="sm:w-[14px] sm:h-[14px]" /> Signed</span>
+                           : <button onClick={() => signOff(role as any)} disabled={!isMyRole || activeTicket.status !== 'submitted' || isClosedPhase} className={cn("px-3 sm:px-4 py-1.5 sm:py-2 text-[10px] sm:text-xs font-bold rounded-lg sm:rounded-xl shadow-sm transition-all", (isMyRole && activeTicket.status === 'submitted' && !isClosedPhase) ? "bg-slate-900 text-white hover:bg-slate-800" : "bg-slate-100 text-slate-400 border border-slate-200/50")}>{isMyRole && !isClosedPhase ? 'Sign Off' : 'Awaiting'}</button>}
                         </div>
                       );
                     })}
@@ -1145,42 +1147,42 @@ export function ExecutionModule() {
             </div>
 
             {/* --- ACTION BUTTONS WITH NEW COMPLIANCE GATEKEEPER --- */}
-            {(isAuditor || isSuperAdmin) && activeTicket.status === 'in_progress' && items.length > 0 && (
-              <div className="pt-6 sm:pt-8 flex flex-col items-end border-t border-zinc-100 w-full gap-3">
+            {(isAuditor || isAdminOrSuperadmin) && activeTicket.status === 'in_progress' && items.length > 0 && (
+              <div className="pt-6 sm:pt-8 flex flex-col items-end border-t border-slate-200 w-full gap-3">
                 {!canSubmitToAse && (
-                  <div className="flex items-start sm:items-center gap-2 p-3 sm:p-4 bg-amber-50 text-amber-700 rounded-xl border border-amber-200 w-full sm:w-auto text-left sm:text-center text-xs sm:text-sm font-bold">
+                  <div className="flex items-start sm:items-center gap-2 p-3 sm:p-4 bg-amber-50 text-amber-800 rounded-xl border border-amber-200 w-full sm:w-auto text-left sm:text-center text-xs sm:text-sm font-bold shadow-sm">
                     <AlertCircle size={18} className="shrink-0 mt-0.5 sm:mt-0" />
-                    <p>WhatsApp Evidence and Physical Sign-off must be approved by Super Admin before submitting.</p>
+                    <p>WhatsApp Evidence and Physical Sign-off must be approved by Admin before submitting.</p>
                   </div>
                 )}
                 <button 
                   onClick={submitByAuditor} 
                   disabled={!canSubmitToAse}
-                  className={cn("w-full sm:w-auto flex justify-center items-center gap-2 px-6 sm:px-8 py-3.5 sm:py-4 rounded-xl sm:rounded-2xl font-bold transition-all shadow-xl active:scale-95 text-sm sm:text-base", canSubmitToAse ? "bg-black text-white hover:bg-zinc-800 shadow-black/10" : "bg-zinc-200 text-zinc-400 cursor-not-allowed shadow-none")}
+                  className={cn("w-full sm:w-auto flex justify-center items-center gap-2 px-6 sm:px-8 py-3.5 sm:py-4 rounded-xl sm:rounded-2xl font-bold transition-all shadow-xl active:scale-95 text-sm sm:text-base", canSubmitToAse ? "bg-indigo-600 text-white hover:bg-indigo-700 shadow-indigo-600/20" : "bg-slate-100 text-slate-400 cursor-not-allowed shadow-none border border-slate-200")}
                 >
                   <Send size={18} /> Submit Audit to ASE
                 </button>
               </div>
             )}
 
-            {(isASE || isSuperAdmin) && activeTicket.status === 'auditor_submitted' && (
-              <div className="pt-6 sm:pt-8 flex flex-col-reverse sm:flex-row justify-end gap-3 border-t border-zinc-100 w-full">
-                <button onClick={rejectByASE} className="w-full sm:w-auto flex justify-center items-center gap-2 px-6 sm:px-8 py-3.5 sm:py-4 bg-white border border-red-200 text-red-600 rounded-xl sm:rounded-2xl font-bold hover:bg-red-50 transition-all shadow-sm active:scale-95 text-sm sm:text-base">
+            {(isASE || isAdminOrSuperadmin) && activeTicket.status === 'auditor_submitted' && (
+              <div className="pt-6 sm:pt-8 flex flex-col-reverse sm:flex-row justify-end gap-3 border-t border-slate-200 w-full">
+                <button onClick={rejectByASE} className="w-full sm:w-auto flex justify-center items-center gap-2 px-6 sm:px-8 py-3.5 sm:py-4 bg-white border border-rose-200 text-rose-600 rounded-xl sm:rounded-2xl font-bold hover:bg-rose-50 transition-all shadow-sm active:scale-95 text-sm sm:text-base">
                   <RotateCcw size={18} /> Reject & Return to Auditor
                 </button>
-                <button onClick={submitByASE} className="w-full sm:w-auto flex justify-center items-center gap-2 px-6 sm:px-8 py-3.5 sm:py-4 bg-blue-600 text-white rounded-xl sm:rounded-2xl font-bold hover:bg-blue-700 transition-all shadow-xl shadow-blue-600/20 active:scale-95 text-sm sm:text-base">
+                <button onClick={submitByASE} className="w-full sm:w-auto flex justify-center items-center gap-2 px-6 sm:px-8 py-3.5 sm:py-4 bg-indigo-600 text-white rounded-xl sm:rounded-2xl font-bold hover:bg-indigo-700 transition-all shadow-xl shadow-indigo-600/20 active:scale-95 text-sm sm:text-base">
                   <CheckCircle2 size={18} /> Verify & Request Sign-offs
                 </button>
               </div>
             )}
 
-            {(isAuditor || isSuperAdmin) && activeTicket.status === 'drainage_pending' && (
-              <div className="pt-6 sm:pt-8 flex justify-end border-t border-zinc-100 w-full">
+            {(isAuditor || isAdminOrSuperadmin) && activeTicket.status === 'drainage_pending' && (
+              <div className="pt-6 sm:pt-8 flex justify-end border-t border-slate-200 w-full">
                 <button 
                   onClick={submitDrainage} 
                   disabled={!activeTicket.signOffs?.drainageDate || !isDrainageToday}
-                  title={!activeTicket.signOffs?.drainageDate ? "Please wait for a Super Admin to set a Drainage Date first" : !isDrainageToday ? "Drainage can only be completed on the exact scheduled date" : ""}
-                  className="w-full sm:w-auto flex justify-center items-center gap-2 px-6 sm:px-8 py-3.5 sm:py-4 bg-teal-600 text-white rounded-xl sm:rounded-2xl font-bold hover:bg-teal-700 transition-all shadow-xl shadow-teal-600/20 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed text-sm sm:text-base"
+                  title={!activeTicket.signOffs?.drainageDate ? "Please wait for an Admin to set a Drainage Date first" : !isDrainageToday ? "Drainage can only be completed on the exact scheduled date" : ""}
+                  className="w-full sm:w-auto flex justify-center items-center gap-2 px-6 sm:px-8 py-3.5 sm:py-4 bg-cyan-600 text-white rounded-xl sm:rounded-2xl font-bold hover:bg-cyan-700 transition-all shadow-xl shadow-cyan-600/20 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed text-sm sm:text-base"
                 >
                   <CheckCircle2 size={18} /> Complete Drainage & Close Audit
                 </button>
@@ -1223,55 +1225,55 @@ export function ExecutionModule() {
       
       {/* Scrollable Tabs */}
       <div className="-mx-4 sm:mx-0 px-4 sm:px-0">
-        <div className="flex bg-zinc-100 p-1.5 rounded-xl sm:rounded-2xl overflow-x-auto w-full md:w-fit custom-scrollbar scroll-smooth">
-          <button onClick={() => setActiveTab('active')} className={cn("px-4 sm:px-6 py-2.5 sm:py-3 rounded-lg sm:rounded-xl text-xs sm:text-sm font-bold transition-all whitespace-nowrap flex items-center gap-2", activeTab === 'active' ? "bg-white text-black shadow-sm" : "text-zinc-500 hover:text-black")}>
-            Active <span className={cn("px-1.5 sm:px-2 py-0.5 rounded-full text-[9px] sm:text-[10px]", activeTab === 'active' ? "bg-zinc-100 text-zinc-900" : "bg-zinc-200 text-zinc-500")}>{activeTickets.length}</span>
+        <div className="flex bg-slate-100/80 p-1.5 rounded-xl sm:rounded-2xl overflow-x-auto w-full md:w-fit custom-scrollbar scroll-smooth">
+          <button onClick={() => setActiveTab('active')} className={cn("px-4 sm:px-6 py-2.5 sm:py-3 rounded-lg sm:rounded-xl text-xs sm:text-sm font-bold transition-all whitespace-nowrap flex items-center gap-2", activeTab === 'active' ? "bg-white text-indigo-700 shadow-sm border border-slate-200/50" : "text-slate-500 hover:text-slate-900")}>
+            Active <span className={cn("px-1.5 sm:px-2 py-0.5 rounded-md text-[9px] sm:text-[10px]", activeTab === 'active' ? "bg-indigo-50 text-indigo-700" : "bg-slate-200/50 text-slate-500")}>{activeTickets.length}</span>
           </button>
-          <button onClick={() => setActiveTab('signoff')} className={cn("px-4 sm:px-6 py-2.5 sm:py-3 rounded-lg sm:rounded-xl text-xs sm:text-sm font-bold transition-all whitespace-nowrap flex items-center gap-2", activeTab === 'signoff' ? "bg-white text-black shadow-sm" : "text-zinc-500 hover:text-black")}>
-            Sign-off <span className={cn("px-1.5 sm:px-2 py-0.5 rounded-full text-[9px] sm:text-[10px]", activeTab === 'signoff' ? "bg-zinc-100 text-zinc-900" : "bg-zinc-200 text-zinc-500")}>{signoffTickets.length}</span>
+          <button onClick={() => setActiveTab('signoff')} className={cn("px-4 sm:px-6 py-2.5 sm:py-3 rounded-lg sm:rounded-xl text-xs sm:text-sm font-bold transition-all whitespace-nowrap flex items-center gap-2", activeTab === 'signoff' ? "bg-white text-indigo-700 shadow-sm border border-slate-200/50" : "text-slate-500 hover:text-slate-900")}>
+            Sign-off <span className={cn("px-1.5 sm:px-2 py-0.5 rounded-md text-[9px] sm:text-[10px]", activeTab === 'signoff' ? "bg-indigo-50 text-indigo-700" : "bg-slate-200/50 text-slate-500")}>{signoffTickets.length}</span>
           </button>
-          <button onClick={() => setActiveTab('drainage')} className={cn("px-4 sm:px-6 py-2.5 sm:py-3 rounded-lg sm:rounded-xl text-xs sm:text-sm font-bold transition-all whitespace-nowrap flex items-center gap-2", activeTab === 'drainage' ? "bg-white text-black shadow-sm" : "text-zinc-500 hover:text-black")}>
-            Drainage <span className="hidden sm:inline">Pending</span> <span className={cn("px-1.5 sm:px-2 py-0.5 rounded-full text-[9px] sm:text-[10px]", activeTab === 'drainage' ? "bg-zinc-100 text-zinc-900" : "bg-zinc-200 text-zinc-500")}>{drainageTickets.length}</span>
+          <button onClick={() => setActiveTab('drainage')} className={cn("px-4 sm:px-6 py-2.5 sm:py-3 rounded-lg sm:rounded-xl text-xs sm:text-sm font-bold transition-all whitespace-nowrap flex items-center gap-2", activeTab === 'drainage' ? "bg-white text-indigo-700 shadow-sm border border-slate-200/50" : "text-slate-500 hover:text-slate-900")}>
+            Drainage <span className="hidden sm:inline">Pending</span> <span className={cn("px-1.5 sm:px-2 py-0.5 rounded-md text-[9px] sm:text-[10px]", activeTab === 'drainage' ? "bg-indigo-50 text-indigo-700" : "bg-slate-200/50 text-slate-500")}>{drainageTickets.length}</span>
           </button>
-          <button onClick={() => setActiveTab('completed')} className={cn("px-4 sm:px-6 py-2.5 sm:py-3 rounded-lg sm:rounded-xl text-xs sm:text-sm font-bold transition-all whitespace-nowrap flex items-center gap-2", activeTab === 'completed' ? "bg-white text-black shadow-sm" : "text-zinc-500 hover:text-black")}>
-            Completed <span className={cn("px-1.5 sm:px-2 py-0.5 rounded-full text-[9px] sm:text-[10px]", activeTab === 'completed' ? "bg-zinc-100 text-zinc-900" : "bg-zinc-200 text-zinc-500")}>{completedTickets.length}</span>
+          <button onClick={() => setActiveTab('completed')} className={cn("px-4 sm:px-6 py-2.5 sm:py-3 rounded-lg sm:rounded-xl text-xs sm:text-sm font-bold transition-all whitespace-nowrap flex items-center gap-2", activeTab === 'completed' ? "bg-white text-indigo-700 shadow-sm border border-slate-200/50" : "text-slate-500 hover:text-slate-900")}>
+            Completed <span className={cn("px-1.5 sm:px-2 py-0.5 rounded-md text-[9px] sm:text-[10px]", activeTab === 'completed' ? "bg-indigo-50 text-indigo-700" : "bg-slate-200/50 text-slate-500")}>{completedTickets.length}</span>
           </button>
         </div>
       </div>
 
       {displayTickets.length === 0 ? (
-        <div className="p-8 sm:p-16 text-center bg-white rounded-[1.5rem] sm:rounded-[2.5rem] border border-zinc-200 shadow-sm flex flex-col items-center justify-center mx-4 sm:mx-0">
-          <ClipboardCheck size={40} className="text-zinc-300 mb-3 sm:mb-4 sm:w-12 sm:h-12" />
-          <h3 className="text-base sm:text-lg font-bold text-zinc-900">No Audits Found</h3>
-          <p className="text-xs sm:text-sm text-zinc-500 mt-1">There are currently no audits in this category.</p>
+        <div className="p-8 sm:p-16 text-center bg-white rounded-[1.5rem] sm:rounded-[2.5rem] border border-slate-200 shadow-sm flex flex-col items-center justify-center mx-4 sm:mx-0">
+          <ClipboardCheck size={40} className="text-slate-300 mb-3 sm:mb-4 sm:w-12 sm:h-12" />
+          <h3 className="text-base sm:text-lg font-bold text-slate-900">No Audits Found</h3>
+          <p className="text-xs sm:text-sm text-slate-500 mt-1">There are currently no audits in this category.</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6 w-full px-4 sm:px-0">
           {displayTickets.map(ticket => {
             const dist = distMap[ticket.distributorId];
             return (
-              <motion.div layout key={ticket.id} onClick={() => setActiveTicket(ticket)} className="bg-white p-5 sm:p-6 rounded-[1.5rem] sm:rounded-[2rem] border border-zinc-200 shadow-sm hover:shadow-md hover:border-black transition-all cursor-pointer group flex flex-col w-full">
+              <motion.div layout key={ticket.id} onClick={() => setActiveTicket(ticket)} className="bg-white p-5 sm:p-6 rounded-[1.5rem] sm:rounded-[2rem] border border-slate-200 shadow-sm hover:shadow-md hover:border-indigo-300 transition-all cursor-pointer group flex flex-col w-full">
                 <div className="flex justify-between items-start mb-3 sm:mb-4">
-                  <div className="w-10 h-10 sm:w-12 sm:h-12 bg-zinc-100 rounded-xl sm:rounded-2xl flex items-center justify-center"><Store className="text-zinc-600" size={18} /></div>
-                  <span className={cn("px-2.5 py-1 rounded-md text-[9px] sm:text-[10px] font-black uppercase tracking-wider bg-zinc-100 text-zinc-600")}>{ticket.status.replace('_', ' ')}</span>
+                  <div className="w-10 h-10 sm:w-12 sm:h-12 bg-slate-100 rounded-xl sm:rounded-2xl flex items-center justify-center group-hover:bg-indigo-50 transition-colors"><Store className="text-slate-600 group-hover:text-indigo-600" size={18} /></div>
+                  <span className={cn("px-2.5 py-1 rounded-md text-[9px] sm:text-[10px] font-black uppercase tracking-wider bg-slate-100 text-slate-600")}>{ticket.status.replace('_', ' ')}</span>
                 </div>
-                <h4 className="text-base sm:text-lg font-bold tracking-tight mb-1 line-clamp-1">{dist?.name || 'Loading...'}</h4>
-                <p className="text-xs sm:text-sm text-zinc-500 flex items-center gap-1.5 mb-4 sm:mb-6"><MapPin size={12} className="shrink-0" /> <span className="truncate">{dist?.city}</span></p>
+                <h4 className="text-base sm:text-lg font-bold tracking-tight mb-1 line-clamp-1 text-slate-900">{dist?.name || 'Loading...'}</h4>
+                <p className="text-xs sm:text-sm text-slate-500 flex items-center gap-1.5 mb-4 sm:mb-6"><MapPin size={12} className="shrink-0" /> <span className="truncate">{dist?.city}</span></p>
 
                 {/* --- RENDER BUTTONS BASED ON ROLE --- */}
                 {ticket.status === 'scheduled' ? (
-                  (isAuditor || isSuperAdmin) ? (
-                    <button onClick={(e) => { e.stopPropagation(); startAudit(ticket); }} className="w-full py-3 bg-zinc-100 text-zinc-900 font-bold rounded-xl group-hover:bg-black group-hover:text-white transition-all text-sm shadow-sm active:scale-95">
+                  (isAuditor || isAdminOrSuperadmin) ? (
+                    <button onClick={(e) => { e.stopPropagation(); startAudit(ticket); }} className="w-full py-3 bg-slate-900 text-white font-bold rounded-xl hover:bg-slate-800 transition-all text-sm shadow-md active:scale-95">
                       Start Execution
                     </button>
                   ) : (
-                    <button onClick={(e) => { e.stopPropagation(); setActiveTicket(ticket); }} className="w-full py-3 bg-zinc-100 text-zinc-900 font-bold rounded-xl group-hover:bg-zinc-200 transition-all text-sm shadow-sm active:scale-95">
+                    <button onClick={(e) => { e.stopPropagation(); setActiveTicket(ticket); }} className="w-full py-3 bg-slate-100 text-slate-900 font-bold rounded-xl group-hover:bg-slate-200 transition-all text-sm shadow-sm active:scale-95">
                       View Details
                     </button>
                   )
                 ) : (
-                  <button className="w-full py-3 bg-blue-50 text-blue-700 border border-blue-100 font-bold rounded-xl group-hover:bg-blue-600 group-hover:text-white transition-all text-sm shadow-sm active:scale-95 flex items-center justify-center gap-2">
-                    {['auditor', 'ase', 'superadmin'].includes(profile?.role || '') ? 'Resume / Review Audit' : 'View Audit'}
+                  <button className="w-full py-3 bg-indigo-50 text-indigo-700 border border-indigo-100 font-bold rounded-xl group-hover:bg-indigo-600 group-hover:text-white transition-all text-sm shadow-sm active:scale-95 flex items-center justify-center gap-2">
+                    {['auditor', 'ase', 'admin', 'superadmin', 'ho'].includes(profile?.role || '') ? 'Resume / Review Audit' : 'View Audit'}
                   </button>
                 )}
               </motion.div>
