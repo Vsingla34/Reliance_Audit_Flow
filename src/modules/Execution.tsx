@@ -72,6 +72,9 @@ export function ExecutionModule() {
     return map;
   }, [distributors]);
 
+  // Safely extract the active distributor code for the dependency array
+  const activeDistCode = activeTicket ? distMap[activeTicket.distributorId]?.code : null;
+
   const dumpItemMap = useMemo(() => {
     const map: Record<string, CombinedDumpItem> = {};
     availableDumpItems.forEach(d => { map[d.itemCode] = d; });
@@ -89,36 +92,30 @@ export function ExecutionModule() {
         tQuery = tQuery.or(`auditorId.eq.${profile.uid},auditorIds.cs.{${profile.uid}}`);
       }
 
-      const { data: tData, error: tError } = await tQuery;
-      if (tError) throw tError;
-      const fetchedTickets = (tData || []) as AuditTicket[];
-
       let dQuery = supabase.from('distributors').select('*');
-      
       if (['ase', 'asm', 'sm', 'dm'].includes(profile.role)) {
         if (profile.role === 'ase') dQuery = dQuery.contains('aseIds', [profile.uid]);
         else if (profile.role === 'asm') dQuery = dQuery.contains('asmIds', [profile.uid]);
         else if (profile.role === 'sm') dQuery = dQuery.contains('smIds', [profile.uid]);
         else if (profile.role === 'dm') dQuery = dQuery.contains('dmIds', [profile.uid]);
-      } else if (profile.role === 'auditor' && fetchedTickets.length > 0) {
-        const distIds = Array.from(new Set(fetchedTickets.map(t => t.distributorId)));
-        dQuery = dQuery.in('id', distIds);
-      }
+      } 
 
-      const { data: dData, error: dError } = await dQuery;
-      if (dError) throw dError;
-      const fetchedDistributors = (dData || []) as any[];
+      // 🔥 PERFORMANCE FIX 1: Run queries concurrently instead of waiting
+      const [tRes, dRes] = await Promise.all([tQuery, dQuery]);
+      
+      if (tRes.error) throw tRes.error;
+      if (dRes.error) throw dRes.error;
+
+      const fetchedTickets = (tRes.data || []) as AuditTicket[];
+      const fetchedDistributors = (dRes.data || []) as any[];
 
       setDistributors(fetchedDistributors);
 
-      if (['ase', 'asm', 'sm', 'dm'].includes(profile.role)) {
-         const distIds = fetchedDistributors.map(d => d.id);
-         const validTickets = fetchedTickets.filter(t => distIds.includes(t.distributorId));
-         setTickets(validTickets);
-      } else {
-         const validTickets = fetchedTickets.filter(t => fetchedDistributors.some(d => d.id === t.distributorId));
-         setTickets(validTickets);
-      }
+      // 🔥 PERFORMANCE FIX 2: O(1) Set Lookup instead of O(N^2) Nested Array Loops
+      const validDistIds = new Set(fetchedDistributors.map(d => d.id));
+      const validTickets = fetchedTickets.filter(t => validDistIds.has(t.distributorId));
+      
+      setTickets(validTickets);
 
     } catch (error) {
       console.error("Execution Data Fetch Error:", error);
@@ -151,16 +148,24 @@ export function ExecutionModule() {
     } catch (error) { console.error(error); }
   };
 
+  // 🔥 PERFORMANCE FIX 3: Fixed Dependency Array to prevent domino-effect refetches
   useEffect(() => {
     if (activeTicket) {
       fetchItems(activeTicket.id);
-      const dist = distributors.find(d => d.id === activeTicket.distributorId);
-      if (dist) loadDumpData(dist.code);
+      if (activeDistCode) loadDumpData(activeDistCode);
       setItemSearchQuery(''); 
-      const channel = supabase.channel(`items-${activeTicket.id}`).on('postgres_changes', { event: '*', schema: 'public', table: 'auditLineItems', filter: `ticketId=eq.${activeTicket.id}` }, () => fetchItems(activeTicket.id)).subscribe();
+      
+      const channel = supabase.channel(`items-${activeTicket.id}`)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'auditLineItems', filter: `ticketId=eq.${activeTicket.id}` }, () => fetchItems(activeTicket.id))
+        .subscribe();
+        
       return () => { supabase.removeChannel(channel); };
-    } else { setItems([]); setAvailableDumpItems([]); setItemSearchQuery(''); }
-  }, [activeTicket?.id, distributors]); 
+    } else { 
+      setItems([]); 
+      setAvailableDumpItems([]); 
+      setItemSearchQuery(''); 
+    }
+  }, [activeTicket?.id, activeDistCode]); 
 
   useEffect(() => {
     if (activeTicket) {
@@ -180,7 +185,7 @@ export function ExecutionModule() {
       setActiveTicket({ ...activeTicket, status: newStatus as any });
       
       const dist = distMap[activeTicket.distributorId];
-      logActivity(user, profile, "Status Overridden", `Admin manually changed status to ${newStatus.replace('_', ' ')} for ${dist?.name}`);
+      logActivity(user, profile, "Status Overridden", `Super Admin manually changed status to ${newStatus.replace('_', ' ')} for ${dist?.name}`);
     } catch (error) {
       console.error("Failed to force update status:", error);
     }
@@ -188,6 +193,12 @@ export function ExecutionModule() {
 
   const resetAuditTicket = async () => {
     if (!activeTicket) return;
+    
+    if (!isSuperAdmin) {
+      alert("Action Denied: Only Super Admins can reset and completely clear an audit ticket.");
+      return;
+    }
+
     if (!window.confirm("Are you sure you want to completely clear this ticket? It will be removed from Execution and sent back to the Scheduler as a blank request.")) return;
 
     try {
@@ -197,7 +208,7 @@ export function ExecutionModule() {
       }).eq('id', activeTicket.id);
       
       const dist = distMap[activeTicket.distributorId];
-      logActivity(user, profile, "Audit Reset", `Admin reset the audit for ${dist?.name} back to Scheduler`);
+      logActivity(user, profile, "Audit Reset", `Super Admin reset the audit for ${dist?.name} back to Scheduler`);
 
       setTickets(prev => prev.filter(t => t.id !== activeTicket.id)); setActiveTicket(null);
       alert("Ticket cleared successfully! It is now back in the Scheduler page.");
@@ -687,7 +698,8 @@ export function ExecutionModule() {
             )}
 
             <div className="flex w-full sm:w-auto gap-2 sm:gap-3">
-              {isAdminOrSuperadmin && !isClosedPhase && (
+              {/* 🔥 RESET IS STRICTLY SUPERADMIN ONLY 🔥 */}
+              {isSuperAdmin && !isClosedPhase && (
                 <button onClick={resetAuditTicket} className="flex-1 sm:flex-none flex justify-center items-center gap-2 px-3 sm:px-4 py-2 bg-rose-50 text-rose-600 rounded-xl text-xs sm:text-sm font-bold hover:bg-rose-100 transition-all border border-rose-100"><RotateCcw size={16} /> <span className="hidden sm:inline">Reset</span></button>
               )}
               <button onClick={() => setIsChatOpen(true)} className="flex-1 sm:flex-none flex justify-center items-center gap-2 px-3 sm:px-4 py-2 bg-indigo-50 text-indigo-600 rounded-xl text-xs sm:text-sm font-bold hover:bg-indigo-100 transition-all border border-indigo-100"><MessageSquare size={16} /> Discussion {activeTicket.comments?.length ? `(${activeTicket.comments.length})` : ''}</button>
