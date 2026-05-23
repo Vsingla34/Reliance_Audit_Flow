@@ -1,10 +1,11 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { supabase, logActivity } from '../supabase';
 import { UserProfile } from '../types';
-import { Plus, Search, Edit2, Trash2, X, Shield, Mail, MapPin, User as UserIcon, Filter, CheckCircle2, Lock, Phone, Loader2 } from 'lucide-react';
+import { Plus, Search, Edit2, Trash2, X, Shield, Mail, MapPin, User as UserIcon, Filter, CheckCircle2, Lock, Phone, Loader2, Upload, Download } from 'lucide-react';
 import { cn, useAuth } from '../App';
 import { motion, AnimatePresence } from 'motion/react';
 import { createClient } from '@supabase/supabase-js';
+import Papa from 'papaparse';
 
 export function UsersModule() {
   const { profile, user } = useAuth();
@@ -16,6 +17,10 @@ export function UsersModule() {
   const [editingUser, setEditingUser] = useState<UserProfile | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   
+  const [isBulkUploading, setIsBulkUploading] = useState(false);
+  const [bulkProgress, setBulkProgress] = useState({ current: 0, total: 0 });
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  
   const [formData, setFormData] = useState<Partial<UserProfile>>({
     name: '', email: '', phone: '', role: 'auditor', region: '', active: true
   });
@@ -23,6 +28,14 @@ export function UsersModule() {
   const isMeSuperadmin = profile?.role === 'superadmin';
   const isMeAdmin = profile?.role === 'admin';
   const canManageUsers = isMeSuperadmin || isMeAdmin;
+
+  // Create a secondary Supabase client that DOES NOT save the session. 
+  // This prevents the Admin from being logged out when creating new users.
+  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+  const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+  const adminAuthClient = useMemo(() => createClient(supabaseUrl, supabaseKey, { 
+    auth: { persistSession: false, autoRefreshToken: false } 
+  }), [supabaseUrl, supabaseKey]);
 
   const fetchData = async () => {
     if (!profile) return;
@@ -101,19 +114,8 @@ export function UsersModule() {
         
       } else {
         // CREATE NEW USER + SEND PASSWORD EMAIL
-        
-        // 1. Create a secondary Supabase client that DOES NOT save the session. 
-        // This prevents the Admin from being logged out when creating a new user.
-        const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-        const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
-        const adminAuthClient = createClient(supabaseUrl, supabaseKey, { 
-          auth: { persistSession: false, autoRefreshToken: false } 
-        });
-        
-        // 2. Generate a secure, random temporary password just to fulfill Supabase requirements
         const tempPassword = Math.random().toString(36).slice(-10) + 'A1!@';
         
-        // 3. Register the user in Supabase Auth
         const { data: authData, error: authError } = await adminAuthClient.auth.signUp({
           email: formData.email!,
           password: tempPassword,
@@ -124,7 +126,6 @@ export function UsersModule() {
         const newUid = authData.user?.id;
         if (!newUid) throw new Error("Failed to generate user ID from Authentication service.");
 
-        // 4. Insert the new profile into the public users table
         const { error: dbError } = await supabase.from('users').insert([{ 
           ...formData, 
           uid: newUid,
@@ -133,10 +134,9 @@ export function UsersModule() {
         
         if (dbError) throw dbError;
 
-        // 5. Fire the Password Generation/Reset Email automatically and explicitly set the live redirect URL
-       // 5. Fire the Password Generation/Reset Email automatically
+        // 🔥 DYNAMIC REDIRECT FIX 🔥
         const { error: resetError } = await adminAuthClient.auth.resetPasswordForEmail(formData.email!, {
-          redirectTo: 'https://reliance-audit-flow.vercel.app/',
+          redirectTo: 'https://reliance.stockcheck360.com/',
         });
         
         if (resetError) {
@@ -157,6 +157,98 @@ export function UsersModule() {
     }
   };
 
+  // --- 🔥 BULK UPLOAD LOGIC 🔥 ---
+  const downloadTemplate = () => {
+    const csv = "Name,Email,Phone,Role,Region\nJohn Doe,john@example.com,9876543210,auditor,North\nJane Smith,jane@example.com,9876543211,ase,South";
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a'); 
+    link.href = URL.createObjectURL(blob); 
+    link.download = "Users_Bulk_Upload_Template.csv"; 
+    link.click();
+  };
+
+  const handleBulkUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !canManageUsers) return;
+
+    setIsBulkUploading(true);
+    setBulkProgress({ current: 0, total: 0 });
+
+    Papa.parse(file, {
+      header: true,
+      skipEmptyLines: true,
+      complete: async (results) => {
+        try {
+          const parsedData = results.data;
+          setBulkProgress({ current: 0, total: parsedData.length });
+          
+          let successCount = 0;
+          let failCount = 0;
+
+          for (let i = 0; i < parsedData.length; i++) {
+            const row: any = parsedData[i];
+            
+            // Map common column name variations
+            const name = row.Name || row.name || '';
+            const email = row.Email || row.email || '';
+            const phone = row.Phone || row.phone || '';
+            const rawRole = (row.Role || row.role || 'auditor').toLowerCase();
+            const region = row.Region || row.region || '';
+            
+            // Validate Role & Permissions
+            const validRoles = ['superadmin', 'admin', 'ho', 'dm', 'sm', 'asm', 'ase', 'auditor'];
+            const finalRole = validRoles.includes(rawRole) ? rawRole : 'auditor';
+            
+            if (!name || !email) { failCount++; continue; }
+            if (isMeAdmin && finalRole === 'superadmin') { failCount++; continue; } // Block unauthorized superadmin creation
+            
+            try {
+              const tempPassword = Math.random().toString(36).slice(-10) + 'A1!@';
+              const { data: authData, error: authError } = await adminAuthClient.auth.signUp({
+                email: email, password: tempPassword,
+              });
+              
+              if (authError) throw authError;
+              const newUid = authData.user?.id;
+              
+              if (newUid) {
+                 await supabase.from('users').insert([{ 
+                   uid: newUid, name, email, phone, role: finalRole, region, active: true, password_setup_required: true 
+                 }]);
+                 
+                 // 🔥 DYNAMIC REDIRECT FIX FOR BULK 🔥
+                 await adminAuthClient.auth.resetPasswordForEmail(email, {
+                   redirectTo: 'https://reliance.stockcheck360.com/',
+                 });
+                 
+                 successCount++;
+              }
+            } catch (err) {
+              console.error(`Failed to create ${email}:`, err);
+              failCount++;
+            }
+            setBulkProgress({ current: i + 1, total: parsedData.length });
+          }
+
+          logActivity(user, profile, "Bulk Users Uploaded", `Bulk uploaded ${successCount} users.`);
+          alert(`Bulk Upload Complete!\n\nSuccessfully created: ${successCount} users.\nFailed/Skipped: ${failCount} rows.`);
+          fetchData();
+        } catch (error: any) {
+          alert(`Upload failed: ${error.message || 'Invalid CSV format'}`);
+        } finally {
+          setIsBulkUploading(false);
+          setBulkProgress({ current: 0, total: 0 });
+          if (fileInputRef.current) fileInputRef.current.value = '';
+        }
+      },
+      error: (error) => {
+        alert("Error reading CSV: " + error.message);
+        setIsBulkUploading(false);
+        if (fileInputRef.current) fileInputRef.current.value = '';
+      }
+    });
+  };
+
   const roleOptions = [
     { value: 'superadmin', label: 'Super Admin', requiresSuperAdmin: true },
     { value: 'admin', label: 'System Admin', requiresSuperAdmin: false },
@@ -172,7 +264,7 @@ export function UsersModule() {
     <div className="space-y-6 sm:space-y-8 pb-12 w-full min-w-0">
       
       {/* --- HEADER --- */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 w-full">
+      <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4 w-full">
         <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 flex-1">
           <div className="relative flex-1 max-w-md group">
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-400 group-focus-within:text-black transition-colors" size={18} />
@@ -189,23 +281,44 @@ export function UsersModule() {
         </div>
 
         {canManageUsers && (
-          <button onClick={openAddModal} className="flex justify-center items-center gap-2 px-5 sm:px-6 py-3 sm:py-3.5 bg-black text-white rounded-xl sm:rounded-2xl font-bold hover:bg-zinc-800 transition-all shadow-md active:scale-95 text-sm sm:text-base whitespace-nowrap">
-            <Plus size={18} /> Add User
-          </button>
+          <div className="flex flex-wrap sm:flex-nowrap items-center gap-2 sm:gap-3 w-full xl:w-auto">
+            
+            <button onClick={downloadTemplate} className="flex-1 sm:flex-none flex justify-center items-center gap-2 px-4 sm:px-5 py-3 sm:py-3.5 bg-white text-zinc-700 rounded-xl sm:rounded-2xl font-bold hover:bg-zinc-50 transition-all text-sm border border-zinc-200 shadow-sm whitespace-nowrap">
+              <Download size={18} /> <span className="hidden sm:inline">Template</span>
+            </button>
+            
+            <input type="file" accept=".csv" className="hidden" ref={fileInputRef} onChange={handleBulkUpload} />
+            <button onClick={() => fileInputRef.current?.click()} disabled={isBulkUploading} className="flex-1 sm:flex-none flex justify-center items-center gap-2 px-4 sm:px-5 py-3 sm:py-3.5 bg-indigo-50 text-indigo-700 border border-indigo-100 rounded-xl sm:rounded-2xl font-bold hover:bg-indigo-100 transition-all shadow-sm text-sm whitespace-nowrap relative overflow-hidden disabled:opacity-80">
+              {isBulkUploading ? (
+                <>
+                  <Loader2 size={18} className="animate-spin relative z-10" /> 
+                  <span className="relative z-10">Creating ({bulkProgress.current}/{bulkProgress.total})...</span>
+                  <div className="absolute left-0 bottom-0 h-1 bg-indigo-500 transition-all duration-300" style={{ width: `${(bulkProgress.current / bulkProgress.total) * 100}%` }} />
+                </>
+              ) : (
+                <><Upload size={18} /> Bulk Upload</>
+              )}
+            </button>
+
+            <button onClick={openAddModal} disabled={isBulkUploading} className="w-full sm:w-auto flex justify-center items-center gap-2 px-5 sm:px-6 py-3 sm:py-3.5 bg-black text-white rounded-xl sm:rounded-2xl font-bold hover:bg-zinc-800 transition-all shadow-md active:scale-95 text-sm sm:text-base whitespace-nowrap disabled:opacity-50">
+              <Plus size={18} /> Add User
+            </button>
+
+          </div>
         )}
       </div>
 
       {/* --- USERS TABLE --- */}
       <div className="bg-white rounded-[1.5rem] sm:rounded-[2rem] border border-zinc-200 shadow-sm overflow-hidden w-full">
-        <div className="overflow-x-auto w-full custom-scrollbar">
-          <table className="w-full text-left min-w-[800px]">
-            <thead className="bg-zinc-50 border-b border-zinc-200">
+        <div className="overflow-x-auto w-full custom-scrollbar max-h-[650px]">
+          <table className="w-full text-left min-w-[800px] relative">
+            <thead className="bg-zinc-50 sticky top-0 z-10 border-b border-zinc-200 shadow-sm">
               <tr>
-                <th className="px-6 py-4 text-xs font-bold text-zinc-500 uppercase tracking-wider">User Details</th>
-                <th className="px-6 py-4 text-xs font-bold text-zinc-500 uppercase tracking-wider">Role & Access</th>
-                <th className="px-6 py-4 text-xs font-bold text-zinc-500 uppercase tracking-wider">Region</th>
-                <th className="px-6 py-4 text-xs font-bold text-zinc-500 uppercase tracking-wider text-center">Status</th>
-                {canManageUsers && <th className="px-6 py-4 text-xs font-bold text-zinc-500 uppercase tracking-wider text-right">Actions</th>}
+                <th className="px-6 py-4 text-xs font-bold text-zinc-500 uppercase tracking-wider bg-zinc-50">User Details</th>
+                <th className="px-6 py-4 text-xs font-bold text-zinc-500 uppercase tracking-wider bg-zinc-50">Role & Access</th>
+                <th className="px-6 py-4 text-xs font-bold text-zinc-500 uppercase tracking-wider bg-zinc-50">Region</th>
+                <th className="px-6 py-4 text-xs font-bold text-zinc-500 uppercase tracking-wider text-center bg-zinc-50">Status</th>
+                {canManageUsers && <th className="px-6 py-4 text-xs font-bold text-zinc-500 uppercase tracking-wider text-right bg-zinc-50">Actions</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-100">
