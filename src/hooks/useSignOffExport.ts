@@ -1,27 +1,21 @@
 /**
  * useSignOffExport.ts
  *
- * Generates the Sign-Off Excel exactly matching the "Audit Report - Phase V Part 1 Beverage" template.
+ * Generates a two-sheet Excel:
+ *   Sheet 1: "Sign-Off"        — exact replica of the Audit Report template
+ *   Sheet 2: "Article Level"   — exact replica of the Article Level Format (ALF) template
  *
  * INSTALL:  npm install exceljs
  * PLACE AT: src/hooks/useSignOffExport.ts
- *
- * KEY FIXES vs previous version:
- * - safe_merge: never merges already-merged cells (fixes "Cannot merge already merged cells" crash)
- * - Anchor Code = distributors.code  (same field)
- * - Firm name hardcoded to "Singla Vishal & Co."
- * - Audit Date from auditTickets.scheduledDate
- * - Customer Full Address = distributor address fields
- * - whatsappMediaApproved read from auditTickets direct column (not signOffs JSONB)
  */
 import { useState } from 'react';
 import ExcelJS from 'exceljs';
 
-// ── Types aligned with actual Supabase schema ─────────────────────────────────
+// ── Shared types (aligned with Supabase schema) ───────────────────────────────
 export interface SignOffDistributor {
   name:        string;
-  code:        string;   // = Anchor Code
-  anchorName?: string;   // distributors.anchorName (can be empty)
+  code:        string;   // = Anchor Code (distributors.code)
+  anchorName?: string;   // distributors.anchorName
   city?:       string;
   state?:      string;
   address?:    string;
@@ -29,26 +23,44 @@ export interface SignOffDistributor {
 }
 
 export interface SignOffAudit {
-  id?:            string;   // auditTickets.id — used as serial no fallback
-  scheduledDate?: string | null;  // auditTickets.scheduledDate
-  approvedValue:  number;         // auditTickets.approvedValue
-  verifiedTotal:  number;         // auditTickets.verifiedTotal
-  serialNo?:      string;   // optional override for Audit Serial No
+  id?:            string;
+  serialNo?:      string;
+  scheduledDate?: string | null;
+  approvedValue:  number;
+  verifiedTotal:  number;
 }
 
 export interface SignOffItem {
   articleNumber:   string;
-  description:     string;
-  qtyDamaged:      number;
-  qtyNonSaleable:  number;
-  qtyBBD:          number;
-  unitValue:       number;
+  description:     string;   // Brand Pack / item name
+  qtyDamaged:      number;   // auditLineItems.qtyDamaged
+  qtyNonSaleable:  number;   // auditLineItems.qtyNonSaleable
+  qtyBBD:          number;   // auditLineItems.qtyBBD
+  unitValue:       number;   // auditLineItems.unitValue  (rate incl GST)
+  gst?:            number;   // itemMaster.gst (%)
+  standardPack?:   string;   // itemMaster.standardPack
+  mfgDate?:        string;   // auditLineItems.mfgDate
+  expDate?:        string;   // auditLineItems.expDate
+  productLife?:    string;   // auditLineItems.productLife
+  reasonCode?:     string;   // auditLineItems.reasonCode  → "Issue in Product"
+  remarks?:        string;   // auditLineItems.remarks     → "Auditor Remarks"
 }
 
-// ── Colour constants ──────────────────────────────────────────────────────────
-const LIGHT_BLUE = 'FFBDD7EE';
-const ORANGE     = 'FFFFC000';
-const BLACK      = 'FF000000';
+// ── Colour palette ────────────────────────────────────────────────────────────
+const C = {
+  // Sign-Off sheet
+  LIGHT_BLUE:  'FFBDD7EE',
+  ORANGE:      'FFFFC000',
+  // ALF sheet — matched from template
+  MASTER_HDR:  'FFD9E1F2',   // Master Details section header (blue-grey)
+  QTY_HDR:     'FFBDD7EE',   // Quantity Details (light blue)
+  VAL_HDR:     'FFE2EFDA',   // Value Details (light green)
+  MFD_HDR:     'FFFFF2CC',   // MFD & Expiry (light yellow)
+  AUD_HDR:     'FFD9D9D9',   // Auditor Findings (light grey)
+  TOTAL_ROW:   'FFFFD966',   // Totals row (yellow)
+  WHITE:       'FFFFFFFF',
+  BLACK:       'FF000000',
+};
 
 type ArgbColor = string;
 
@@ -57,21 +69,33 @@ const thinSide = { style: 'thin' as ExcelJS.BorderStyle };
 const thinBorder: Partial<ExcelJS.Borders> = {
   top: thinSide, left: thinSide, bottom: thinSide, right: thinSide,
 };
+const medSide = { style: 'medium' as ExcelJS.BorderStyle };
+const medBorder: Partial<ExcelJS.Borders> = {
+  top: medSide, left: medSide, bottom: medSide, right: medSide,
+};
 
 function solidFill(argb: ArgbColor): ExcelJS.Fill {
   return { type: 'pattern', pattern: 'solid', fgColor: { argb } };
 }
 
 function tnrFont(opts: {
-  bold?: boolean; size?: number; underline?: boolean; italic?: boolean;
+  bold?: boolean; size?: number; underline?: boolean; italic?: boolean; color?: ArgbColor;
 }): Partial<ExcelJS.Font> {
   return {
-    name:      'Times New Roman',
-    bold:      opts.bold      ?? false,
-    size:      opts.size      ?? 10,
-    color:     { argb: BLACK },
+    name: 'Times New Roman', bold: opts.bold ?? false, size: opts.size ?? 10,
+    color: { argb: opts.color ?? C.BLACK },
     underline: opts.underline ? 'single' : undefined,
-    italic:    opts.italic    ?? false,
+    italic: opts.italic ?? false,
+  };
+}
+
+function ariFont(opts: {
+  bold?: boolean; size?: number; underline?: boolean; color?: ArgbColor;
+}): Partial<ExcelJS.Font> {
+  return {
+    name: 'Arial', bold: opts.bold ?? false, size: opts.size ?? 9,
+    color: { argb: opts.color ?? C.BLACK },
+    underline: opts.underline ? 'single' : undefined,
   };
 }
 
@@ -83,426 +107,519 @@ function alnStyle(
   return { horizontal: h, vertical: v, wrapText: wrap };
 }
 
-/** Write a cell's value + style. Does NOT merge — caller merges first. */
-function sc(
-  ws: ExcelJS.Worksheet,
-  rowNum: number,
-  col: number,
-  value: ExcelJS.CellValue,
-  opts: {
-    bold?: boolean; size?: number; underline?: boolean;
-    fill?: ArgbColor;
-    hAlign?: ExcelJS.Alignment['horizontal'];
-    vAlign?: ExcelJS.Alignment['vertical'];
-    wrap?: boolean;
-    numFmt?: string;
-  } = {}
+function safeMerge(ws: ExcelJS.Worksheet, r1: number, c1: number, r2: number, c2: number) {
+  try {
+    const topLeft = ws.getCell(r1, c1);
+    // @ts-ignore
+    if (topLeft.isMerged) return;
+    ws.mergeCells(r1, c1, r2, c2);
+  } catch { /* already merged — skip */ }
+}
+
+/** Write a cell with Times New Roman styling (Sign-Off sheet) */
+function scT(
+  ws: ExcelJS.Worksheet, rowNum: number, col: number, value: ExcelJS.CellValue,
+  opts: { bold?:boolean; size?:number; underline?:boolean; fill?:ArgbColor;
+    hAlign?:ExcelJS.Alignment['horizontal']; vAlign?:ExcelJS.Alignment['vertical'];
+    wrap?:boolean; numFmt?:string; } = {}
 ): void {
   const cell = ws.getRow(rowNum).getCell(col);
-  cell.value  = value;
-  cell.font   = tnrFont({ bold: opts.bold, size: opts.size, underline: opts.underline });
+  cell.value     = value;
+  cell.font      = tnrFont({ bold: opts.bold, size: opts.size, underline: opts.underline });
   cell.alignment = alnStyle(opts.hAlign ?? 'left', opts.vAlign ?? 'middle', opts.wrap ?? true);
-  if (opts.fill)   cell.fill   = solidFill(opts.fill);
+  if (opts.fill) cell.fill = solidFill(opts.fill);
   cell.border = thinBorder;
   if (opts.numFmt) cell.numFmt = opts.numFmt;
 }
 
-/**
- * Safe merge — skips if cells are already merged (prevents the crash).
- * Also writes an empty string to non-top-left cells inside the merged range
- * BEFORE merging so ExcelJS doesn't complain about existing values.
- */
-function safeMerge(
-  ws: ExcelJS.Worksheet,
-  r1: number, c1: number,
-  r2: number, c2: number
+/** Write a cell with Arial styling (ALF sheet) */
+function scA(
+  ws: ExcelJS.Worksheet, rowNum: number, col: number, value: ExcelJS.CellValue,
+  opts: { bold?:boolean; size?:number; underline?:boolean; fill?:ArgbColor;
+    hAlign?:ExcelJS.Alignment['horizontal']; vAlign?:ExcelJS.Alignment['vertical'];
+    wrap?:boolean; numFmt?:string; border?:Partial<ExcelJS.Borders>; } = {}
 ): void {
-  // Check if top-left cell is already part of a merge
-  const topLeft = ws.getCell(r1, c1);
-  // @ts-ignore — isMerged is not in the public types but exists at runtime
-  if (topLeft.isMerged) return;
-  try {
-    ws.mergeCells(r1, c1, r2, c2);
-  } catch {
-    // silently skip if already merged
-  }
+  const cell = ws.getRow(rowNum).getCell(col);
+  cell.value     = value;
+  cell.font      = ariFont({ bold: opts.bold, size: opts.size, underline: opts.underline });
+  cell.alignment = alnStyle(opts.hAlign ?? 'center', opts.vAlign ?? 'middle', opts.wrap ?? true);
+  if (opts.fill) cell.fill = solidFill(opts.fill);
+  cell.border = opts.border ?? thinBorder;
+  if (opts.numFmt) cell.numFmt = opts.numFmt;
 }
 
-// ── Workbook builder ──────────────────────────────────────────────────────────
-async function buildWorkbook(
+// ════════════════════════════════════════════════════════════════════════════════
+// SHEET 1 — Sign-Off (exact replica, unchanged from previous version)
+// ════════════════════════════════════════════════════════════════════════════════
+async function buildSignOffSheet(
+  ws: ExcelJS.Worksheet,
   dist:  SignOffDistributor,
   audit: SignOffAudit,
   items: SignOffItem[],
-): Promise<ExcelJS.Workbook> {
+) {
+  ws.pageSetup = { orientation: 'landscape', paperSize: 9, fitToPage: true, fitToWidth: 1, fitToHeight: 0 };
 
-  // ── Aggregate items by article code ───────────────────────────────────────
-  const agg = new Map<string, {
-    desc: string; dmg: number; ns: number; bbd: number; uv: number;
-  }>();
+  ws.columns = [
+    { width: 14 }, { width: 22 }, { width: 10 }, { width: 14 }, { width: 14 },
+    { width: 14 }, { width: 10 }, { width: 10 }, { width: 12 }, { width: 6  },
+    { width: 12 }, { width: 6  }, { width: 10 }, { width: 6  },
+  ];
+
+  // Aggregate
+  const agg = new Map<string, { desc:string; dmg:number; ns:number; bbd:number; uv:number; }>();
   for (const item of items) {
-    const code = item.articleNumber;
-    if (!agg.has(code)) {
-      agg.set(code, { desc: item.description, dmg: 0, ns: 0, bbd: 0, uv: item.unitValue });
-    }
-    const a = agg.get(code)!;
+    if (!agg.has(item.articleNumber))
+      agg.set(item.articleNumber, { desc: item.description, dmg:0, ns:0, bbd:0, uv: item.unitValue });
+    const a = agg.get(item.articleNumber)!;
     a.dmg += item.qtyDamaged     || 0;
     a.ns  += item.qtyNonSaleable || 0;
     a.bbd += item.qtyBBD         || 0;
     a.uv   = item.unitValue      || 0;
   }
-
-  const rows    = [...agg.values()];
-  const qtyDmg  = rows.reduce((s, v) => s + v.dmg, 0);
-  const qtyNs   = rows.reduce((s, v) => s + v.ns,  0);
-  const qtyBbd  = rows.reduce((s, v) => s + v.bbd, 0);
-  const qtyTot  = qtyDmg + qtyNs + qtyBbd;
-  const valDmg  = rows.reduce((s, v) => s + v.dmg * v.uv, 0);
-  const valNs   = rows.reduce((s, v) => s + v.ns  * v.uv, 0);
-  const valBbd  = rows.reduce((s, v) => s + v.bbd * v.uv, 0);
-  const valTot  = valDmg + valNs + valBbd;
+  const rows   = [...agg.values()];
+  const qtyDmg = rows.reduce((s,v) => s+v.dmg, 0);
+  const qtyNs  = rows.reduce((s,v) => s+v.ns,  0);
+  const qtyBbd = rows.reduce((s,v) => s+v.bbd, 0);
+  const qtyTot = qtyDmg+qtyNs+qtyBbd;
+  const valDmg = rows.reduce((s,v) => s+v.dmg*v.uv, 0);
+  const valNs  = rows.reduce((s,v) => s+v.ns *v.uv, 0);
+  const valBbd = rows.reduce((s,v) => s+v.bbd*v.uv, 0);
+  const valTot = valDmg+valNs+valBbd;
   const approved = audit.approvedValue || 0;
-  const expPct   = approved > 0 ? valBbd / approved : 0;
+  const expPct   = approved > 0 ? valBbd/approved : 0;
+  const fmtQ = (n:number): ExcelJS.CellValue => n>0?n:'-';
+  const fmtV = (n:number): ExcelJS.CellValue => n>0?n:'-';
 
-  const fmtQ = (n: number): ExcelJS.CellValue => n > 0 ? n : '-';
-  const fmtV = (n: number): ExcelJS.CellValue => n > 0 ? n : '-';
+  let r = 0;
+  const nextRow = (h=16) => { r++; ws.getRow(r).height = h; return r; };
 
-  // ── Create workbook ────────────────────────────────────────────────────────
-  const wb = new ExcelJS.Workbook();
-  wb.creator = 'Reliance Audit System';
-  wb.created = new Date();
-
-  const ws = wb.addWorksheet('Sign-Off', {
-    pageSetup: {
-      orientation: 'landscape', paperSize: 9,
-      fitToPage: true, fitToWidth: 1, fitToHeight: 0,
-    },
-  });
-
-  // 14 columns — widths match the template proportions
-  ws.columns = [
-    { width: 14 },   //  1  A  Primary Damage Qty / left info
-    { width: 22 },   //  2  B  Non-Saleable Qty
-    { width: 10 },   //  3  C  BBD Qty
-    { width: 14 },   //  4  D  Total Qty
-    { width: 14 },   //  5  E  Primary Damage INR
-    { width: 14 },   //  6  F  Non-Saleable INR part-1
-    { width: 10 },   //  7  G  Non-Saleable INR part-2 (merged with F)
-    { width: 10 },   //  8  H  BBD INR
-    { width: 12 },   //  9  I  Total Audited Value part-1
-    { width: 6  },   // 10  J  Total Audited Value part-2 (merged with I)
-    { width: 12 },   // 11  K  Approved Amount part-1
-    { width: 6  },   // 12  L  Approved Amount part-2 (merged with K)
-    { width: 10 },   // 13  M  Expiry % part-1
-    { width: 6  },   // 14  N  Expiry % part-2 (merged with M)
-  ];
-
-  let r = 0; // current row number
-  const nextRow = (h = 16) => { r++; ws.getRow(r).height = h; return r; };
-
-  // ════════════════════════════════════════════════════════════════════════════
   // ROW 1 — Title
-  // ════════════════════════════════════════════════════════════════════════════
-  nextRow(18);
-  safeMerge(ws, r, 1, r, 14);
-  sc(ws, r, 1, 'Audit Report - Phase V Part 1 Beverage',
-    { bold: true, size: 12, hAlign: 'center', vAlign: 'middle', wrap: false });
+  nextRow(18); safeMerge(ws,r,1,r,14);
+  scT(ws,r,1,'Audit Report - Phase V Part 1 Beverage',{bold:true,size:12,hAlign:'center',vAlign:'middle',wrap:false});
 
-  // ════════════════════════════════════════════════════════════════════════════
-  // ROWS 2-7 — Info block
-  // LEFT (cols 1-5): 6 metadata lines
-  // RIGHT (cols 6-14): Customer Full Address spans rows 2-4
-  // ════════════════════════════════════════════════════════════════════════════
-
-  // Fields from actual schema
-  const anchorCode  = dist.code       || '';   // distributors.code IS anchor code
-  const anchorName  = dist.anchorName || '';   // distributors.anchorName
-  const distName    = dist.name       || '';
-  const distCity    = dist.city       || '';
-  const auditDate   = audit.scheduledDate || '';
-  const firmName    = 'Singla Vishal & Co.';  // always fixed
-  const serialNo    = audit.serialNo  || audit.id || '';
-
-  // Customer full address = distributor's full address from DB
-  const addrParts = [distName, dist.address, distCity, dist.state, dist.region].filter(Boolean);
+  // ROW 2-7 — Info block
+  const addrParts = [dist.name,dist.address,dist.city,dist.state,dist.region].filter(Boolean);
   const customerAddress = 'Customer Full Address :- ' + addrParts.join(', ');
-
   const leftLines = [
-    `Audit Serial No.:-${serialNo}`,
-    `Audit Firm Name :-${firmName}`,
-    `Anchor Code :-${anchorCode}`,
-    `Anchor Name/ Direct DB Name :-${anchorName}`,
-    `Distributor name & City :-${distName}, ${distCity}`,
-    `Audit Date :- ${auditDate}`,
+    `Audit Serial No.:-${audit.serialNo||audit.id||''}`,
+    `Audit Firm Name :-Singla Vishal & Co.`,
+    `Anchor Code :-${dist.code||''}`,
+    `Anchor Name/ Direct DB Name :-${dist.anchorName||''}`,
+    `Distributor name & City :-${dist.name}, ${dist.city||''}`,
+    `Audit Date :- ${audit.scheduledDate||''}`,
   ];
-
-  for (let i = 0; i < 6; i++) {
-    nextRow(16);
-    safeMerge(ws, r, 1, r, 5);
-    sc(ws, r, 1, leftLines[i], { size: 10, hAlign: 'left', vAlign: 'middle', wrap: false });
+  for (let i=0; i<6; i++) {
+    nextRow(16); safeMerge(ws,r,1,r,5);
+    scT(ws,r,1,leftLines[i],{size:10,hAlign:'left',vAlign:'middle',wrap:false});
   }
+  safeMerge(ws,2,6,4,14);
+  { const c=ws.getCell(2,6); c.value=customerAddress; c.font=tnrFont({bold:true,size:10,underline:true}); c.alignment=alnStyle('left','top',true); c.border=thinBorder; }
+  for (const row of [5,6,7]) { safeMerge(ws,row,6,row,14); scT(ws,row,6,'',{hAlign:'left',vAlign:'middle',wrap:false}); }
 
-  // Customer address: spans rows 2-4 (absolute row numbers 2, 3, 4), cols 6-14
-  safeMerge(ws, 2, 6, 4, 14);
-  {
-    const cell = ws.getCell(2, 6);
-    cell.value     = customerAddress;
-    cell.font      = tnrFont({ bold: true, size: 10, underline: true });
-    cell.alignment = alnStyle('left', 'top', true);
-    cell.border    = thinBorder;
-  }
-
-  // Rows 5-7 right side: empty with border
-  for (const row of [5, 6, 7]) {
-    safeMerge(ws, row, 6, row, 14);
-    sc(ws, row, 6, '', { hAlign: 'left', vAlign: 'middle', wrap: false });
-  }
-
-  // ════════════════════════════════════════════════════════════════════════════
-  // ROW 8 — Section header row
-  // ════════════════════════════════════════════════════════════════════════════
+  // ROW 8 — Section headers
   nextRow(18);
-  safeMerge(ws, r, 1, r, 4);
-  sc(ws, r, 1, 'Quantity Details - Physically verified & Drained',
-    { bold: true, size: 9, fill: LIGHT_BLUE, hAlign: 'center', vAlign: 'middle', wrap: false });
+  safeMerge(ws,r,1,r,4);  scT(ws,r,1,'Quantity Details - Physically verified & Drained',{bold:true,size:9,fill:C.LIGHT_BLUE,hAlign:'center',vAlign:'middle',wrap:false});
+  safeMerge(ws,r,5,r,10); scT(ws,r,5,'Value Details',{bold:true,size:9,fill:C.LIGHT_BLUE,hAlign:'center',vAlign:'middle',wrap:false});
+  safeMerge(ws,r,11,r,14);scT(ws,r,11,'Variance Summary',{bold:true,size:9,fill:C.ORANGE,hAlign:'center',vAlign:'middle',wrap:false});
 
-  safeMerge(ws, r, 5, r, 10);
-  sc(ws, r, 5, 'Value Details',
-    { bold: true, size: 9, fill: LIGHT_BLUE, hAlign: 'center', vAlign: 'middle', wrap: false });
-
-  safeMerge(ws, r, 11, r, 14);
-  sc(ws, r, 11, 'Variance Summary',
-    { bold: true, size: 9, fill: ORANGE, hAlign: 'center', vAlign: 'middle', wrap: false });
-
-  // ════════════════════════════════════════════════════════════════════════════
   // ROW 9 — Column sub-headers
-  // ════════════════════════════════════════════════════════════════════════════
   nextRow(44);
-  const subHeaders: Array<[number, number, string, ArgbColor]> = [
-    [1,  1,  'Primary Damage\n(Pcs)',                                       LIGHT_BLUE],
-    [2,  2,  'Non-Saleable product and\nNon-manufacturing Defect\n(Pcs)',   LIGHT_BLUE],
-    [3,  3,  'BBD Stock\n(Pcs)',                                            LIGHT_BLUE],
-    [4,  4,  'Total Verified\nQuantity (Pcs)',                              LIGHT_BLUE],
-    [5,  5,  'Primary Damage\n(INR)',                                       LIGHT_BLUE],
-    [6,  7,  'Non-Saleable product and\nNon-manufacturing Defect\n(INR)',   LIGHT_BLUE],
-    [8,  8,  'BBD Stock\n(INR)',                                            LIGHT_BLUE],
-    [9,  10, 'Total\nAudited\nValue',                                       LIGHT_BLUE],
-    [11, 12, 'Approved\nAmount',                                            ORANGE],
-    [13, 14, 'Expiry % to\nsales',                                          ORANGE],
+  const subH: Array<[number,number,string,ArgbColor]> = [
+    [1,1,'Primary Damage\n(Pcs)',C.LIGHT_BLUE],[2,2,'Non-Saleable product and\nNon-manufacturing Defect\n(Pcs)',C.LIGHT_BLUE],
+    [3,3,'BBD Stock\n(Pcs)',C.LIGHT_BLUE],[4,4,'Total Verified\nQuantity (Pcs)',C.LIGHT_BLUE],
+    [5,5,'Primary Damage\n(INR)',C.LIGHT_BLUE],[6,7,'Non-Saleable product and\nNon-manufacturing Defect\n(INR)',C.LIGHT_BLUE],
+    [8,8,'BBD Stock\n(INR)',C.LIGHT_BLUE],[9,10,'Total\nAudited\nValue',C.LIGHT_BLUE],
+    [11,12,'Approved\nAmount',C.ORANGE],[13,14,'Expiry % to\nsales',C.ORANGE],
   ];
-  for (const [c1, c2, text, fillColor] of subHeaders) {
-    if (c1 !== c2) safeMerge(ws, r, c1, r, c2);
-    sc(ws, r, c1, text, { bold: true, size: 8, fill: fillColor, hAlign: 'center', vAlign: 'middle', wrap: true });
+  for (const [c1,c2,text,fc] of subH) {
+    if(c1!==c2) safeMerge(ws,r,c1,r,c2);
+    scT(ws,r,c1,text,{bold:true,size:8,fill:fc,hAlign:'center',vAlign:'middle',wrap:true});
   }
 
-  // ════════════════════════════════════════════════════════════════════════════
-  // ROW 10 — Totals data row
-  // ════════════════════════════════════════════════════════════════════════════
+  // ROW 10 — Totals
   nextRow(16);
-  const totalsData: Array<[number, number, ExcelJS.CellValue, string]> = [
-    [1,  1,  fmtQ(qtyDmg), '#,##0;-'],
-    [2,  2,  fmtQ(qtyNs),  '#,##0;-'],
-    [3,  3,  fmtQ(qtyBbd), '#,##0;-'],
-    [4,  4,  qtyTot,       '#,##0;-'],
-    [5,  5,  fmtV(valDmg), '#,##0.00;-'],
-    [6,  7,  fmtV(valNs),  '#,##0.00;-'],
-    [8,  8,  fmtV(valBbd), '#,##0.00;-'],
-    [9,  10, valTot,       '#,##0.00;-'],
-    [11, 12, approved,     '#,##0;-'],
-    [13, 14, expPct,       '0.00%'],
+  const tot: Array<[number,number,ExcelJS.CellValue,string]> = [
+    [1,1,fmtQ(qtyDmg),'#,##0;-'],[2,2,fmtQ(qtyNs),'#,##0;-'],[3,3,fmtQ(qtyBbd),'#,##0;-'],[4,4,qtyTot,'#,##0;-'],
+    [5,5,fmtV(valDmg),'#,##0.00;-'],[6,7,fmtV(valNs),'#,##0.00;-'],[8,8,fmtV(valBbd),'#,##0.00;-'],[9,10,valTot,'#,##0.00;-'],
+    [11,12,approved,'#,##0;-'],[13,14,expPct,'0.00%'],
   ];
-  for (const [c1, c2, val, fmt] of totalsData) {
-    if (c1 !== c2) safeMerge(ws, r, c1, r, c2);
-    sc(ws, r, c1, val, { hAlign: 'center', vAlign: 'middle', wrap: false, numFmt: fmt });
+  for (const [c1,c2,val,fmt] of tot) {
+    if(c1!==c2) safeMerge(ws,r,c1,r,c2);
+    scT(ws,r,c1,val,{hAlign:'center',vAlign:'middle',wrap:false,numFmt:fmt});
   }
 
-  // ── Individual item rows (only if more than one unique article) ────────────
-  if (agg.size > 1) {
-    for (const [, v] of agg) {
+  // Individual item rows
+  if (agg.size>1) {
+    for (const [,v] of agg) {
       nextRow(16);
-      const qT = v.dmg + v.ns + v.bbd;
-      const vT = qT * v.uv;
-      const itemData: Array<[number, number, ExcelJS.CellValue, string]> = [
-        [1,  1,  fmtQ(v.dmg),           '#,##0;-'],
-        [2,  2,  fmtQ(v.ns),            '#,##0;-'],
-        [3,  3,  fmtQ(v.bbd),           '#,##0;-'],
-        [4,  4,  qT,                    '#,##0;-'],
-        [5,  5,  fmtV(v.dmg * v.uv),   '#,##0.00;-'],
-        [6,  7,  fmtV(v.ns  * v.uv),   '#,##0.00;-'],
-        [8,  8,  fmtV(v.bbd * v.uv),   '#,##0.00;-'],
-        [9,  10, vT,                    '#,##0.00;-'],
-        [11, 12, '',                    ''],
-        [13, 14, '',                    ''],
+      const qT=v.dmg+v.ns+v.bbd, vT=qT*v.uv;
+      const id: Array<[number,number,ExcelJS.CellValue,string]> = [
+        [1,1,fmtQ(v.dmg),'#,##0;-'],[2,2,fmtQ(v.ns),'#,##0;-'],[3,3,fmtQ(v.bbd),'#,##0;-'],[4,4,qT,'#,##0;-'],
+        [5,5,fmtV(v.dmg*v.uv),'#,##0.00;-'],[6,7,fmtV(v.ns*v.uv),'#,##0.00;-'],[8,8,fmtV(v.bbd*v.uv),'#,##0.00;-'],[9,10,vT,'#,##0.00;-'],
+        [11,12,'',''],[13,14,'',''],
       ];
-      for (const [c1, c2, val, fmt] of itemData) {
-        if (c1 !== c2) safeMerge(ws, r, c1, r, c2);
-        sc(ws, r, c1, val, { size: 9, hAlign: 'center', vAlign: 'middle', wrap: false, numFmt: fmt || undefined });
+      for (const [c1,c2,val,fmt] of id) {
+        if(c1!==c2) safeMerge(ws,r,c1,r,c2);
+        scT(ws,r,c1,val,{size:9,hAlign:'center',vAlign:'middle',wrap:false,numFmt:fmt||undefined});
       }
     }
   }
 
-  // ── Blank spacer rows ──────────────────────────────────────────────────────
-  nextRow(6);
-  nextRow(6);
+  // Spacers
+  nextRow(6); nextRow(6);
 
-  // ════════════════════════════════════════════════════════════════════════════
-  // DECLARATION BLOCK
-  // Left  (cols 1-9) : "Declaration from Customer -" + 4 numbered points
-  // Right (cols 10-14): "Customer's Authorised person Name -" + "Seal & Sign -"
-  // ════════════════════════════════════════════════════════════════════════════
+  // Customer Declaration
   const declHeaderRow = nextRow(16);
-  safeMerge(ws, r, 1, r, 9);
-  sc(ws, r, 1, 'Declaration from Customer -',
-    { bold: true, size: 10, underline: true, hAlign: 'left', vAlign: 'middle', wrap: false });
-  safeMerge(ws, r, 10, r, 14);
-  sc(ws, r, 10, "Customer's Authorised person Name -",
-    { size: 10, hAlign: 'left', vAlign: 'middle', wrap: false });
-
-  // Seal & Sign spans all 4 declaration point rows on the right side
-  const sealStartRow = declHeaderRow + 1;
-  const sealEndRow   = declHeaderRow + 4;
-
-  const declPoints = [
-    '1. This is to certify that the quantity mentioned in report is final for all the issues related to quality / leakage / breakage / damage / BBD / Primary or transit damage till the date of Audit.',
+  safeMerge(ws,r,1,r,9); scT(ws,r,1,'Declaration from Customer -',{bold:true,size:10,underline:true,hAlign:'left',vAlign:'middle',wrap:false});
+  safeMerge(ws,r,10,r,14); scT(ws,r,10,"Customer's Authorised person Name -",{size:10,hAlign:'left',vAlign:'middle',wrap:false});
+  const sealStartRow=declHeaderRow+1, sealEndRow=declHeaderRow+4;
+  safeMerge(ws,sealStartRow,10,sealEndRow,14);
+  { const c=ws.getCell(sealStartRow,10); c.value='Seal & Sign -'; c.font=tnrFont({size:10}); c.alignment=alnStyle('left','top',false); c.border=thinBorder; ws.getRow(sealStartRow).height=28; }
+  const custPts=['1. This is to certify that the quantity mentioned in report is final for all the issues related to quality / leakage / breakage / damage / BBD / Primary or transit damage till the date of Audit.',
     '2. I confirm that all stocks received by me with expiry date upto date of Audit has been cleared by company and I will not raise any further claim in this regard for products with expired.',
+    '3. Stock with above-mentioned quality & value has been verified and drained in front of us and no further claim shall be raised by for such cases in future.',
+    '4. We understood that, value mentioned in Audit report is indicative and final claim value shall be accessed by Reliance before processing the expiry claim.'];
+  for (let i=0;i<custPts.length;i++) {
+    const pr=sealStartRow+i; if(i>0) ws.getRow(pr).height=28;
+    safeMerge(ws,pr,1,pr,9); scT(ws,pr,1,custPts[i],{size:9,hAlign:'left',vAlign:'top',wrap:true});
+  }
+  r=sealEndRow;
+
+  // Sales Team Declaration
+  nextRow(6);
+  nextRow(16); safeMerge(ws,r,1,r,9); scT(ws,r,1,'Declaration from Reliance Sales Team -',{bold:true,size:10,underline:true,hAlign:'left',vAlign:'middle',wrap:false});
+  safeMerge(ws,r,10,r,14); scT(ws,r,10,'Sales Team Name & contact no.',{bold:true,size:10,underline:true,hAlign:'left',vAlign:'middle',wrap:false});
+  nextRow(22); safeMerge(ws,r,1,r,9); scT(ws,r,1,'1. This is to certify that the quantity mentioned in report is final for all the issues related to quality / leakage / breakage / damage / BBD / Primary or transit damage till the date of Audit.',{size:9,hAlign:'left',vAlign:'top',wrap:true});
+  safeMerge(ws,r,10,r,14); scT(ws,r,10,'',{hAlign:'left',vAlign:'middle',wrap:false});
+  nextRow(22); safeMerge(ws,r,1,r,9); scT(ws,r,1,'2. This is to certify that Physical verification and destruction is taken place in front of myself. All the stock is drained by the distributor in front of Auditor.',{size:9,hAlign:'left',vAlign:'top',wrap:true});
+  safeMerge(ws,r,10,r,14); scT(ws,r,10,'Sales Team EMP ID',{bold:true,size:10,underline:true,hAlign:'left',vAlign:'middle',wrap:false});
+  nextRow(22); safeMerge(ws,r,1,r,9); scT(ws,r,1,'',{hAlign:'left',vAlign:'middle',wrap:false});
+  safeMerge(ws,r,10,r,14); scT(ws,r,10,'Sign',{size:10,hAlign:'left',vAlign:'middle',wrap:false});
+  nextRow(6); nextRow(6);
+
+  // Auditor Declaration
+  nextRow(16); safeMerge(ws,r,1,r,9); scT(ws,r,1,'Declaration from Auditor-',{bold:true,size:10,underline:true,hAlign:'left',vAlign:'middle',wrap:false});
+  safeMerge(ws,r,10,r,14); scT(ws,r,10,'Auditor Name & contact no.',{bold:true,size:10,underline:true,hAlign:'left',vAlign:'middle',wrap:false});
+  nextRow(22); safeMerge(ws,r,1,r,9); scT(ws,r,1,'1. This is to certify that Physical verification is done by us in front of customer and abovementioned sales Team.',{size:9,hAlign:'left',vAlign:'top',wrap:true});
+  safeMerge(ws,r,10,r,14); scT(ws,r,10,'',{hAlign:'left',vAlign:'middle',wrap:false});
+  nextRow(22); safeMerge(ws,r,1,r,9); scT(ws,r,1,"2. Drainage of Stock has also been completed for the above mentioned quantity and no expired stock is available in customer's location.",{size:9,hAlign:'left',vAlign:'top',wrap:true});
+  safeMerge(ws,r,10,r,14); scT(ws,r,10,'',{hAlign:'left',vAlign:'middle',wrap:false});
+  nextRow(22); safeMerge(ws,r,1,r,9); scT(ws,r,1,'',{hAlign:'left',vAlign:'middle',wrap:false});
+  safeMerge(ws,r,10,r,14); scT(ws,r,10,'Seal & Sign',{size:10,hAlign:'left',vAlign:'middle',wrap:false});
+}
+
+// ════════════════════════════════════════════════════════════════════════════════
+// SHEET 2 — Article Level Format (ALF)
+// Columns A-AC (29 cols) matching the template exactly
+// ════════════════════════════════════════════════════════════════════════════════
+async function buildALFSheet(
+  ws: ExcelJS.Worksheet,
+  dist:  SignOffDistributor,
+  audit: SignOffAudit,
+  items: SignOffItem[],
+) {
+  ws.pageSetup = { orientation: 'landscape', paperSize: 9, fitToPage: true, fitToWidth: 1, fitToHeight: 0 };
+
+  // Column widths — EXACT values read from original ALF_TEMP.xlsx XML (all 29 cols A-AC)
+  const colWidths = [
+    14.14,   // A (1)  Sr No
+    25.14,   // B (2)  Std. Serial No.
+    165.29,  // C (3)  Region  ← huge column, holds declaration text
+    13.57,   // D (4)  State
+    17.86,   // E (5)  Audit Team
+    11.00,   // F (6)  Anchor Code
+    10.43,   // G (7)  Anchor Name
+    8.00,    // H (8)  Distributor name   ← 8.0 in template (not 10.4)
+    11.29,   // I (9)  Article Code
+    43.14,   // J (10) Brand Pack
+    6.43,    // K (11) NPI / NON-NPI
+    8.57,    // L (12) Rate Incl GST
+    6.57,    // M (13) GST %
+    9.00,    // N (14) Standard Pack
+    18.57,   // O (15) Primary Damage (Pcs)
+    8.00,    // P (16) Non-Saleable (Pcs)
+    8.43,    // Q (17) BBD Stock (Pcs)
+    8.71,    // R (18) Total Verified Qty
+    27.29,   // S (19) Primary Damage (INR)
+    12.00,   // T (20) Non-Saleable (INR)
+    10.57,   // U (21) BBD Stock (INR)
+    12.00,   // V (22) Total Audited Value (incl GST)
+    8.00,    // W (23) Total Audited Value (excl GST)   ← 8.0 in template
+    17.71,   // X (24) Manufacturing Date               ← 17.71 in template
+    10.43,   // Y (25) Expiry Date
+    8.00,    // Z (26) Product Life Months
+    8.57,    // AA(27) Manufacturing Quarter
+    31.57,   // AB(28) Issue in Product in detail
+    19.14,   // AC(29) Auditor Remarks
+  ];
+  ws.columns = colWidths.map(w => ({ width: w }));
+
+  // ── ROW 1: blank (template starts at row 2) ──────────────────────────────
+  ws.getRow(1).height = 10;
+
+  // ── ROW 2: blank row with borders ────────────────────────────────────────
+  ws.getRow(2).height = 15;
+  for (let c=1; c<=29; c++) {
+    ws.getRow(2).getCell(c).border = thinBorder;
+  }
+
+  // ── ROW 3: Section group headers ─────────────────────────────────────────
+  ws.getRow(3).height = 22;
+  //  A3-N3: "Master Details" (14 cols)
+  safeMerge(ws,3,1,3,14);
+  scA(ws,3,1,'Master Details',{bold:true,size:11,fill:C.MASTER_HDR,hAlign:'center'});
+  // O3-R3: "Quantity Details" (4 cols)
+  safeMerge(ws,3,15,3,18);
+  scA(ws,3,15,'Quantity Details',{bold:true,size:11,fill:C.QTY_HDR,hAlign:'center'});
+  // S3-W3: "Value Details - Including GST" (5 cols)
+  safeMerge(ws,3,19,3,23);
+  scA(ws,3,19,'Value Details - Including GST',{bold:true,size:11,fill:C.VAL_HDR,hAlign:'center'});
+  // X3-AA3: "MFD & Expiry Date" (4 cols)
+  safeMerge(ws,3,24,3,27);
+  scA(ws,3,24,'MFD & Expiry Date',{bold:true,size:11,fill:C.MFD_HDR,hAlign:'center'});
+  // AB3-AC3: "Auditor Findings" (2 cols)
+  safeMerge(ws,3,28,3,29);
+  scA(ws,3,28,'Auditor Findings',{bold:true,size:11,fill:C.MASTER_HDR,hAlign:'center'});
+
+  // ── ROW 4: Column sub-headers (height 150 from template) ─────────────────
+  ws.getRow(4).height = 150;
+
+  const colHeaders: Array<[number, string, ArgbColor]> = [
+    [1,  'Sr No',                                                                      C.MASTER_HDR],
+    [2,  'Std. Serial No.',                                                            C.MASTER_HDR],
+    [3,  'Region',                                                                     C.MASTER_HDR],
+    [4,  'State',                                                                      C.MASTER_HDR],
+    [5,  'Audit Team',                                                                 C.MASTER_HDR],
+    [6,  'Anchor Code',                                                                C.MASTER_HDR],
+    [7,  'Anchor Name',                                                                C.MASTER_HDR],
+    [8,  'Distributor name',                                                           C.MASTER_HDR],
+    [9,  'Article Code',                                                               C.MASTER_HDR],
+    [10, 'Brand Pack',                                                                 C.MASTER_HDR],
+    [11, 'NPI / NON - NPI',                                                           C.MASTER_HDR],
+    [12, "Rate Including GST\n(As per Waitage Avg of Primary from Jan'25 to Oct'25)", C.MASTER_HDR],
+    [13, 'GST %',                                                                      C.MASTER_HDR],
+    [14, 'Standard Pack',                                                              C.MASTER_HDR],
+    // Quantity
+    [15, 'Primary Damage\n(Pcs)',                                                     C.QTY_HDR],
+    [16, 'Non-Saleable product and Non-manufacturing Defect (Pcs)',                   C.QTY_HDR],
+    [17, 'BBD Stock\n(Pcs)',                                                          C.QTY_HDR],
+    [18, 'Total Verified\nQuantity (Pcs)',                                             C.QTY_HDR],
+    // Value
+    [19, 'Primary Damage\n(INR)',                                                     C.VAL_HDR],
+    [20, 'Non-Saleable product and Non-manufacturing Defect (INR)',                   C.VAL_HDR],
+    [21, 'BBD Stock\n(INR)',                                                          C.VAL_HDR],
+    [22, 'Total Audited Value\n(Including GST)',                                      C.VAL_HDR],
+    [23, 'Total Audited Value\n(Excluding GST)',                                      C.VAL_HDR],
+    // MFD
+    [24, 'Manufacturing Date',                                                        C.MFD_HDR],
+    [25, 'Expiry Date',                                                               C.MFD_HDR],
+    [26, 'Product life in Months',                                                    C.MFD_HDR],
+    [27, 'Manufacturing Quarter',                                                     C.MFD_HDR],
+    // Auditor
+    [28, 'Issue in Product in detail',                                                C.AUD_HDR],
+    [29, 'Auditor Remarks',                                                           C.AUD_HDR],
+  ];
+  for (const [col, text, fc] of colHeaders) {
+    scA(ws,4,col,text,{bold:true,size:9,fill:fc,hAlign:'center',vAlign:'middle',wrap:true});
+  }
+
+  // ── DATA ROWS ─────────────────────────────────────────────────────────────
+  // One row per line item (not aggregated — keep individual items for ALF)
+  const serialNo   = audit.serialNo || audit.id || '';
+  const anchorCode = dist.code      || '';
+  const anchorName = dist.anchorName|| '';
+  const distName   = dist.name      || '';
+  const state      = dist.state     || '';
+  const region     = dist.region    || '';
+  const firmName   = 'Singla Vishal & Co.';
+
+  // Helper to calculate product life in months from mfgDate + expDate
+  const lifeInMonths = (mfgDate?: string, expDate?: string): number | '' => {
+    if (!mfgDate || !expDate) return '';
+    try {
+      const m = new Date(mfgDate), e = new Date(expDate);
+      if (isNaN(m.getTime()) || isNaN(e.getTime())) return '';
+      const months = (e.getFullYear() - m.getFullYear()) * 12 + (e.getMonth() - m.getMonth());
+      return months > 0 ? months : '';
+    } catch { return ''; }
+  };
+
+  // Helper to get manufacturing quarter
+  const mfgQuarter = (mfgDate?: string): string => {
+    if (!mfgDate) return '';
+    try {
+      const m = new Date(mfgDate);
+      if (isNaN(m.getTime())) return '';
+      const q = Math.ceil((m.getMonth() + 1) / 3);
+      return `${q}${q===1?'st':q===2?'nd':q===3?'rd':'th'}`;
+    } catch { return ''; }
+  };
+
+  // Aggregate items by articleNumber (same as sign-off — one row per unique article)
+  const agg = new Map<string, {
+    item: SignOffItem; dmg:number; ns:number; bbd:number;
+  }>();
+  for (const item of items) {
+    if (!agg.has(item.articleNumber)) {
+      agg.set(item.articleNumber, { item, dmg:0, ns:0, bbd:0 });
+    }
+    const a = agg.get(item.articleNumber)!;
+    a.dmg += item.qtyDamaged     || 0;
+    a.ns  += item.qtyNonSaleable || 0;
+    a.bbd += item.qtyBBD         || 0;
+    // Keep the most complete item metadata
+    if (item.mfgDate) a.item = { ...a.item, ...item };
+  }
+
+  const INR  = '[$₹-en-IN]#,##0.00;-';
+  const QTY  = '#,##0;-';
+  const PCT  = '0.00%';
+  const DATE = 'DD-MM-YYYY';
+
+  let sno = 0;
+  let totDmgQty=0, totNsQty=0, totBbdQty=0, totTotQty=0;
+  let totDmgVal=0, totNsVal=0, totBbdVal=0, totIncGst=0, totExcGst=0;
+
+  const dataStartRow = 5;
+  let dataRow = dataStartRow;
+
+  for (const [code, { item, dmg, ns, bbd }] of agg) {
+    sno++;
+    const qTot   = dmg + ns + bbd;
+    const uv     = item.unitValue || 0;
+    const gstPct = item.gst       || 0;
+    const gstMul = 1 + gstPct/100;
+
+    const vDmg   = dmg  * uv;
+    const vNs    = ns   * uv;
+    const vBbd   = bbd  * uv;
+    const vTot   = qTot * uv;           // Total incl GST (unitValue already incl GST)
+    const vExGst = gstMul > 1 ? vTot / gstMul : vTot;  // Excl GST
+
+    totDmgQty+=dmg; totNsQty+=ns; totBbdQty+=bbd; totTotQty+=qTot;
+    totDmgVal+=vDmg; totNsVal+=vNs; totBbdVal+=vBbd; totIncGst+=vTot; totExcGst+=vExGst;
+
+    ws.getRow(dataRow).height = 15;
+
+    const rowData: Array<[number, ExcelJS.CellValue, string?]> = [
+      [1,  sno,              QTY],
+      [2,  serialNo,         undefined],
+      [3,  region,           undefined],
+      [4,  state,            undefined],
+      [5,  firmName,         undefined],
+      [6,  anchorCode,       undefined],
+      [7,  anchorName,       undefined],
+      [8,  distName,         undefined],
+      [9,  code,             undefined],
+      [10, item.description, undefined],
+      [11, '',               undefined],   // NPI/NON-NPI — not in DB, leave blank
+      [12, uv,               INR],
+      [13, gstPct > 0 ? gstPct : '', gstPct > 0 ? '0.00"%"' : undefined],
+      [14, item.standardPack || '', undefined],
+      // Quantity
+      [15, dmg  > 0 ? dmg  : '-', dmg  > 0 ? QTY : undefined],
+      [16, ns   > 0 ? ns   : '-', ns   > 0 ? QTY : undefined],
+      [17, bbd  > 0 ? bbd  : '-', bbd  > 0 ? QTY : undefined],
+      [18, qTot > 0 ? qTot : 0,   QTY],
+      // Value
+      [19, vDmg  > 0 ? vDmg  : '-', vDmg  > 0 ? INR : undefined],
+      [20, vNs   > 0 ? vNs   : '-', vNs   > 0 ? INR : undefined],
+      [21, vBbd  > 0 ? vBbd  : '-', vBbd  > 0 ? INR : undefined],
+      [22, vTot,   INR],
+      [23, vExGst, INR],
+      // MFD & Expiry
+      [24, item.mfgDate || '',  undefined],
+      [25, item.expDate || '',  undefined],
+      [26, lifeInMonths(item.mfgDate, item.expDate), undefined],
+      [27, mfgQuarter(item.mfgDate), undefined],
+      // Auditor
+      [28, item.reasonCode || '', undefined],
+      [29, item.remarks    || '', undefined],
+    ];
+
+    for (const [col, val, fmt] of rowData) {
+      scA(ws, dataRow, col, val, {
+        size: 9, hAlign: col <= 4 ? 'left' : col <= 11 ? 'center' : col >= 12 && col <= 14 ? 'center' : 'center',
+        vAlign: 'middle', wrap: false,
+        numFmt: fmt,
+      });
+    }
+    dataRow++;
+  }
+
+  // ── TOTALS ROW ─────────────────────────────────────────────────────────────
+  ws.getRow(dataRow).height = 16;
+  // "Total" label spanning A-H
+  safeMerge(ws, dataRow, 1, dataRow, 8);
+  scA(ws, dataRow, 1, 'Total', { bold:true, size:10, fill:C.TOTAL_ROW, hAlign:'center' });
+  // "Grand Total" label in I col
+  scA(ws, dataRow, 9, 'Grand Total', { bold:true, size:9, fill:C.TOTAL_ROW, hAlign:'center' });
+  // Blank filler cols J-N
+  for (let c=10; c<=14; c++) scA(ws, dataRow, c, '', { fill:C.TOTAL_ROW });
+  // Qty totals
+  scA(ws,dataRow,15, totDmgQty>0?totDmgQty:'-', {bold:true,fill:C.TOTAL_ROW,numFmt:QTY});
+  scA(ws,dataRow,16, totNsQty >0?totNsQty :'-', {bold:true,fill:C.TOTAL_ROW,numFmt:QTY});
+  scA(ws,dataRow,17, totBbdQty>0?totBbdQty:'-', {bold:true,fill:C.TOTAL_ROW,numFmt:QTY});
+  scA(ws,dataRow,18, totTotQty,                  {bold:true,fill:C.TOTAL_ROW,numFmt:QTY});
+  // Value totals
+  scA(ws,dataRow,19, totDmgVal>0?totDmgVal:'-', {bold:true,fill:C.TOTAL_ROW,numFmt:INR});
+  scA(ws,dataRow,20, totNsVal >0?totNsVal :'-', {bold:true,fill:C.TOTAL_ROW,numFmt:INR});
+  scA(ws,dataRow,21, totBbdVal>0?totBbdVal:'-', {bold:true,fill:C.TOTAL_ROW,numFmt:INR});
+  scA(ws,dataRow,22, totIncGst,                  {bold:true,fill:C.TOTAL_ROW,numFmt:INR});
+  scA(ws,dataRow,23, totExcGst,                  {bold:true,fill:C.TOTAL_ROW,numFmt:INR});
+  // MFD & Auditor cols — blank on totals
+  for (let c=24; c<=29; c++) scA(ws, dataRow, c, '', { fill:C.TOTAL_ROW });
+
+  // ── DECLARATION ROWS
+  // Template: col C (col 3) is 165 wide — declarations written directly to col 3, NO merges
+  // Row offsets match template: totals row + 3 blank rows = declStartRow
+  const declStartRow = dataRow + 3;
+
+  const declPts = [
+    '1. This is to certify that the quantity mentioned in report is final for all the issues related to quality / leakage / breakage / damage / BBD / Primary or transit damage till the date of Audit. ',
+    "2. No Stock shall be taken into consideration before Oct'23 Manufacturing date. ",
     '3. Stock with above-mentioned quality & value has been verified and drained in front of us and no further claim shall be raised by for such cases in future.',
     '4. We understood that, value mentioned in Audit report is indicative and final claim value shall be accessed by Reliance before processing the expiry claim.',
   ];
 
-  // Merge seal area FIRST (before writing point rows so no conflict)
-  safeMerge(ws, sealStartRow, 10, sealEndRow, 14);
-  {
-    const sealCell = ws.getCell(sealStartRow, 10);
-    sealCell.value     = 'Seal & Sign -';
-    sealCell.font      = tnrFont({ size: 10 });
-    sealCell.alignment = alnStyle('left', 'top', false);
-    sealCell.border    = thinBorder;
-    ws.getRow(sealStartRow).height = 28;
+  for (let i = 0; i < declPts.length; i++) {
+    const dr = declStartRow + i;
+    ws.getRow(dr).height = 20;
+    // Write to col C (3) only — it is 165 wide in the template, no merge needed
+    scA(ws, dr, 3, declPts[i], { size: 9, hAlign: 'left', vAlign: 'top', wrap: true });
   }
 
-  for (let i = 0; i < declPoints.length; i++) {
-    const pointRow = sealStartRow + i;
-    if (i > 0) ws.getRow(pointRow).height = 28;
-    safeMerge(ws, pointRow, 1, pointRow, 9);
-    sc(ws, pointRow, 1, declPoints[i],
-      { size: 9, hAlign: 'left', vAlign: 'top', wrap: true });
-  }
+  // ── SIGN-OFF SECTION
+  // Template exact column positions (no merges — just individual cells):
+  //   Col C  (3)  : "Customer's Authorised person Name -"  |  "Seal & Sign -"
+  //   Col O  (15) : "3rd Party Auditor"  |  firm name  |  "Auditor Sign"
+  //   Col AB (28) : "Sales Team Name & contact no."  |  "Sign"
+  // Rows follow template: declStartRow + 4 blank rows = signRow (equiv to template row 69)
 
-  r = sealEndRow; // sync counter
+  const signRow = declStartRow + 5;
+  ws.getRow(signRow).height = 20;
+  scA(ws, signRow, 3,  "Customer's Authorised person Name -", { size: 10, hAlign: 'left', bold: true, underline: true });
+  scA(ws, signRow, 15, '3rd Party Auditor',                   { size: 10, hAlign: 'left', bold: true });
+  scA(ws, signRow, 28, 'Sales Team Name & contact no.',       { size: 10, hAlign: 'left', bold: true, underline: true });
 
-  // ── blank spacer ──────────────────────────────────────────────────────────
-  nextRow(6);
+  // Firm name row (template row 70)
+  const firmRow = signRow + 1;
+  ws.getRow(firmRow).height = 18;
+  scA(ws, firmRow, 15, firmName, { size: 10, hAlign: 'left' });
 
-  // ════════════════════════════════════════════════════════════════════════════
-  // BLOCK 2 — Declaration from Reliance Sales Team
-  //
-  // LEFT (cols 1-9):
-  //   "Declaration from Reliance Sales Team -"  (bold, underlined)
-  //   Point 1
-  //   Point 2
-  //   (blank row)
-  //
-  // RIGHT (cols 10-14):
-  //   "Sales Team Name & contact no."  (bold, underlined)
-  //   (blank)
-  //   "Sales Team EMP ID"              (bold, underlined)
-  //   (blank)
-  //   "Sign"
-  // ════════════════════════════════════════════════════════════════════════════
+  // Seal & Sign + Auditor Sign + Sign row (template row 73 = signRow + 4)
+  const sealRow = signRow + 4;
+  ws.getRow(sealRow).height = 18;
+  scA(ws, sealRow, 3,  'Seal & Sign -', { size: 10, hAlign: 'left', bold: true, underline: true });
+  scA(ws, sealRow, 15, 'Auditor Sign',  { size: 10, hAlign: 'left', bold: true, underline: true });
+  scA(ws, sealRow, 28, 'Sign',          { size: 10, hAlign: 'left' });
 
-  // Header row
-  const salesHeaderRow = nextRow(16);
-  safeMerge(ws, r, 1, r, 9);
-  sc(ws, r, 1, 'Declaration from Reliance Sales Team -',
-    { bold: true, size: 10, underline: true, hAlign: 'left', vAlign: 'middle', wrap: false });
-  safeMerge(ws, r, 10, r, 14);
-  sc(ws, r, 10, 'Sales Team Name & contact no.',
-    { bold: true, size: 10, underline: true, hAlign: 'left', vAlign: 'middle', wrap: false });
-
-  const salesPoint1Row = nextRow(22);
-  safeMerge(ws, r, 1, r, 9);
-  sc(ws, r, 1,
-    '1. This is to certify that the quantity mentioned in report is final for all the issues related to quality / leakage / breakage / damage / BBD / Primary or transit damage till the date of Audit.',
-    { size: 9, hAlign: 'left', vAlign: 'top', wrap: true });
-  // Right col: empty row (Sales Team Name field — blank for handwriting)
-  safeMerge(ws, r, 10, r, 14);
-  sc(ws, r, 10, '', { hAlign: 'left', vAlign: 'middle', wrap: false });
-
-  const salesPoint2Row = nextRow(22);
-  safeMerge(ws, r, 1, r, 9);
-  sc(ws, r, 1,
-    '2. This is to certify that Physical verification and destruction is taken place in front of myself. All the stock is drained by the distributor in front of Auditor.',
-    { size: 9, hAlign: 'left', vAlign: 'top', wrap: true });
-  safeMerge(ws, r, 10, r, 14);
-  sc(ws, r, 10, 'Sales Team EMP ID',
-    { bold: true, size: 10, underline: true, hAlign: 'left', vAlign: 'middle', wrap: false });
-
-  // Blank row left | "Sign" right
-  nextRow(22);
-  safeMerge(ws, r, 1, r, 9);
-  sc(ws, r, 1, '', { hAlign: 'left', vAlign: 'middle', wrap: false });
-  safeMerge(ws, r, 10, r, 14);
-  sc(ws, r, 10, 'Sign',
-    { size: 10, hAlign: 'left', vAlign: 'middle', wrap: false });
-
-  // Extra blank spacer row
-  nextRow(6);
-
-  // ── blank spacer ──────────────────────────────────────────────────────────
-  nextRow(6);
-
-  // ════════════════════════════════════════════════════════════════════════════
-  // BLOCK 3 — Declaration from Auditor
-  //
-  // LEFT (cols 1-9):
-  //   "Declaration from Auditor-"  (bold, underlined)
-  //   Point 1
-  //   Point 2
-  //   (blank row)
-  //
-  // RIGHT (cols 10-14):
-  //   "Auditor Name & contact no."  (bold, underlined)
-  //   (blank)
-  //   (blank)
-  //   "Seal & Sign"
-  // ════════════════════════════════════════════════════════════════════════════
-
-  // Header row
-  const auditorHeaderRow = nextRow(16);
-  safeMerge(ws, r, 1, r, 9);
-  sc(ws, r, 1, 'Declaration from Auditor-',
-    { bold: true, size: 10, underline: true, hAlign: 'left', vAlign: 'middle', wrap: false });
-  safeMerge(ws, r, 10, r, 14);
-  sc(ws, r, 10, 'Auditor Name & contact no.',
-    { bold: true, size: 10, underline: true, hAlign: 'left', vAlign: 'middle', wrap: false });
-
-  const auditorPoint1Row = nextRow(22);
-  safeMerge(ws, r, 1, r, 9);
-  sc(ws, r, 1,
-    '1. This is to certify that Physical verification is done by us in front of customer and abovementioned sales Team.',
-    { size: 9, hAlign: 'left', vAlign: 'top', wrap: true });
-  safeMerge(ws, r, 10, r, 14);
-  sc(ws, r, 10, '', { hAlign: 'left', vAlign: 'middle', wrap: false });
-
-  const auditorPoint2Row = nextRow(22);
-  safeMerge(ws, r, 1, r, 9);
-  sc(ws, r, 1,
-    '2. Drainage of Stock has also been completed for the above mentioned quantity and no expired stock is available in customer\'s location.',
-    { size: 9, hAlign: 'left', vAlign: 'top', wrap: true });
-  safeMerge(ws, r, 10, r, 14);
-  sc(ws, r, 10, '', { hAlign: 'left', vAlign: 'middle', wrap: false });
-
-  // Blank row left | "Seal & Sign" right
-  nextRow(22);
-  safeMerge(ws, r, 1, r, 9);
-  sc(ws, r, 1, '', { hAlign: 'left', vAlign: 'middle', wrap: false });
-  safeMerge(ws, r, 10, r, 14);
-  sc(ws, r, 10, 'Seal & Sign',
-    { size: 10, hAlign: 'left', vAlign: 'middle', wrap: false });
-
-  return wb;
+  // NO freeze pane — original template has none
 }
 
-// ── Public hook ───────────────────────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════════════════════════
+// PUBLIC HOOK
+// ════════════════════════════════════════════════════════════════════════════════
 export function useSignOffExport(params: {
   distributor: SignOffDistributor | undefined;
   audit:       SignOffAudit;
@@ -514,11 +631,18 @@ export function useSignOffExport(params: {
     if (!params.distributor) return;
     setIsExporting(true);
     try {
-      const wb = await buildWorkbook(
-        params.distributor,
-        params.audit,
-        params.items,
-      );
+      const wb = new ExcelJS.Workbook();
+      wb.creator = 'Reliance Audit System';
+      wb.created = new Date();
+
+      // Sheet 1 — Sign-Off
+      const ws1 = wb.addWorksheet('Sign-Off');
+      await buildSignOffSheet(ws1, params.distributor, params.audit, params.items);
+
+      // Sheet 2 — Article Level Format
+      const ws2 = wb.addWorksheet('Article Level');
+      await buildALFSheet(ws2, params.distributor, params.audit, params.items);
+
       const buffer = await wb.xlsx.writeBuffer();
       const blob   = new Blob([buffer], {
         type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',

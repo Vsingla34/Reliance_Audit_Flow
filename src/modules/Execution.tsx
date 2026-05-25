@@ -666,15 +666,31 @@ export function ExecutionModule() {
   const { exportSignOff, isExporting } = useSignOffExport({
     distributor: activeTicketDist,
     audit: {
-      // auditTickets.id used as serial no (no dedicated serial column in schema)
       id:            activeTicket?.id ?? '',
       serialNo:      activeTicket?.signOffs?.auditSerialNo ?? activeTicket?.id ?? '',
       scheduledDate: activeTicket?.scheduledDate ?? null,
       approvedValue: activeTicket?.approvedValue ?? 0,
       verifiedTotal: activeTicket?.verifiedTotal ?? 0,
-      // firmName is always hardcoded in the hook to "Singla Vishal & Co."
     },
-    items,
+    // Pass ALL fields from auditLineItems so the ALF sheet has gst, standardPack, dates, etc.
+    items: items.map(i => ({
+      articleNumber:  i.articleNumber,
+      description:    i.description,
+      qtyDamaged:     i.qtyDamaged     || 0,
+      qtyNonSaleable: i.qtyNonSaleable || 0,
+      qtyBBD:         i.qtyBBD         || 0,
+      unitValue:      i.unitValue       || 0,
+      // These come from auditLineItems columns
+      mfgDate:        i.mfgDate    || '',
+      expDate:        i.expDate    || '',
+      productLife:    i.productLife || '',
+      reasonCode:     i.reasonCode  || '',
+      remarks:        i.remarks     || '',
+      // gst and standardPack are on itemMaster but stored in salesDump rows —
+      // we read them from the dumpItemMap if available
+      gst:            (dumpItemMap[i.articleNumber] as any)?.gst         || 0,
+      standardPack:   (dumpItemMap[i.articleNumber] as any)?.standardPack || '',
+    })),
   });
 
   if (activeTicket) {
