@@ -42,15 +42,47 @@ export function MastersModule() {
     const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = filename; link.click();
   };
 
-  // --- SMART HEADER PARSER HELPER ---
+  // ── PROPER CSV LINE PARSER ─────────────────────────────────────────────────
+  // Handles quoted fields that contain commas (e.g. " 472,145.17 ")
+  // Standard line.split(',') breaks on the comma inside quotes — this does not.
+  const parseCSVLine = (line: string): string[] => {
+    const result: string[] = [];
+    let current = '';
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') {
+        inQuotes = !inQuotes;
+      } else if (ch === ',' && !inQuotes) {
+        result.push(current.trim().replace(/\r/g, ''));
+        current = '';
+      } else {
+        current += ch;
+      }
+    }
+    result.push(current.trim().replace(/\r/g, ''));
+    return result;
+  };
+
+  // ── SMART HEADER COLUMN LOOKUP ─────────────────────────────────────────────
   const getColValue = (headers: string[], rowVals: string[], possibleNames: string[]) => {
     for (const name of possibleNames) {
-      const idx = headers.findIndex(h => h.toLowerCase() === name.toLowerCase() || h.toLowerCase().replace(/\s/g, '') === name.toLowerCase().replace(/\s/g, ''));
+      const idx = headers.findIndex(
+        h => h.toLowerCase() === name.toLowerCase() ||
+             h.toLowerCase().replace(/\s/g, '') === name.toLowerCase().replace(/\s/g, '')
+      );
       if (idx !== -1) return rowVals[idx]?.trim() || '';
     }
     return '';
   };
 
+  // ── SAFE NUMBER PARSERS ────────────────────────────────────────────────────
+  // Strips commas, spaces, %, currency symbols before parsing
+  // e.g. " 472,145.17 " → 472145.17 | "40%" → 40
+  const parseNum  = (s: string) => parseFloat(s.replace(/[^0-9.]/g, '')) || 0;
+  const parseInt2 = (s: string) => parseInt(s.replace(/[^0-9]/g, ''), 10) || 0;
+
+  // ── ITEM MASTER UPLOAD ─────────────────────────────────────────────────────
   const handleItemMasterUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !user || !profile) return;
@@ -63,10 +95,10 @@ export function MastersModule() {
         const lines = text.split('\n').filter(line => line.trim() !== '');
         if (lines.length < 2) throw new Error("File is empty or missing headers");
 
-        const headers = lines[0].split(',').map(h => h.trim().replace(/['"\r]/g, ''));
+        const headers = parseCSVLine(lines[0]).map(h => h.replace(/['"]/g, ''));
         
         const rawItems = lines.slice(1).map(line => {
-          const cols = line.split(',');
+          const cols = parseCSVLine(line);
           
           const itemCode = getColValue(headers, cols, ['ItemCode', 'MaterialNo']);
           const itemName = getColValue(headers, cols, ['ItemName', 'Description']);
@@ -81,7 +113,7 @@ export function MastersModule() {
             id: Math.random().toString(36).substring(7), 
             itemCode, 
             itemName, 
-            gst: parseFloat(gst) || 0, 
+            gst: parseNum(gst), 
             category: category || 'Uncategorized', 
             approxShelfLife: approxShelfLife || 'N/A', 
             standardPack: standardPack || 'N/A' 
@@ -90,16 +122,11 @@ export function MastersModule() {
 
         if (rawItems.length === 0) throw new Error("No valid data found in CSV.");
 
-        // --- 🔥 DEDUPLICATION FIX 🔥 ---
-        // Automatically removes duplicate ItemCodes before sending to Supabase
+        // Deduplicate by itemCode
         const uniqueDataMap = new Map();
-        rawItems.forEach((item: any) => {
-          uniqueDataMap.set(item.itemCode, item);
-        });
-        
+        rawItems.forEach((item: any) => uniqueDataMap.set(item.itemCode, item));
         const items = Array.from(uniqueDataMap.values());
         const duplicatesRemoved = rawItems.length - items.length;
-        // ---------------------------------
 
         setItemProgress({ current: 0, total: items.length });
 
@@ -111,9 +138,7 @@ export function MastersModule() {
           processed += batch.length; setItemProgress({ current: processed, total: items.length });
         }
         
-        // --- ACTIVITY LOG TRIGGER ---
         logActivity(user, profile, "Master Data Uploaded", `Uploaded/Updated ${items.length} items in the Item Master.`);
-        
         alert(`Success! ${items.length} items uploaded to the Master.\n${duplicatesRemoved > 0 ? `(Skipped ${duplicatesRemoved} duplicate entries found in your file)` : ''}`);
       } catch (error: any) { alert(`Upload failed: ${error.message || 'Invalid CSV format'}`); } 
       finally { setIsUploadingItem(false); setItemProgress({ current: 0, total: 0 }); if (itemFileRef.current) itemFileRef.current.value = ''; }
@@ -121,6 +146,7 @@ export function MastersModule() {
     reader.readAsText(file);
   };
 
+  // ── SALES DUMP UPLOAD ──────────────────────────────────────────────────────
   const handleSalesDumpUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !user || !profile) return;
@@ -133,44 +159,51 @@ export function MastersModule() {
         const lines = text.split('\n').filter(line => line.trim() !== '');
         if (lines.length < 2) throw new Error("File is empty or missing headers");
 
-        const headers = lines[0].split(',').map(h => h.trim().replace(/['"\r]/g, ''));
+        // Use proper CSV parser for headers too
+        const headers = parseCSVLine(lines[0]).map(h => h.replace(/['"]/g, ''));
         
         const dumpItems = lines.slice(1).map(line => {
-          const cols = line.split(',');
+          // ── KEY FIX: use parseCSVLine instead of line.split(',') ──────────
+          // The old split(',') broke quoted fields like " 472,145.17 " into
+          // two separate columns, making TotalValue = 472 instead of 472145.17
+          const cols = parseCSVLine(line);
 
-          // SMART PARSING: Finds the column regardless of where it is in the CSV
           const soldToParty = getColValue(headers, cols, ['SoldToParty', 'DistributorCode']);
-          const materialNo = getColValue(headers, cols, ['MaterialNo', 'ItemCode']);
-          
-          const totalQtyStr = getColValue(headers, cols, ['TotalQty', 'Quantity', 'Qty']);
-          const totalValueStr = getColValue(headers, cols, ['TotalValue', 'Value', 'Total Value']);
+          const materialNo  = getColValue(headers, cols, ['MaterialNo', 'ItemCode']);
           
           if (!soldToParty || !materialNo) return null;
-          
-          const totalQty = parseInt(totalQtyStr) || 0;
-          const totalValue = parseFloat(totalValueStr) || 0;
-          
-          // Calculates the Rate dynamically for the execution form
-          const rate = totalQty > 0 ? (totalValue / totalQty) : 0;
+
+          const totalQtyStr   = getColValue(headers, cols, ['TotalQty', 'Quantity', 'Qty']);
+          const totalValueStr = getColValue(headers, cols, ['TotalValue', 'Value', 'Total Value']);
+          const gstStr        = getColValue(headers, cols, ['GST']);
+
+          // ── KEY FIX: strip commas/spaces before parsing ──────────────────
+          // " 472,145.17 " → parseFloat strips → 472145.17 ✓
+          // Old code: parseFloat(" 472,145.17 ") = NaN → 0 ✗
+          const totalQty   = parseInt2(totalQtyStr);
+          const totalValue = parseNum(totalValueStr);
+
+          // Rate = TotalValue ÷ TotalQty  (weighted avg per-unit price)
+          const rate = totalQty > 0 ? totalValue / totalQty : 0;
           
           return {
-            id: Math.random().toString(36).substring(7),
+            id:              Math.random().toString(36).substring(7),
             distributorCode: soldToParty,
-            itemCode: materialNo,
-            quantity: totalQty,
-            rate: rate,
-            billingDate: getColValue(headers, cols, ['BillingDate', 'Date']),
-            soldToParty: soldToParty,
-            materialNo: materialNo,
-            plant: getColValue(headers, cols, ['Plant']),
-            billingDoc: getColValue(headers, cols, ['BillingDoc', 'InvoiceNo']),
-            category: getColValue(headers, cols, ['Category']),
-            totalValue: totalValue,
-            totalQty: totalQty,
-            itemName: getColValue(headers, cols, ['ItemName', 'Description']),
-            gst: parseFloat(getColValue(headers, cols, ['GST'])) || 0,
+            itemCode:        materialNo,
+            quantity:        totalQty,
+            rate:            rate,
+            billingDate:     getColValue(headers, cols, ['BillingDate', 'Date']),
+            soldToParty:     soldToParty,
+            materialNo:      materialNo,
+            plant:           getColValue(headers, cols, ['Plant']),
+            billingDoc:      getColValue(headers, cols, ['BillingDoc', 'InvoiceNo']),
+            category:        getColValue(headers, cols, ['Category']),
+            totalValue:      totalValue,
+            totalQty:        totalQty,
+            itemName:        getColValue(headers, cols, ['ItemName', 'Description']),
+            gst:             parseNum(gstStr),
             approxShelfLife: getColValue(headers, cols, ['ApproxShelfLife', 'ShelfLife']),
-            standardPack: getColValue(headers, cols, ['StandardPack'])
+            standardPack:    getColValue(headers, cols, ['StandardPack']),
           };
         }).filter(Boolean);
 
@@ -185,9 +218,7 @@ export function MastersModule() {
           processed += batch.length; setSalesProgress({ current: processed, total: dumpItems.length });
         }
         
-        // --- ACTIVITY LOG TRIGGER ---
         logActivity(user, profile, "Sales Dump Uploaded", `Appended ${dumpItems.length} records to the global Sales Dump.`);
-        
         alert(`Success! ${dumpItems.length} records appended to the Sales Dump.`);
       } catch (error: any) { alert(`Upload failed: ${error.message || 'Invalid CSV format'}`); } 
       finally { setIsUploadingSales(false); setSalesProgress({ current: 0, total: 0 }); if (salesFileRef.current) salesFileRef.current.value = ''; }
@@ -197,19 +228,13 @@ export function MastersModule() {
 
   const clearSalesDump = async () => {
     if (!user || !profile) return;
-    
-    // HARD SECURITY CHECK: Only SuperAdmin can execute
     if (profile.role !== 'superadmin') return alert("Action Denied: Only SuperAdmins can delete database contents.");
-    
     if (window.confirm("WARNING: This will permanently delete ALL data in the Sales Dump. Do you want to continue?")) {
       setIsClearingSales(true);
       try {
         const { error } = await supabase.from('salesDump').delete().neq('id', '0');
         if (error) throw error; 
-        
-        // --- ACTIVITY LOG TRIGGER ---
         logActivity(user, profile, "Sales Dump Cleared", `WARNING: Action executed. Entire Sales Dump database was wiped.`);
-        
         alert("Sales Dump has been completely cleared.");
       } catch (error) { alert("Failed to clear Sales Dump."); } 
       finally { setIsClearingSales(false); }
@@ -218,26 +243,19 @@ export function MastersModule() {
 
   const clearItemMaster = async () => {
     if (!user || !profile) return;
-
-    // HARD SECURITY CHECK: Only SuperAdmin can execute
     if (profile.role !== 'superadmin') return alert("Action Denied: Only SuperAdmins can delete database contents.");
-    
     if (window.confirm("WARNING: This will permanently delete ALL products in the Item Master. Do you want to continue?")) {
       setIsClearingItems(true);
       try {
         const { error } = await supabase.from('itemMaster').delete().neq('id', '0');
         if (error) throw error; 
-        
-        // --- ACTIVITY LOG TRIGGER ---
         logActivity(user, profile, "Item Master Cleared", `WARNING: Action executed. Entire Item Master database was wiped.`);
-        
         alert("Item Master has been completely cleared.");
       } catch (error) { alert("Failed to clear Item Master."); } 
       finally { setIsClearingItems(false); }
     }
   };
 
-  // RESTRICT PAGE ACCESS
   if (!['superadmin', 'admin', 'ho'].includes(profile?.role || '')) return <div className="p-8 text-center text-red-500 font-bold">Access Denied. Admins & HO only.</div>;
 
   return (
@@ -260,7 +278,6 @@ export function MastersModule() {
             <div className="p-4 bg-zinc-50 rounded-xl border border-zinc-100"><p className="font-bold text-zinc-900 mb-2 text-xs uppercase">Required Columns:</p><code className="text-xs text-blue-600">ItemCode, ItemName, GST, Category, ApproxShelfLife, StandardPack</code></div>
           </div>
           <div className="space-y-3 mt-auto">
-            {/* Dynamic Grid based on role */}
             <div className={cn("grid gap-3", profile?.role === 'superadmin' ? "grid-cols-2" : "grid-cols-1")}>
               <button onClick={downloadItemTemplate} disabled={isUploadingItem} className="w-full py-3 bg-zinc-100 hover:bg-zinc-200 text-zinc-900 rounded-xl font-bold text-sm transition-colors flex items-center justify-center gap-2 disabled:opacity-50"><Download size={16} /> Template</button>
               {profile?.role === 'superadmin' && (
@@ -291,7 +308,6 @@ export function MastersModule() {
             </div>
           </div>
           <div className="space-y-3 mt-auto">
-            {/* Dynamic Grid based on role */}
             <div className={cn("grid gap-3", profile?.role === 'superadmin' ? "grid-cols-2" : "grid-cols-1")}>
               <button onClick={downloadSalesTemplate} disabled={isUploadingSales} className="w-full py-3 bg-zinc-100 hover:bg-zinc-200 text-zinc-900 rounded-xl font-bold text-sm transition-colors flex items-center justify-center gap-2 disabled:opacity-50"><Download size={16} /> Template</button>
               {profile?.role === 'superadmin' && (

@@ -45,6 +45,8 @@ export function SchedulerModule() {
   const [auditorSearch, setAuditorSearch] = useState('');
 
   const isAdminOrHO = ['superadmin', 'admin', 'ho'].includes(profile?.role || '');
+  // ── HO can VIEW everything but cannot edit assignments or force-schedule ──
+  const canEdit = ['superadmin', 'admin'].includes(profile?.role || '');
 
   const distMap = useMemo(() => {
     const map: Record<string, any> = {};
@@ -177,7 +179,6 @@ export function SchedulerModule() {
         
         if (error) throw error;
       } else {
-        // Omitting 'id' so Supabase auto-generates the UUID securely
         const newTicket = {
           distributorId: createData.distributorId,
           proposedDate: createData.proposedDate,
@@ -548,7 +549,8 @@ export function SchedulerModule() {
             </div>
           )}
 
-          {isAdminOrHO && (
+          {/* ── PATCH: canEdit (superadmin/admin only) gates Force Schedule ── */}
+          {canEdit && (
             <button onClick={() => setIsCreateModalOpen(true)} className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-3 sm:py-3.5 bg-black text-white rounded-xl font-bold hover:bg-zinc-800 transition-all shadow-md active:scale-95 text-sm">
               <Plus size={18} /> Force Schedule
             </button>
@@ -659,7 +661,8 @@ export function SchedulerModule() {
                               if (ticket.status === 'tentative') {
                                 openNegotiationModal(ticket.distributorId);
                               } else {
-                                if (isAdminOrHO) {
+                                {/* ── PATCH: only superadmin/admin can open edit modal ── */}
+                                if (canEdit) {
                                   setEditingActiveTicket(ticket);
                                   setEditTicketData({ scheduledDate: ticket.scheduledDate || '', auditorIds: ticket.auditorIds || [] });
                                 } else if (profile?.role === 'ase' && ticket.status === 'scheduled') {
@@ -670,9 +673,10 @@ export function SchedulerModule() {
                             className={cn(
                               "p-1.5 sm:p-2 rounded-lg sm:rounded-xl text-[10px] sm:text-xs border transition-all", 
                               ticket.status === 'tentative' ? "bg-amber-50 border-amber-200 hover:shadow-md cursor-pointer hover:-translate-y-0.5" : 
-                              cn("bg-emerald-50 border-emerald-100/50", (isAdminOrHO || (profile?.role === 'ase' && ticket.status === 'scheduled')) ? "cursor-pointer hover:shadow-md hover:border-emerald-300 hover:-translate-y-0.5" : "cursor-default")
+                              
+                              cn("bg-emerald-50 border-emerald-100/50", (canEdit || (profile?.role === 'ase' && ticket.status === 'scheduled')) ? "cursor-pointer hover:shadow-md hover:border-emerald-300 hover:-translate-y-0.5" : "cursor-default")
                             )} 
-                            title={ticket.status === 'tentative' ? 'Click to view dates' : (isAdminOrHO ? 'Click to edit assignment' : (profile?.role === 'ase' ? 'Click to request reschedule' : 'Scheduled'))}
+                            title={ticket.status === 'tentative' ? 'Click to view dates' : (canEdit ? 'Click to edit assignment' : (profile?.role === 'ase' ? 'Click to request reschedule' : 'Scheduled'))}
                           >
                             <p className="font-bold text-zinc-900 truncate mb-0.5 sm:mb-1 leading-tight">{dist?.name || 'Unknown'}</p>
                             
@@ -716,7 +720,6 @@ export function SchedulerModule() {
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => { setEditingActiveTicket(null); setAuditorSearch(''); }} className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
             <motion.div initial={{ opacity: 0, scale: 0.9, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9, y: 20 }} className="relative w-full max-w-md bg-white rounded-[1.5rem] sm:rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
               
-              {/* Form wrapping the entire modal content */}
               <form id="edit-ticket-form" onSubmit={handleEditActiveTicketSubmit} className="flex flex-col h-full">
                 
                 <div className="flex justify-between items-start sm:items-center p-5 sm:p-8 mb-0 shrink-0 border-b border-zinc-100">
@@ -782,12 +785,12 @@ export function SchedulerModule() {
                   </div>
                 </div>
                 <div className="flex items-center gap-1 sm:gap-2">
-                  {isAdminOrHO && currentNegTicket && <button onClick={() => deleteTicket(currentNegTicket.id)} className="p-1.5 sm:p-2 text-zinc-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Delete this ticket"><Trash2 size={18}/></button>}
+                  {/* ── PATCH: only superadmin/admin can delete ticket from negotiation modal ── */}
+                  {canEdit && currentNegTicket && <button onClick={() => deleteTicket(currentNegTicket.id)} className="p-1.5 sm:p-2 text-zinc-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Delete this ticket"><Trash2 size={18}/></button>}
                   <button onClick={() => setIsNegotiationModalOpen(false)} className="p-1.5 sm:p-2 hover:bg-zinc-100 rounded-lg transition-colors"><X size={18}/></button>
                 </div>
               </div>
               
-              {/* Dynamic Selector: Only show if we don't have a ticket yet */}
               {!currentNegTicket && (
                 <div className="p-4 sm:p-5 md:p-6 bg-zinc-50 border-b border-zinc-200 shrink-0 space-y-3">
                   {isAdminOrHO && (
@@ -820,7 +823,6 @@ export function SchedulerModule() {
                     <MessageSquare size={28} className="mx-auto mb-2 opacity-50" />
                     <p className="text-xs sm:text-sm font-medium">{isAdminOrHO ? 'Request a date proposal from the ASE below.' : 'No messages yet. Send a proposal below to start.'}</p>
                     
-                    {/* --- ADMIN QUICK ACTION: REQUEST DATE --- */}
                     {isAdminOrHO && (
                       <button onClick={handleAdminRequestDate} className="mt-4 px-6 py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 shadow-md active:scale-95 transition-all text-sm">
                         Request Date from ASE
@@ -864,7 +866,6 @@ export function SchedulerModule() {
                 )}
               </div>
 
-              {/* Form is only shown to ASEs, OR to Admins if the ticket already has history. */}
               {((profile?.role === 'ase') || (isAdminOrHO && currentNegTicket)) && (
                 <div className="p-4 sm:p-5 md:p-6 bg-white border-t border-zinc-100 shrink-0">
                   <form onSubmit={submitProposal} className="space-y-3">
@@ -890,7 +891,6 @@ export function SchedulerModule() {
                     </div>
                   </form>
                   
-                  {/* 🚨 LATE CANCELLATION BUTTON 🚨 */}
                   {canCancelToday && (
                     <div className="mt-4 pt-4 border-t border-zinc-100">
                       <button type="button" onClick={cancelAssignment} className="w-full py-2.5 bg-red-50 text-red-600 font-bold rounded-xl border border-red-200 hover:bg-red-100 transition-colors flex justify-center items-center gap-2">
@@ -912,7 +912,6 @@ export function SchedulerModule() {
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsCreateModalOpen(false)} className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
             <motion.div initial={{ opacity: 0, scale: 0.9, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9, y: 20 }} className="relative w-full max-w-md bg-white rounded-[1.5rem] sm:rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
               
-              {/* Form wrapping the entire modal content */}
               <form id="force-schedule-form" onSubmit={handleCreateSubmit} className="flex flex-col h-full">
                 
                 <div className="flex justify-between items-center p-5 sm:p-6 border-b border-zinc-100 shrink-0">

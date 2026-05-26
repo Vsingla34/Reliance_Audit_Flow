@@ -165,16 +165,18 @@ async function buildSignOffSheet(
     { width: 12 }, { width: 6  }, { width: 10 }, { width: 6  },
   ];
 
-  // Aggregate
+  // Aggregate — multiple auditLineItems rows for the same article (one per damage type)
+  // are collapsed into ONE row with qty split by type and values = qty × unitValue
   const agg = new Map<string, { desc:string; dmg:number; ns:number; bbd:number; uv:number; }>();
   for (const item of items) {
     if (!agg.has(item.articleNumber))
-      agg.set(item.articleNumber, { desc: item.description, dmg:0, ns:0, bbd:0, uv: item.unitValue });
+      agg.set(item.articleNumber, { desc: item.description, dmg:0, ns:0, bbd:0, uv:0 });
     const a = agg.get(item.articleNumber)!;
     a.dmg += item.qtyDamaged     || 0;
     a.ns  += item.qtyNonSaleable || 0;
     a.bbd += item.qtyBBD         || 0;
-    a.uv   = item.unitValue      || 0;
+    // Keep the highest non-zero unitValue seen across all split rows for this article
+    if ((item.unitValue || 0) > a.uv) a.uv = item.unitValue;
   }
   const rows   = [...agg.values()];
   const qtyDmg = rows.reduce((s,v) => s+v.dmg, 0);
@@ -195,7 +197,7 @@ async function buildSignOffSheet(
 
   // ROW 1 — Title
   nextRow(18); safeMerge(ws,r,1,r,14);
-  scT(ws,r,1,'Audit Report - Phase V Part 1 Beverage',{bold:true,size:12,hAlign:'center',vAlign:'middle',wrap:false});
+  scT(ws,r,1,'Audit Report - Phase V Part 2 Beverage',{bold:true,size:12,hAlign:'center',vAlign:'middle',wrap:false});
 
   // ROW 2-7 — Info block
   const addrParts = [dist.name,dist.address,dist.city,dist.state,dist.region].filter(Boolean);
@@ -248,20 +250,23 @@ async function buildSignOffSheet(
     scT(ws,r,c1,val,{hAlign:'center',vAlign:'middle',wrap:false,numFmt:fmt});
   }
 
-  // Individual item rows
-  if (agg.size>1) {
-    for (const [,v] of agg) {
-      nextRow(16);
-      const qT=v.dmg+v.ns+v.bbd, vT=qT*v.uv;
-      const id: Array<[number,number,ExcelJS.CellValue,string]> = [
-        [1,1,fmtQ(v.dmg),'#,##0;-'],[2,2,fmtQ(v.ns),'#,##0;-'],[3,3,fmtQ(v.bbd),'#,##0;-'],[4,4,qT,'#,##0;-'],
-        [5,5,fmtV(v.dmg*v.uv),'#,##0.00;-'],[6,7,fmtV(v.ns*v.uv),'#,##0.00;-'],[8,8,fmtV(v.bbd*v.uv),'#,##0.00;-'],[9,10,vT,'#,##0.00;-'],
-        [11,12,'',''],[13,14,'',''],
-      ];
-      for (const [c1,c2,val,fmt] of id) {
-        if(c1!==c2) safeMerge(ws,r,c1,r,c2);
-        scT(ws,r,c1,val,{size:9,hAlign:'center',vAlign:'middle',wrap:false,numFmt:fmt||undefined});
-      }
+  // Individual item rows — ONE row per unique article (already aggregated above)
+  // Shows even when there is only 1 article
+  for (const [code, v] of agg) {
+    nextRow(16);
+    const qT = v.dmg + v.ns + v.bbd;
+    const vDmg = v.dmg * v.uv;
+    const vNs  = v.ns  * v.uv;
+    const vBbd = v.bbd * v.uv;
+    const vT   = vDmg + vNs + vBbd;
+    const id: Array<[number,number,ExcelJS.CellValue,string]> = [
+      [1,1,fmtQ(v.dmg),'#,##0;-'],[2,2,fmtQ(v.ns),'#,##0;-'],[3,3,fmtQ(v.bbd),'#,##0;-'],[4,4,qT,'#,##0;-'],
+      [5,5,fmtV(vDmg),'#,##0.00;-'],[6,7,fmtV(vNs),'#,##0.00;-'],[8,8,fmtV(vBbd),'#,##0.00;-'],[9,10,vT,'#,##0.00;-'],
+      [11,12,'',''],[13,14,'',''],
+    ];
+    for (const [c1,c2,val,fmt] of id) {
+      if(c1!==c2) safeMerge(ws,r,c1,r,c2);
+      scT(ws,r,c1,val,{size:9,hAlign:'center',vAlign:'middle',wrap:false,numFmt:fmt||undefined});
     }
   }
 
@@ -455,7 +460,8 @@ async function buildALFSheet(
     } catch { return ''; }
   };
 
-  // Aggregate items by articleNumber (same as sign-off — one row per unique article)
+  // Aggregate items by articleNumber — one row per unique article
+  // Multiple auditLineItems rows for same article (BBD/NS/Damage splits) are collapsed
   const agg = new Map<string, {
     item: SignOffItem; dmg:number; ns:number; bbd:number;
   }>();
@@ -467,8 +473,12 @@ async function buildALFSheet(
     a.dmg += item.qtyDamaged     || 0;
     a.ns  += item.qtyNonSaleable || 0;
     a.bbd += item.qtyBBD         || 0;
-    // Keep the most complete item metadata
-    if (item.mfgDate) a.item = { ...a.item, ...item };
+    // Keep highest non-zero unitValue and most complete metadata
+    if ((item.unitValue || 0) > (a.item.unitValue || 0)) {
+      a.item = { ...a.item, ...item };
+    } else if (item.mfgDate && !a.item.mfgDate) {
+      a.item = { ...a.item, ...item };
+    }
   }
 
   const INR  = '[$₹-en-IN]#,##0.00;-';
@@ -570,49 +580,75 @@ async function buildALFSheet(
   // MFD & Auditor cols — blank on totals
   for (let c=24; c<=29; c++) scA(ws, dataRow, c, '', { fill:C.TOTAL_ROW });
 
-  // ── DECLARATION ROWS
-  // Template: col C (col 3) is 165 wide — declarations written directly to col 3, NO merges
-  // Row offsets match template: totals row + 3 blank rows = declStartRow
+  // ── DECLARATION + SIGN SECTION
+  // All rows from here to the end: white fill, NO cell borders (invisible grid)
   const declStartRow = dataRow + 3;
+  const sealRow      = declStartRow + 9;  // decl(4) + spacer(1) + signRow + firmRow + 2blank + sealRow
 
+  // Helper: set every cell in a row to white + no border
+  const clearRow = (rowNum: number, h = 16) => {
+    ws.getRow(rowNum).height = h;
+    for (let c = 1; c <= 29; c++) {
+      const cell = ws.getRow(rowNum).getCell(c);
+      cell.fill   = solidFill(C.WHITE);
+      cell.border = {};
+    }
+  };
+
+  // Helper: write text with no border / no fill (just font)
+  const writeClean = (
+    rowNum: number, col: number, value: string,
+    opts: { bold?: boolean; underline?: boolean; size?: number; wrap?: boolean } = {}
+  ) => {
+    const cell = ws.getRow(rowNum).getCell(col);
+    cell.value     = value;
+    cell.font      = ariFont({ bold: opts.bold, underline: opts.underline, size: opts.size ?? 10 });
+    cell.alignment = alnStyle('left', opts.wrap ? 'top' : 'middle', opts.wrap ?? false);
+    // no fill, no border — clearRow already handled that
+  };
+
+  // Clear spacer rows between totals and declarations
+  clearRow(dataRow + 1);
+  clearRow(dataRow + 2);
+
+  // Declaration point rows (4 rows) — clear all cols, text in col C only
   const declPts = [
     '1. This is to certify that the quantity mentioned in report is final for all the issues related to quality / leakage / breakage / damage / BBD / Primary or transit damage till the date of Audit. ',
     "2. No Stock shall be taken into consideration before Oct'23 Manufacturing date. ",
     '3. Stock with above-mentioned quality & value has been verified and drained in front of us and no further claim shall be raised by for such cases in future.',
     '4. We understood that, value mentioned in Audit report is indicative and final claim value shall be accessed by Reliance before processing the expiry claim.',
   ];
-
   for (let i = 0; i < declPts.length; i++) {
     const dr = declStartRow + i;
-    ws.getRow(dr).height = 20;
-    // Write to col C (3) only — it is 165 wide in the template, no merge needed
-    scA(ws, dr, 3, declPts[i], { size: 9, hAlign: 'left', vAlign: 'top', wrap: true });
+    clearRow(dr, 20);
+    writeClean(dr, 3, declPts[i], { size: 9, wrap: true });
   }
 
-  // ── SIGN-OFF SECTION
-  // Template exact column positions (no merges — just individual cells):
-  //   Col C  (3)  : "Customer's Authorised person Name -"  |  "Seal & Sign -"
-  //   Col O  (15) : "3rd Party Auditor"  |  firm name  |  "Auditor Sign"
-  //   Col AB (28) : "Sales Team Name & contact no."  |  "Sign"
-  // Rows follow template: declStartRow + 4 blank rows = signRow (equiv to template row 69)
+  // Spacer row between declarations and sign section
+  clearRow(declStartRow + 4);
 
+  // Sign row: "Customer's Authorised..." | "3rd Party Auditor" | "Sales Team Name..."
   const signRow = declStartRow + 5;
-  ws.getRow(signRow).height = 20;
-  scA(ws, signRow, 3,  "Customer's Authorised person Name -", { size: 10, hAlign: 'left', bold: true, underline: true });
-  scA(ws, signRow, 15, '3rd Party Auditor',                   { size: 10, hAlign: 'left', bold: true });
-  scA(ws, signRow, 28, 'Sales Team Name & contact no.',       { size: 10, hAlign: 'left', bold: true, underline: true });
+  clearRow(signRow, 20);
+  writeClean(signRow, 3,  "Customer's Authorised person Name -", { bold: true, underline: true });
+  writeClean(signRow, 15, '3rd Party Auditor',                   { bold: true });
+  writeClean(signRow, 28, 'Sales Team Name & contact no.',       { bold: true, underline: true });
 
-  // Firm name row (template row 70)
+  // Firm name row (under 3rd Party Auditor)
   const firmRow = signRow + 1;
-  ws.getRow(firmRow).height = 18;
-  scA(ws, firmRow, 15, firmName, { size: 10, hAlign: 'left' });
+  clearRow(firmRow, 18);
+  writeClean(firmRow, 15, firmName);
 
-  // Seal & Sign + Auditor Sign + Sign row (template row 73 = signRow + 4)
-  const sealRow = signRow + 4;
-  ws.getRow(sealRow).height = 18;
-  scA(ws, sealRow, 3,  'Seal & Sign -', { size: 10, hAlign: 'left', bold: true, underline: true });
-  scA(ws, sealRow, 15, 'Auditor Sign',  { size: 10, hAlign: 'left', bold: true, underline: true });
-  scA(ws, sealRow, 28, 'Sign',          { size: 10, hAlign: 'left' });
+  // Two blank spacer rows
+  clearRow(firmRow + 1);
+  clearRow(firmRow + 2);
+
+  // Seal row: "Seal & Sign -" | "Auditor Sign" | "Sign"
+  const finalSealRow = signRow + 4;
+  clearRow(finalSealRow, 18);
+  writeClean(finalSealRow, 3,  'Seal & Sign -', { bold: true, underline: true });
+  writeClean(finalSealRow, 15, 'Auditor Sign',  { bold: true, underline: true });
+  writeClean(finalSealRow, 28, 'Sign');
 
   // NO freeze pane — original template has none
 }

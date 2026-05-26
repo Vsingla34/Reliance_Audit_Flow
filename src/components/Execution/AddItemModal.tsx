@@ -39,6 +39,7 @@ export function AddItemModal({ isOpen, onClose, activeTicket, distributor, avail
   const [mfgDate, setMfgDate] = useState('');
   const [expDate, setExpDate] = useState('');
   const [productLife, setProductLife] = useState('-');
+  const [remarks, setRemarks] = useState('');
 
   // --- MANUAL MODE: item master state ---
   const [masterSearch, setMasterSearch] = useState('');
@@ -78,14 +79,14 @@ export function AddItemModal({ isOpen, onClose, activeTicket, distributor, avail
     setTimeout(() => {
       setSearchQuery(''); setVisibleCount(50); setSelectedDumpItem(null); setIsManualMode(false);
       setQtyNonSaleable(''); setQtyBBD(''); setQtyDamaged('');
-      setMfgDate(''); setExpDate(''); setProductLife('-');
+      setMfgDate(''); setExpDate(''); setProductLife('-'); setRemarks('');
       setMasterSearch(''); setMasterList([]); setSelectedMasterItem(null);
     }, 200);
   };
 
   const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => { setSearchQuery(e.target.value); setVisibleCount(50); };
 
-  // Core save logic — unchanged from original
+  // Core save logic
   const saveItemToDatabase = async (articleNumber: string, description: string, unitValue: number, qNonSaleable: number, qBBD: number, qDamaged: number, reason: string, category: string) => {
     const finalQty = qNonSaleable + qBBD + qDamaged;
     if (finalQty === 0) return alert("Total quantity cannot be zero.");
@@ -104,26 +105,30 @@ export function AddItemModal({ isOpen, onClose, activeTicket, distributor, avail
       }
 
       const inserts = [];
+      const itemRemarks = remarks.trim();
 
       if (qDamaged > 0) {
         inserts.push({
           id: Math.random().toString(36).substring(7), ticketId: activeTicket.id, articleNumber, description, category, 
           quantity: qDamaged, qtyNonSaleable: 0, qtyBBD: 0, qtyDamaged: qDamaged,
-          unitValue, totalValue: qDamaged * unitValue, reasonCode: reason, mfgDate, expDate, productLife, bbdApprovalStatus: 'none', qtyDrained: 0
+          unitValue, totalValue: qDamaged * unitValue, reasonCode: reason, mfgDate, expDate, productLife,
+          bbdApprovalStatus: 'none', qtyDrained: 0, remarks: itemRemarks
         });
       }
       if (qNonSaleable > 0) {
         inserts.push({
           id: Math.random().toString(36).substring(7), ticketId: activeTicket.id, articleNumber, description, category, 
           quantity: qNonSaleable, qtyNonSaleable: qNonSaleable, qtyBBD: 0, qtyDamaged: 0,
-          unitValue, totalValue: qNonSaleable * unitValue, reasonCode: reason, mfgDate, expDate, productLife, bbdApprovalStatus: 'none', qtyDrained: 0
+          unitValue, totalValue: qNonSaleable * unitValue, reasonCode: reason, mfgDate, expDate, productLife,
+          bbdApprovalStatus: 'none', qtyDrained: 0, remarks: itemRemarks
         });
       }
       if (qBBD > 0) {
         inserts.push({
           id: Math.random().toString(36).substring(7), ticketId: activeTicket.id, articleNumber, description, category, 
           quantity: qBBD, qtyNonSaleable: 0, qtyBBD: qBBD, qtyDamaged: 0,
-          unitValue, totalValue: qBBD * unitValue, reasonCode: reason, mfgDate, expDate, productLife, bbdApprovalStatus: 'none', qtyDrained: 0
+          unitValue, totalValue: qBBD * unitValue, reasonCode: reason, mfgDate, expDate, productLife,
+          bbdApprovalStatus: 'none', qtyDrained: 0, remarks: itemRemarks
         });
       }
 
@@ -304,6 +309,17 @@ export function AddItemModal({ isOpen, onClose, activeTicket, distributor, avail
               </div>
             </div>
 
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">Remarks (Optional)</label>
+              <input
+                type="text"
+                placeholder="e.g. Leakage observed, packaging damage..."
+                className="w-full px-3 py-2.5 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black outline-none text-sm transition-all"
+                value={remarks}
+                onChange={e => setRemarks(e.target.value)}
+              />
+            </div>
+
             <button type="submit" disabled={totalQty === 0} className="w-full py-4 bg-black text-white rounded-xl font-bold hover:bg-zinc-800 transition-all shadow-lg active:scale-95 text-lg disabled:opacity-50">Save & Split Rows</button>
           </form>
         )}
@@ -431,6 +447,17 @@ export function AddItemModal({ isOpen, onClose, activeTicket, distributor, avail
                     <p className="text-2xl font-black text-black leading-none">{totalQty}</p>
                     <p className="text-[10px] font-bold text-zinc-400 mt-1 uppercase">Life: {productLife}</p>
                   </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">Remarks (Optional)</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Leakage observed, packaging damage..."
+                    className="w-full px-3 py-2.5 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black outline-none text-sm transition-all"
+                    value={remarks}
+                    onChange={e => setRemarks(e.target.value)}
+                  />
                 </div>
 
                 <button type="submit" disabled={totalQty === 0} className="w-full mt-2 py-4 bg-black text-white rounded-xl font-bold hover:bg-zinc-800 transition-all shadow-lg active:scale-95 text-lg disabled:opacity-50">Save & Split Rows</button>

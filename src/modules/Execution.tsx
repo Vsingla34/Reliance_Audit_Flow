@@ -136,9 +136,19 @@ export function ExecutionModule() {
       const { data: dump } = await supabase.from('salesDump').select('*').ilike('distributorCode', distCode.trim());
       if (dump && dump.length > 0) {
         const combined = dump.map(d => {
+          // Strip commas/spaces before parsing — DB may have stored "472,145.17" as string
+          const parseNum = (v: any) => parseFloat(String(v ?? '').replace(/[^0-9.]/g, '')) || 0;
+          const qty  = parseNum(d.quantity);
+          const tv   = parseNum(d.totalValue);
+          // Rate = totalValue ÷ quantity. Falls back to stored d.rate if either is 0.
+          const storedRate = parseNum(d.rate);
+          const rate = qty > 0 && tv > 0 ? tv / qty : storedRate;
           return { 
-            id: d.id, itemCode: d.itemCode, itemName: d.itemName || 'Unknown Item', expectedQty: d.quantity, rate: d.rate, category: d.category || 'Uncategorized',
-            billingDate: d.billingDate, plant: d.plant, billingDoc: d.billingDoc, gst: d.gst, approxShelfLife: d.approxShelfLife, standardPack: d.standardPack
+            id: d.id, itemCode: d.itemCode, itemName: d.itemName || 'Unknown Item',
+            expectedQty: qty, rate, category: d.category || 'Uncategorized',
+            billingDate: d.billingDate, plant: d.plant, billingDoc: d.billingDoc,
+            gst: d.gst, approxShelfLife: d.approxShelfLife, standardPack: d.standardPack,
+            totalValue: tv,
           };
         });
         setAvailableDumpItems(combined);
@@ -931,6 +941,7 @@ export function ExecutionModule() {
                         <th className="px-3 py-3 sm:py-4 text-center font-bold text-cyan-600 bg-cyan-50/50 border-r border-cyan-100 uppercase tracking-wider text-[11px]">Drained Qty</th>
                         <th className="px-4 py-3 sm:py-4 text-right font-bold text-slate-500 uppercase tracking-wider text-[11px]">Rate</th>
                         <th className="px-4 py-3 sm:py-4 text-right font-bold text-slate-500 uppercase tracking-wider text-[11px]">Total Value</th>
+                        <th className="px-3 py-3 sm:py-4 text-left font-bold text-slate-500 uppercase tracking-wider text-[11px]">Remarks</th>
                         {canEditItems && <th className="px-3 py-3 sm:py-4 text-center font-bold text-slate-500 uppercase tracking-wider text-[11px]">Actions</th>}
                       </tr>
                     </thead>
@@ -1023,6 +1034,29 @@ export function ExecutionModule() {
                             <td className="px-4 py-3 sm:py-4 text-right text-slate-500 text-[10px] sm:text-xs font-medium">₹{item.unitValue.toFixed(2)}</td>
                             <td className="px-4 py-3 sm:py-4 text-right font-black text-slate-900">₹{item.totalValue.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</td>
 
+                            {/* Remarks — editable for auditor and superadmin only */}
+                            <td className="px-3 py-3 sm:py-4 text-left min-w-[140px]">
+                              {(canEditItems || isSuperAdmin) && !isClosedPhase ? (
+                                <input
+                                  type="text"
+                                  placeholder="Add remark..."
+                                  value={item.remarks || ''}
+                                  onChange={e => {
+                                    const val = e.target.value;
+                                    setItems(prev => prev.map(i => i.id === item.id ? { ...i, remarks: val } : i));
+                                    latestEditsRef.current[item.id] = { ...(latestEditsRef.current[item.id] || item), remarks: val };
+                                  }}
+                                  onBlur={() => {
+                                    const toSave = latestEditsRef.current[item.id] || item;
+                                    supabase.from('auditLineItems').update({ remarks: toSave.remarks || '' }).eq('id', item.id).then(({ error }) => { if (error) console.error(error); });
+                                  }}
+                                  className="w-full min-w-[120px] px-2 py-1.5 text-xs font-medium bg-white border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-400 outline-none text-slate-700 placeholder:text-slate-300"
+                                />
+                              ) : (
+                                <span className="text-xs text-slate-600 font-medium">{item.remarks || <span className="text-slate-300 italic">—</span>}</span>
+                              )}
+                            </td>
+
                             {canEditItems && (
                               <td className="px-2 py-3 sm:py-4 text-center align-middle">
                                 <div className="flex items-center justify-center opacity-100 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity">
@@ -1034,10 +1068,10 @@ export function ExecutionModule() {
                         )
                       })}
                       {items.length === 0 && (
-                        <tr><td colSpan={canEditItems ? 13 : 12} className="px-4 py-16 text-center text-slate-400"><PackageSearch size={32} className="mx-auto mb-3 opacity-30 text-indigo-500" /><p className="font-bold text-sm text-slate-500">No items counted yet.</p></td></tr>
+                        <tr><td colSpan={canEditItems ? 14 : 13} className="px-4 py-16 text-center text-slate-400"><PackageSearch size={32} className="mx-auto mb-3 opacity-30 text-indigo-500" /><p className="font-bold text-sm text-slate-500">No items counted yet.</p></td></tr>
                       )}
                       {items.length > 0 && filteredItems.length === 0 && (
-                        <tr><td colSpan={canEditItems ? 13 : 12} className="px-4 py-16 text-center text-slate-400"><Search size={32} className="mx-auto mb-3 opacity-30 text-indigo-500" /><p className="font-bold text-sm text-slate-500">No items match your search.</p></td></tr>
+                        <tr><td colSpan={canEditItems ? 14 : 13} className="px-4 py-16 text-center text-slate-400"><Search size={32} className="mx-auto mb-3 opacity-30 text-indigo-500" /><p className="font-bold text-sm text-slate-500">No items match your search.</p></td></tr>
                       )}
                     </tbody>
                   </table>

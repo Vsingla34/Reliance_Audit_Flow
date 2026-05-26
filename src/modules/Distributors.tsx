@@ -34,7 +34,7 @@ export function DistributorsModule() {
   const [editingDist, setEditingDist] = useState<any | null>(null);
   
   const [formData, setFormData] = useState<any>({
-    code: '', anchorName: '', name: '', approvedValue: 0, 
+    code: '', assignment_serial_no: '', anchorName: '', name: '', approvedValue: 0, 
     hoIds: [], dmIds: [], smIds: [], asmIds: [], aseIds: [], 
     active: true, address: '', city: '', state: '', region: ''
   });
@@ -231,7 +231,7 @@ export function DistributorsModule() {
 
   const resetForm = () => { 
     setFormData({ 
-      code: '', anchorName: '', name: '', approvedValue: 0, 
+      code: '', assignment_serial_no: '', anchorName: '', name: '', approvedValue: 0, 
       hoIds: [], dmIds: [], smIds: [], asmIds: [], aseIds: [], 
       active: true, address: '', city: '', state: '', region: '' 
     }); 
@@ -246,7 +246,8 @@ export function DistributorsModule() {
       smIds: dist.smIds || [], 
       asmIds: dist.asmIds || [], 
       aseIds: dist.aseIds || [], 
-      anchorName: dist.anchorName || '', 
+      anchorName: dist.anchorName || '',
+      assignment_serial_no: dist.assignment_serial_no || '',
       region: dist.region || '',
       address: dist.address || '',
       city: dist.city || '',
@@ -298,10 +299,8 @@ export function DistributorsModule() {
         const newDistributors = lines.slice(1).map(line => {
           const cols = parseCSVRow(line);
           
-          // Ensure we have at least 4 columns to process
           if (cols.length < 4) return null; 
 
-          // --- UPDATED CSV IMPORTER TO MAP 13TH COLUMN (ADDRESS) ---
           const [code, anchorName, name, approvedValue, hoEmails, dmEmails, smEmails, asmEmails, aseEmails, region, city, state, address] = cols;
           if (!code || !name) return null;
           
@@ -319,7 +318,7 @@ export function DistributorsModule() {
             region: region || '', 
             city: city || '', 
             state: state || '', 
-            address: address || '', // Saves the new address field
+            address: address || '',
             active: true
           };
         }).filter(Boolean);
@@ -475,6 +474,7 @@ export function DistributorsModule() {
                         </div>
                         <div className="flex flex-wrap items-center gap-2">
                           <p className="text-xs font-mono text-zinc-500 bg-zinc-100 px-2 py-0.5 rounded inline-block">{dist.code}</p>
+                          {dist.assignment_serial_no && <p className="text-[10px] font-bold uppercase tracking-wider text-blue-600 bg-blue-50 px-2 py-0.5 rounded inline-block border border-blue-100">Assign: {dist.assignment_serial_no}</p>}
                           {dist.anchorName && <p className="text-[10px] font-bold uppercase tracking-wider text-purple-600 bg-purple-50 px-2 py-0.5 rounded inline-block">Anchor: {dist.anchorName}</p>}
                         </div>
                       </div>
@@ -562,7 +562,6 @@ export function DistributorsModule() {
               <div className="p-6 md:p-8 flex-1 min-h-0 overflow-y-auto bg-zinc-50/50 custom-scrollbar">
                 <form id="bulk-email-form" onSubmit={handleSendBulkEmail} className="space-y-6">
                   
-                  {/* --- MULTI-SELECT TARGET ROLES --- */}
                   <div>
                     <label className="text-xs font-bold uppercase tracking-wider text-zinc-500 ml-1">Select Target Roles (Multi-Select)</label>
                     <div className="flex flex-wrap gap-2 mt-2">
@@ -620,6 +619,7 @@ export function DistributorsModule() {
         )}
       </AnimatePresence>
 
+      {/* --- ADD / EDIT DISTRIBUTOR MODAL --- */}
       <AnimatePresence>
         {isModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 md:p-6">
@@ -636,15 +636,53 @@ export function DistributorsModule() {
               
               <div className="p-6 md:p-8 flex-1 min-h-0 overflow-y-auto custom-scrollbar bg-zinc-50/50">
                 <form id="distributor-form" onSubmit={handleSubmit} className="space-y-8">
+
+                  {/* ── IDENTIFICATION SECTION ── */}
                   <div className="bg-white p-6 rounded-[2rem] border border-zinc-100 shadow-sm">
                     <h5 className="text-sm font-bold uppercase tracking-wider text-zinc-900 mb-4 flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-black"></span> Identification</h5>
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-                      <div className="space-y-2"><label className="text-xs font-bold uppercase tracking-wider text-zinc-400 ml-1">Distributor Code *</label><input required className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black transition-all" value={formData.code} onChange={(e) => setFormData({ ...formData, code: e.target.value })} placeholder="e.g. DIST-001" /></div>
-                      <div className="space-y-2"><label className="text-xs font-bold uppercase tracking-wider text-zinc-400 ml-1">Distributor Name *</label><input required className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black transition-all" value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} placeholder="Company Name Ltd." /></div>
-                      <div className="space-y-2"><label className="text-xs font-bold uppercase tracking-wider text-zinc-400 ml-1">Anchor Name</label><input className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black transition-all" value={formData.anchorName} onChange={(e) => setFormData({ ...formData, anchorName: e.target.value })} placeholder="e.g. Reliance" /></div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
+                      <div className="space-y-2">
+                        <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 ml-1">Distributor Code *</label>
+                        <input
+                          required
+                          className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black transition-all"
+                          value={formData.code}
+                          onChange={(e) => setFormData({ ...formData, code: e.target.value })}
+                          placeholder="e.g. DIST-001"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 ml-1">Assignment No.</label>
+                        <input
+                          className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black transition-all"
+                          value={formData.assignment_serial_no || ''}
+                          onChange={(e) => setFormData({ ...formData, assignment_serial_no: e.target.value })}
+                          placeholder="e.g. ASN-2024-001"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 ml-1">Distributor Name *</label>
+                        <input
+                          required
+                          className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black transition-all"
+                          value={formData.name}
+                          onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                          placeholder="Company Name Ltd."
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 ml-1">Anchor Name</label>
+                        <input
+                          className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black transition-all"
+                          value={formData.anchorName}
+                          onChange={(e) => setFormData({ ...formData, anchorName: e.target.value })}
+                          placeholder="e.g. Reliance"
+                        />
+                      </div>
                     </div>
                   </div>
 
+                  {/* ── HIERARCHY SECTION ── */}
                   <div className="bg-purple-50/50 p-6 rounded-[2rem] border border-purple-100">
                     <h5 className="text-sm font-bold uppercase tracking-wider text-purple-900 mb-4 flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-purple-500"></span> Management Hierarchy Mapping</h5>
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
@@ -656,6 +694,7 @@ export function DistributorsModule() {
                     </div>
                   </div>
 
+                  {/* ── FINANCIALS & LOCATION SECTION ── */}
                   <div className="bg-white p-6 rounded-[2rem] border border-zinc-100 shadow-sm">
                     <h5 className="text-sm font-bold uppercase tracking-wider text-zinc-900 mb-4 flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-blue-500"></span> Financials & Location</h5>
                     <div className="space-y-4">

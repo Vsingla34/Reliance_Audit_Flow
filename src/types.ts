@@ -6,7 +6,7 @@ export interface UserProfile {
 }
 
 export interface Distributor {
-  id: string; code: string; anchorName?: string; name: string; contactPerson?: string; contactNumber?: string; email?: string; address?: string; city?: string; state?: string; region?: string; approvedValue: number; aseId: string | null; asmId?: string | null; smId?: string | null; dmId?: string | null; hoId?: string | null; active: boolean;
+  id: string; code: string; assignment_serial_no?: string; anchorName?: string; name: string; contactPerson?: string; contactNumber?: string; email?: string; address?: string; city?: string; state?: string; region?: string; approvedValue: number; aseId: string | null; asmId?: string | null; smId?: string | null; dmId?: string | null; hoId?: string | null; active: boolean;
 }
 
 export interface ItemMaster { 
