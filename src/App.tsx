@@ -47,6 +47,22 @@ const getLogStyle = (action: string) => {
   return { bg: 'bg-slate-50/50', border: 'border-slate-200', text: 'text-slate-900', tag: 'bg-slate-100 text-slate-600' };
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Helper: check URL for a recovery / invite token in BOTH hash and query string.
+// Supabase can deliver the token either way depending on the Auth settings.
+// ─────────────────────────────────────────────────────────────────────────────
+const urlContainsRecoveryToken = (): boolean => {
+  // Check hash fragment  → #access_token=xxx&type=recovery
+  const hash = window.location.hash;
+  if (hash.includes('type=recovery') || hash.includes('type=invite')) return true;
+
+  // Check query string   → ?type=recovery  (PKCE flow)
+  const search = window.location.search;
+  if (search.includes('type=recovery') || search.includes('type=invite')) return true;
+
+  return false;
+};
+
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
@@ -78,7 +94,13 @@ export default function App() {
   }, []);
 
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const [needsPasswordSetup, setNeedsPasswordSetup] = useState(false);
+
+  // ─── needsPasswordSetup: true forces the ForcePasswordSetup screen ───────
+  // Initialise to true immediately if the page was opened from a recovery link.
+  // This prevents a flash of the login screen before onAuthStateChange fires.
+  const [needsPasswordSetup, setNeedsPasswordSetup] = useState<boolean>(
+    () => urlContainsRecoveryToken()
+  );
 
   // --- LOG & NOTIFICATION DRAWER STATE ---
   const [isActivityOpen, setIsActivityOpen] = useState(false);
@@ -95,12 +117,9 @@ export default function App() {
 
   const isAdminOrHO = ['superadmin', 'admin', 'ho'].includes(profile?.role || '');
 
-  // --- ROBUST AUTHENTICATION HANDLER ---
+  // ─── ROBUST AUTHENTICATION HANDLER ───────────────────────────────────────
   useEffect(() => {
-    if (window.location.href.includes('type=recovery')) {
-       setNeedsPasswordSetup(true);
-    }
-
+    // Step 1 — resolve any existing session (handles page reload mid-recovery)
     supabase.auth.getSession().then(({ data: { session } }) => {
       setUser(session?.user ?? null);
       if (session?.user) {
@@ -110,14 +129,28 @@ export default function App() {
       }
     });
 
+    // Step 2 — listen for future auth events
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      setUser(session?.user ?? null);
-      
+      // PASSWORD_RECOVERY  → user clicked the reset-password email link
+      // SIGNED_IN          → fires right after PASSWORD_RECOVERY on the same page load
+      //                       We must NOT clear needsPasswordSetup on a plain SIGNED_IN
+      //                       if we already know we are in recovery mode.
       if (event === 'PASSWORD_RECOVERY') {
-         setNeedsPasswordSetup(true);
+        setNeedsPasswordSetup(true);
+        setUser(session?.user ?? null);
+        setLoading(false);
+        return; // don't call fetchProfile — user hasn't set a password yet
       }
 
+      setUser(session?.user ?? null);
+
       if (session?.user) {
+        // If we are already in "setup password" mode (detected from URL or PASSWORD_RECOVERY),
+        // do NOT redirect away — just keep the user object updated.
+        if (needsPasswordSetup) {
+          setLoading(false);
+          return;
+        }
         fetchProfile(session.user);
       } else {
         setProfile(null);
@@ -126,7 +159,19 @@ export default function App() {
     });
 
     return () => subscription.unsubscribe();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // ─── Re-run fetchProfile whenever needsPasswordSetup flips to false ───────
+  // This is the "onComplete" path: after the user saves their new password,
+  // ForcePasswordSetup calls onComplete() → needsPasswordSetup → false →
+  // the effect below fires fetchProfile so the dashboard loads cleanly.
+  useEffect(() => {
+    if (!needsPasswordSetup && user) {
+      fetchProfile(user);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [needsPasswordSetup]);
 
   useEffect(() => {
     if (!user || !profile) return;
@@ -310,8 +355,11 @@ export default function App() {
         return;
       }
       
+      // If the DB row still has password_setup_required, show the setup screen.
       if (data.active === true && data.password_setup_required === true) {
-         setNeedsPasswordSetup(true);
+        setNeedsPasswordSetup(true);
+        setLoading(false);
+        return;
       }
 
       setProfile(data as UserProfile);
@@ -350,6 +398,7 @@ export default function App() {
     } catch (error) { console.error("Failed to delete log:", error); }
   };
 
+  // ─── LOADING SPINNER ─────────────────────────────────────────────────────
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
@@ -362,14 +411,22 @@ export default function App() {
     );
   }
 
+  // ─── FORCE PASSWORD SETUP ────────────────────────────────────────────────
+  // Show as soon as we detect a recovery token in the URL OR after onAuthStateChange
+  // fires PASSWORD_RECOVERY — even before a profile is loaded.
   if (needsPasswordSetup && user) {
-     return <ForcePasswordSetup user={user} onComplete={() => {
-        setNeedsPasswordSetup(false);
-        fetchProfile(user);
-     }} />;
+    return (
+      <ForcePasswordSetup
+        user={user}
+        onComplete={() => {
+          setNeedsPasswordSetup(false);
+          // fetchProfile is triggered by the useEffect that watches needsPasswordSetup
+        }}
+      />
+    );
   }
 
-  // --- REDESIGNED LOGIN SCREEN WITH CUSTOM LOGO ---
+  // ─── LOGIN SCREEN ─────────────────────────────────────────────────────────
   if (!user || !profile) {
     return (
       <div className="min-h-screen bg-[#0f172a] bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-indigo-900 via-slate-900 to-black flex items-center justify-center p-4 sm:p-6 md:p-8 relative overflow-hidden">

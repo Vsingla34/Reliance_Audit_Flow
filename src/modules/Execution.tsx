@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef, useMemo } from 'react';
+import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
 import { supabase, logActivity, notifyLinkedUsers } from '../supabase';
 import { Distributor, SignOff, AuditTicket as BaseTicket, AuditLineItem as BaseItem } from '../types';
 import { ClipboardCheck, Plus, Store, MapPin, CheckCircle2, ArrowLeft, AlertCircle, MessageSquare, PackageSearch, Lock, Trash2, Send, RotateCcw, CalendarClock, FileText, Upload, Loader2, User as UserIcon, X, Droplets, Search, Download, FileSpreadsheet } from 'lucide-react';
@@ -426,13 +426,18 @@ export function ExecutionModule() {
     });
   };
 
-  const saveInlineEdit = async (id: string) => {
+  // ── SAVE QUEUE: batches rapid edits; prevents concurrent-write data loss ──
+  // Multiple quick edits (qty → mfgDate → expDate) merge into ONE DB write.
+  // saveQueue also guards against realtime echoes overwriting in-progress edits.
+  const saveInlineEdit = useCallback(async (id: string) => {
     if (!activeTicket) return;
     
     const itemToSave = latestEditsRef.current[id] || itemsRef.current.find(i => i.id === id);
     if (!itemToSave) return;
 
-    const newVerifiedTotal = itemsRef.current.reduce((sum, item) => sum + (item.id === id ? itemToSave.totalValue : item.totalValue), 0);
+    const newVerifiedTotal = itemsRef.current.reduce(
+      (sum, item) => sum + (item.id === id ? itemToSave.totalValue : item.totalValue), 0
+    );
 
     if (newVerifiedTotal > activeTicket.maxAllowedValue) { 
       alert(`Changes reverted. This update exceeds the absolute 5% maximum limit (₹${activeTicket.maxAllowedValue.toLocaleString()}).`); 
@@ -441,25 +446,27 @@ export function ExecutionModule() {
     }
 
     try {
-      if (newVerifiedTotal > activeTicket.approvedValue && itemsRef.current.reduce((sum, item) => sum + item.totalValue, 0) <= activeTicket.approvedValue) {
+      if (newVerifiedTotal > activeTicket.approvedValue &&
+          itemsRef.current.reduce((sum, item) => sum + item.totalValue, 0) <= activeTicket.approvedValue) {
         const dist = distMap[activeTicket.distributorId];
-        logActivity(user, profile, "Buffer Zone Triggered", `Audit for ${dist?.name} exceeded the primary limit of ₹${activeTicket.approvedValue.toLocaleString()} and entered the 5% buffer zone.`);
+        logActivity(user, profile, "Buffer Zone Triggered",
+          `Audit for ${dist?.name} exceeded the primary limit of ₹${activeTicket.approvedValue.toLocaleString()} and entered the 5% buffer zone.`);
       }
 
-      await supabase.from('auditLineItems').update({ 
-        quantity: itemToSave.quantity, 
-        qtyNonSaleable: itemToSave.qtyNonSaleable,
-        qtyBBD: itemToSave.qtyBBD,
-        qtyDamaged: itemToSave.qtyDamaged,
-        totalValue: itemToSave.totalValue,
-        mfgDate: itemToSave.mfgDate,
-        expDate: itemToSave.expDate,
-        productLife: itemToSave.productLife,
-        bbdApprovalStatus: itemToSave.bbdApprovalStatus || 'none'
-      }).eq('id', id);
-      
+      // Schedule via queue — merges burst edits, defers until 600ms after last change
+      await saveQueue.schedule(id, { 
+        quantity:          itemToSave.quantity, 
+        qtyNonSaleable:    itemToSave.qtyNonSaleable,
+        qtyBBD:            itemToSave.qtyBBD,
+        qtyDamaged:        itemToSave.qtyDamaged,
+        totalValue:        itemToSave.totalValue,
+        mfgDate:           itemToSave.mfgDate,
+        expDate:           itemToSave.expDate,
+        productLife:       itemToSave.productLife,
+        bbdApprovalStatus: itemToSave.bbdApprovalStatus || 'none',
+      });
     } catch (error) { console.error(error); }
-  };
+  }, [activeTicket, distMap, user, profile, fetchItems]);
 
   const handleDrainageChange = (id: string, value: string) => {
     const oldItem = itemsRef.current.find(i => i.id === id);
@@ -481,15 +488,14 @@ export function ExecutionModule() {
     });
   };
 
-  const saveInlineDrainage = async (id: string) => {
+  const saveInlineDrainage = useCallback(async (id: string) => {
     if (!activeTicket) return;
     const itemToSave = latestEditsRef.current[id] || itemsRef.current.find(i => i.id === id);
     if (!itemToSave) return;
-    
     try {
-      await supabase.from('auditLineItems').update({ qtyDrained: itemToSave.qtyDrained || 0 }).eq('id', id);
+      await saveQueue.schedule(id, { qtyDrained: itemToSave.qtyDrained || 0 });
     } catch (error) { console.error(error); }
-  };
+  }, [activeTicket]);
 
   const approveBBDItem = async (item: AuditLineItem) => {
     if (!activeTicket || !user || !profile) return;
@@ -661,6 +667,15 @@ export function ExecutionModule() {
     setActiveTicket(null); alert("Drainage completed! The audit is now fully Closed.");
   };
 
+  // Flush any pending saves when the user navigates away from a ticket
+  const handleCloseTicket = useCallback(async () => {
+    if (saveQueue.pendingCount() > 0) {
+      await saveQueue.flushAll();
+    }
+    setActiveTicket(null);
+    latestEditsRef.current = {};
+  }, []);
+
   const filteredItems = useMemo(() => {
     if (!itemSearchQuery.trim()) return items;
     const lowerQuery = itemSearchQuery.toLowerCase();
@@ -739,7 +754,7 @@ export function ExecutionModule() {
 
         {/* --- DYNAMIC HEADER WITH ADMIN FORCE STATUS DROPDOWN --- */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 w-full">
-          <button onClick={() => setActiveTicket(null)} className="flex items-center gap-2 text-sm font-bold text-slate-500 hover:text-black transition-colors w-fit">
+          <button onClick={handleCloseTicket} className="flex items-center gap-2 text-sm font-bold text-slate-500 hover:text-black transition-colors w-fit">
             <ArrowLeft size={16} /> Back to List
           </button>
           
@@ -1048,7 +1063,7 @@ export function ExecutionModule() {
                                   }}
                                   onBlur={() => {
                                     const toSave = latestEditsRef.current[item.id] || item;
-                                    supabase.from('auditLineItems').update({ remarks: toSave.remarks || '' }).eq('id', item.id).then(({ error }) => { if (error) console.error(error); });
+                                    saveQueue.schedule(item.id, { remarks: toSave.remarks || '' });
                                   }}
                                   className="w-full min-w-[120px] px-2 py-1.5 text-xs font-medium bg-white border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-400 outline-none text-slate-700 placeholder:text-slate-300"
                                 />

@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import { supabase, logActivity, notifyLinkedUsers } from '../supabase';
 import { AuditTicket, Distributor, UserProfile, DateProposal } from '../types';
 import { Calendar as CalendarIcon, Plus, Store, MapPin, CheckCircle2, X, Send, AlertCircle, MessageSquare, Filter, Trash2, CalendarCheck, ChevronLeft, ChevronRight, Clock, Edit2, Search, User as UserIcon, Phone, Mail } from 'lucide-react';
@@ -100,13 +100,18 @@ export function SchedulerModule() {
     const fetchData = async () => {
       if (!profile) return;
       try {
-        let dQuery = supabase.from('distributors').select('*');
+        // Column projection — only fetch what the scheduler uses
+        let dQuery = supabase.from('distributors')
+          .select('id,code,name,city,state,region,approvedValue,aseIds,asmIds,smIds,dmIds,hoIds,active');
         if (profile.role === 'ase') dQuery = dQuery.contains('aseIds', [profile.uid]);
         else if (profile.role === 'asm') dQuery = dQuery.contains('asmIds', [profile.uid]);
-        else if (profile.role === 'sm') dQuery = dQuery.contains('smIds', [profile.uid]);
-        else if (profile.role === 'dm') dQuery = dQuery.contains('dmIds', [profile.uid]);
+        else if (profile.role === 'sm')  dQuery = dQuery.contains('smIds',  [profile.uid]);
+        else if (profile.role === 'dm')  dQuery = dQuery.contains('dmIds',  [profile.uid]);
         
-        const [dRes, uRes] = await Promise.all([dQuery, supabase.from('users').select('*')]);
+        const [dRes, uRes] = await Promise.all([
+          dQuery,
+          supabase.from('users').select('uid,name,email,role,phone,region,active'),
+        ]);
         if (dRes.error) throw dRes.error;
         
         const fetchedDistributors = (dRes.data || []) as any[];
@@ -118,7 +123,7 @@ export function SchedulerModule() {
           setAuditors(usersList.filter(u => u.role === 'auditor'));
         }
 
-        let tQuery = supabase.from('auditTickets').select('*');
+        let tQuery = supabase.from('auditTickets').select('id,distributorId,status,scheduledDate,proposedDate,auditorIds,approvedValue,auditDays,dateProposals,createdAt,updatedAt');
         if (profile.role === 'auditor') {
           tQuery = tQuery.or(`auditorId.eq.${profile.uid},auditorIds.cs.{${profile.uid}}`);
         } else if (['ase', 'asm', 'sm', 'dm'].includes(profile.role)) {
@@ -137,7 +142,22 @@ export function SchedulerModule() {
     };
 
     fetchData();
-    const channel = supabase.channel('scheduler-changes').on('postgres_changes', { event: '*', schema: 'public', table: 'auditTickets' }, fetchData).subscribe();
+    const channel = supabase
+      .channel('scheduler-tickets')
+      .on('postgres_changes',
+        { event: '*', schema: 'public', table: 'auditTickets' },
+        (payload: any) => {
+          // Surgical update — don't refetch all distributors+users+tickets on every change
+          const { eventType, new: updated, old } = payload;
+          setTickets(prev => {
+            if (eventType === 'INSERT') return [...prev, updated];
+            if (eventType === 'DELETE') return prev.filter((t: any) => t.id !== old.id);
+            if (eventType === 'UPDATE') return prev.map((t: any) => t.id === updated.id ? { ...t, ...updated } : t);
+            return prev;
+          });
+        }
+      )
+      .subscribe();
     return () => { supabase.removeChannel(channel); };
   }, [profile?.uid, profile?.role]);
 
@@ -673,7 +693,7 @@ export function SchedulerModule() {
                             className={cn(
                               "p-1.5 sm:p-2 rounded-lg sm:rounded-xl text-[10px] sm:text-xs border transition-all", 
                               ticket.status === 'tentative' ? "bg-amber-50 border-amber-200 hover:shadow-md cursor-pointer hover:-translate-y-0.5" : 
-                              
+                             
                               cn("bg-emerald-50 border-emerald-100/50", (canEdit || (profile?.role === 'ase' && ticket.status === 'scheduled')) ? "cursor-pointer hover:shadow-md hover:border-emerald-300 hover:-translate-y-0.5" : "cursor-default")
                             )} 
                             title={ticket.status === 'tentative' ? 'Click to view dates' : (canEdit ? 'Click to edit assignment' : (profile?.role === 'ase' ? 'Click to request reschedule' : 'Scheduled'))}
