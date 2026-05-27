@@ -17,7 +17,7 @@ import { MastersModule } from './modules/Masters';
 import { ReportsModule } from './modules/Reports';
 import { TodayAssignmentsModule } from './modules/TodayAssignments';
 
-// Setup Force Password
+// Force Password Setup
 import { ForcePasswordSetup } from './components/ForcePasswordSetup';
 
 interface AuthContextType {
@@ -43,22 +43,31 @@ const getLogStyle = (action: string) => {
   if (a.includes('verified') || a.includes('completed') || a.includes('signed off') || a.includes('approved')) return { bg: 'bg-emerald-50/50', border: 'border-emerald-100', text: 'text-emerald-900', tag: 'bg-emerald-100/50 text-emerald-700' };
   if (a.includes('buffer')) return { bg: 'bg-amber-50/50', border: 'border-amber-100', text: 'text-amber-900', tag: 'bg-amber-100/50 text-amber-700' };
   if (a.includes('reset') || a.includes('overridden') || a.includes('rejected') || a.includes('deleted')) return { bg: 'bg-rose-50/50', border: 'border-rose-100', text: 'text-rose-900', tag: 'bg-rose-100/50 text-rose-700' };
-  
   return { bg: 'bg-slate-50/50', border: 'border-slate-200', text: 'text-slate-900', tag: 'bg-slate-100 text-slate-600' };
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Helper: check URL for a recovery / invite token in BOTH hash and query string.
-// Supabase can deliver the token either way depending on the Auth settings.
+// Helper: detect a Supabase auth token in the URL — works for BOTH:
+//   • Implicit flow:  /#access_token=xxx&type=recovery  (hash fragment)
+//   • PKCE flow:      /?token_hash=xxx&type=recovery     (query string)
+//   • Invite links:   /#access_token=xxx&type=invite
 // ─────────────────────────────────────────────────────────────────────────────
 const urlContainsRecoveryToken = (): boolean => {
-  // Check hash fragment  → #access_token=xxx&type=recovery
-  const hash = window.location.hash;
-  if (hash.includes('type=recovery') || hash.includes('type=invite')) return true;
+  // Check hash fragment  → #access_token=xxx&type=recovery|invite
+  const hashParams = new URLSearchParams(window.location.hash.substring(1));
+  const hashType = hashParams.get('type');
+  const hashToken = hashParams.get('access_token');
+  if ((hashType === 'recovery' || hashType === 'invite' || hashType === 'signup') && hashToken) {
+    return true;
+  }
 
-  // Check query string   → ?type=recovery  (PKCE flow)
-  const search = window.location.search;
-  if (search.includes('type=recovery') || search.includes('type=invite')) return true;
+  // Check query string → ?token_hash=xxx&type=recovery  (PKCE / new Supabase default)
+  const searchParams = new URLSearchParams(window.location.search);
+  const searchType = searchParams.get('type');
+  const searchToken = searchParams.get('token_hash') || searchParams.get('access_token') || searchParams.get('code');
+  if ((searchType === 'recovery' || searchType === 'invite' || searchType === 'signup') && searchToken) {
+    return true;
+  }
 
   return false;
 };
@@ -74,7 +83,7 @@ export default function App() {
 
   const getInitialModule = () => {
     const path = window.location.pathname.replace('/', '');
-    return path || 'dashboard'; 
+    return path || 'dashboard';
   };
 
   const [activeModuleState, setActiveModuleState] = useState(getInitialModule);
@@ -95,8 +104,8 @@ export default function App() {
 
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
-  // ─── needsPasswordSetup: true forces the ForcePasswordSetup screen ───────
-  // Initialise to true immediately if the page was opened from a recovery link.
+  // ─── needsPasswordSetup: true forces the ForcePasswordSetup screen ────────
+  // Initialised to true immediately if the page was opened from a recovery/invite link.
   // This prevents a flash of the login screen before onAuthStateChange fires.
   const [needsPasswordSetup, setNeedsPasswordSetup] = useState<boolean>(
     () => urlContainsRecoveryToken()
@@ -121,6 +130,13 @@ export default function App() {
   useEffect(() => {
     // Step 1 — resolve any existing session (handles page reload mid-recovery)
     supabase.auth.getSession().then(({ data: { session } }) => {
+      // If the URL contains a recovery/invite token, Supabase will exchange it
+      // for a session automatically. We detect it here AND in onAuthStateChange.
+      if (urlContainsRecoveryToken()) {
+        // Keep loading=true; onAuthStateChange will fire PASSWORD_RECOVERY shortly
+        setUser(session?.user ?? null);
+        return;
+      }
       setUser(session?.user ?? null);
       if (session?.user) {
         fetchProfile(session.user);
@@ -131,22 +147,26 @@ export default function App() {
 
     // Step 2 — listen for future auth events
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      // PASSWORD_RECOVERY  → user clicked the reset-password email link
-      // SIGNED_IN          → fires right after PASSWORD_RECOVERY on the same page load
-      //                       We must NOT clear needsPasswordSetup on a plain SIGNED_IN
-      //                       if we already know we are in recovery mode.
+      // PASSWORD_RECOVERY → user clicked the reset-password / invite email link.
+      // This fires immediately when the token is exchanged, before any password is set.
       if (event === 'PASSWORD_RECOVERY') {
         setNeedsPasswordSetup(true);
         setUser(session?.user ?? null);
+        // Clean the tokens from the URL so they don't persist on refresh
+        if (window.location.hash.includes('type=recovery') || window.location.hash.includes('type=invite') ||
+            window.location.search.includes('type=recovery') || window.location.search.includes('type=invite') ||
+            window.location.search.includes('token_hash') || window.location.search.includes('code=')) {
+          window.history.replaceState(null, '', window.location.pathname);
+        }
         setLoading(false);
         return; // don't call fetchProfile — user hasn't set a password yet
       }
 
+      // SIGNED_IN fires right after PASSWORD_RECOVERY on the same page load.
+      // If we already know we are in recovery mode, don't redirect away.
       setUser(session?.user ?? null);
 
       if (session?.user) {
-        // If we are already in "setup password" mode (detected from URL or PASSWORD_RECOVERY),
-        // do NOT redirect away — just keep the user object updated.
         if (needsPasswordSetup) {
           setLoading(false);
           return;
@@ -163,9 +183,8 @@ export default function App() {
   }, []);
 
   // ─── Re-run fetchProfile whenever needsPasswordSetup flips to false ───────
-  // This is the "onComplete" path: after the user saves their new password,
   // ForcePasswordSetup calls onComplete() → needsPasswordSetup → false →
-  // the effect below fires fetchProfile so the dashboard loads cleanly.
+  // this effect fires fetchProfile so the dashboard loads cleanly.
   useEffect(() => {
     if (!needsPasswordSetup && user) {
       fetchProfile(user);
@@ -275,7 +294,6 @@ export default function App() {
     const csvRows = filteredLogs.map(log => {
       const d = new Date(log.timestamp);
       const cleanDetails = log.details ? log.details.replace(/"/g, '""') : '';
-      
       return [
         d.toLocaleDateString(),
         d.toLocaleTimeString(),
@@ -290,7 +308,6 @@ export default function App() {
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
-    
     link.setAttribute("href", url);
     link.setAttribute("download", `Reliance_Audit_Logs_${new Date().toISOString().split('T')[0]}.csv`);
     document.body.appendChild(link);
@@ -317,7 +334,6 @@ export default function App() {
   useEffect(() => {
     if (profile && allowedNavItems.length > 0) {
       const isAllowed = allowedNavItems.some(item => item.id === activeModuleState);
-      
       if (!isAllowed) {
         const fallbackId = allowedNavItems[0].id;
         setActiveModuleState(fallbackId);
@@ -326,7 +342,7 @@ export default function App() {
         window.history.replaceState({}, '', `/${activeModuleState}`);
       }
     }
-  }, [profile, activeModuleState]); 
+  }, [profile, activeModuleState]);
 
   const fetchProfile = async (authUser: User) => {
     try {
@@ -334,10 +350,9 @@ export default function App() {
       
       if (!data && authUser.email) {
         const { data: emailMatch } = await supabase.from('users').select('*').eq('email', authUser.email).maybeSingle();
-        
         if (emailMatch) {
           await supabase.from('users').update({ uid: authUser.id }).eq('email', authUser.email);
-          data = { ...emailMatch, uid: authUser.id }; 
+          data = { ...emailMatch, uid: authUser.id };
         }
       }
 
@@ -358,6 +373,7 @@ export default function App() {
       // If the DB row still has password_setup_required, show the setup screen.
       if (data.active === true && data.password_setup_required === true) {
         setNeedsPasswordSetup(true);
+        setUser(authUser);
         setLoading(false);
         return;
       }
@@ -398,7 +414,7 @@ export default function App() {
     } catch (error) { console.error("Failed to delete log:", error); }
   };
 
-  // ─── LOADING SPINNER ─────────────────────────────────────────────────────
+  // ─── LOADING SPINNER ──────────────────────────────────────────────────────
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
@@ -411,9 +427,9 @@ export default function App() {
     );
   }
 
-  // ─── FORCE PASSWORD SETUP ────────────────────────────────────────────────
-  // Show as soon as we detect a recovery token in the URL OR after onAuthStateChange
-  // fires PASSWORD_RECOVERY — even before a profile is loaded.
+  // ─── FORCE PASSWORD SETUP ─────────────────────────────────────────────────
+  // Show as soon as we detect a recovery/invite token in the URL OR after
+  // onAuthStateChange fires PASSWORD_RECOVERY — even before profile is loaded.
   if (needsPasswordSetup && user) {
     return (
       <ForcePasswordSetup
@@ -426,11 +442,10 @@ export default function App() {
     );
   }
 
-  // ─── LOGIN SCREEN ─────────────────────────────────────────────────────────
+  // ─── LOGIN SCREEN ──────────────────────────────────────────────────────────
   if (!user || !profile) {
     return (
       <div className="min-h-screen bg-[#0f172a] bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-indigo-900 via-slate-900 to-black flex items-center justify-center p-4 sm:p-6 md:p-8 relative overflow-hidden">
-        {/* Abstract shapes for depth */}
         <div className="absolute top-0 left-0 w-full h-full overflow-hidden z-0 pointer-events-none">
           <div className="absolute -top-[20%] -right-[10%] w-[600px] h-[600px] bg-indigo-500/20 rounded-full blur-[120px]"></div>
           <div className="absolute -bottom-[20%] -left-[10%] w-[500px] h-[500px] bg-emerald-500/10 rounded-full blur-[100px]"></div>
@@ -479,7 +494,7 @@ export default function App() {
   const renderModule = () => {
     switch (activeModuleState) {
       case 'dashboard': return <DashboardModule />;
-      case 'today': return <TodayAssignmentsModule />; 
+      case 'today': return <TodayAssignmentsModule />;
       case 'users': return <UsersModule />;
       case 'distributors': return <DistributorsModule />;
       case 'scheduler': return <SchedulerModule />;
@@ -494,7 +509,7 @@ export default function App() {
     <AuthContext.Provider value={{ user, profile, signOut }}>
       <div className="min-h-screen bg-slate-50 flex flex-col w-full overflow-x-hidden font-sans text-slate-900">
         
-        {/* --- REDESIGNED DESKTOP SIDEBAR WITH CUSTOM LOGO --- */}
+        {/* --- DESKTOP SIDEBAR --- */}
         <aside className="hidden lg:flex flex-col w-[280px] bg-white border-r border-slate-200 fixed h-full z-40 shadow-sm">
           <div className="p-8 pb-6 flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border border-slate-100 p-1.5 bg-slate-50 shadow-sm">
@@ -536,7 +551,7 @@ export default function App() {
           </div>
         </aside>
 
-        {/* MOBILE HEADER WITH CUSTOM LOGO */}
+        {/* MOBILE HEADER */}
         <div className="lg:hidden fixed top-0 w-full bg-white/90 backdrop-blur-xl border-b border-slate-200 z-40 px-4 py-3 flex items-center justify-between shadow-sm">
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 border border-slate-100 p-1 bg-slate-50 shadow-sm">
@@ -558,7 +573,7 @@ export default function App() {
           </div>
         </div>
 
-        {/* MOBILE SLIDE-OUT MENU WITH CUSTOM LOGO */}
+        {/* MOBILE SLIDE-OUT MENU */}
         <AnimatePresence>
           {isMobileMenuOpen && (
             <>
@@ -624,7 +639,6 @@ export default function App() {
               <p className="text-[11px] font-semibold text-slate-500 mt-0.5 uppercase tracking-widest">Enterprise Portal</p>
             </div>
             <div className="flex items-center gap-4">
-              
               <button onClick={() => setIsActivityOpen(true)} className="relative p-3 bg-white border border-slate-200 hover:border-indigo-300 hover:bg-indigo-50 text-slate-600 hover:text-indigo-600 rounded-[14px] transition-all shadow-sm" title="Notifications & Activity">
                 <Bell size={20} />
                 {unreadCount > 0 && (
@@ -649,13 +663,12 @@ export default function App() {
               <h2 className="text-2xl font-black tracking-tight text-slate-900 capitalize">{activeModuleState.replace('_', ' ')}</h2>
               <p className="text-[10px] font-bold text-slate-500 mt-1 uppercase tracking-widest">Enterprise Portal</p>
             </div>
-            
             {renderModule()}
           </div>
         </main>
       </div>
 
-      {/* --- REDESIGNED NOTIFICATIONS & ACTIVITY DRAWER --- */}
+      {/* --- NOTIFICATIONS & ACTIVITY DRAWER --- */}
       <AnimatePresence>
         {isActivityOpen && (
           <>
@@ -675,7 +688,6 @@ export default function App() {
                 </div>
               </div>
 
-              {/* TABS (DYNAMIC) */}
               <div className="flex px-4 pt-4 border-b border-slate-200 shrink-0 bg-slate-50/50">
                 <button 
                   onClick={() => setDrawerTab('alerts')} 
@@ -724,9 +736,7 @@ export default function App() {
                   </div>
                 ) : (
                   <div className="flex flex-col h-full">
-                    {/* --- ADVANCED FILTER PANEL --- */}
                     <div className="p-4 border-b border-slate-200 space-y-3 bg-slate-50/80 shrink-0">
-                      
                       <div className="flex justify-between items-center mb-1">
                         <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Filter Logs</h4>
                         <button onClick={downloadLogsCSV} className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 text-white text-[11px] font-bold rounded-[10px] hover:bg-emerald-700 transition-colors shadow-sm active:scale-95">
@@ -759,7 +769,6 @@ export default function App() {
                          <option value="all">All Statuses / Actions</option>
                          {uniqueActions.map(action => <option key={action} value={action}>{action}</option>)}
                       </select>
-
                     </div>
 
                     <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar bg-slate-50/30">
