@@ -2,7 +2,7 @@ import React, { createContext, useContext, useEffect, useState, useMemo } from '
 import { supabase, logActivity } from './supabase';
 import { User } from '@supabase/supabase-js';
 import { UserProfile, ActivityLog } from './types';
-import { LayoutDashboard, Users, Store, CalendarClock, PlaySquare, FileBarChart, LogOut, Menu, X, Database, Bell, Trash2, Search, CheckCheck, Loader2, CalendarDays, Download } from 'lucide-react';
+import { LayoutDashboard, Users, Store, CalendarClock, PlaySquare, FileBarChart, LogOut, Menu, X, Database, Bell, Trash2, Search, CheckCheck, Loader2, CalendarDays, Download, ArrowLeft, Mail, ShieldCheck, Eye, EyeOff } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { isToday, isThisWeek, isThisMonth } from 'date-fns';
 import logo from './public/favicon.png'
@@ -72,6 +72,50 @@ const urlContainsRecoveryToken = (): boolean => {
   return false;
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Auth screen static helpers — defined OUTSIDE App so React never recreates
+// them on re-render. Defining components inside a render function causes React
+// to unmount+remount on every keystroke, destroying input focus.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const AUTH_BG = "min-h-screen bg-[#0f172a] bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-indigo-900 via-slate-900 to-black flex items-center justify-center p-4 sm:p-6 relative overflow-hidden";
+const AUTH_CARD = "max-w-[420px] w-full bg-slate-900/60 backdrop-blur-2xl p-8 sm:p-10 rounded-[2.5rem] shadow-[0_8px_30px_rgb(0,0,0,0.4)] border border-slate-700/50 relative z-10";
+
+function AuthBg({ children }: { children: React.ReactNode }) {
+  return (
+    <div className={AUTH_BG}>
+      <div className="absolute inset-0 overflow-hidden pointer-events-none z-0">
+        <div className="absolute -top-[20%] -right-[10%] w-[600px] h-[600px] bg-indigo-500/20 rounded-full blur-[120px]" />
+        <div className="absolute -bottom-[20%] -left-[10%] w-[500px] h-[500px] bg-emerald-500/10 rounded-full blur-[100px]" />
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function AuthLogo({ src }: { src: string }) {
+  return (
+    <div className="flex justify-center mb-8">
+      <div className="w-16 h-16 bg-white/10 rounded-2xl flex items-center justify-center shadow-lg p-2.5 border border-white/10">
+        <img src={src} alt="Logo" className="w-full h-full object-contain" />
+      </div>
+    </div>
+  );
+}
+
+function AuthMsg({ msg }: { msg: { type: 'error' | 'success'; text: string } | null }) {
+  if (!msg) return null;
+  return (
+    <div className={`mb-6 p-4 text-sm font-bold rounded-2xl text-center border ${
+      msg.type === 'error'
+        ? 'bg-rose-500/10 text-rose-400 border-rose-500/20'
+        : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+    }`}>
+      {msg.text}
+    </div>
+  );
+}
+
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
@@ -80,6 +124,27 @@ export default function App() {
   const [password, setPassword] = useState('');
   const [authError, setAuthError] = useState('');
   const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [showPw, setShowPw] = useState(false);
+
+  // ── Forgot Password — 4-step OTP flow ───────────────────────────────────
+  // Step 1 (forgot_email): user enters email
+  // Step 2 (forgot_otp):   user enters 6-digit OTP sent via your SMTP
+  // Step 3 (forgot_newpw): user sets new password (session already live)
+  type AuthStep = 'login' | 'forgot_email' | 'forgot_otp' | 'forgot_newpw';
+  const [authStep, setAuthStep] = useState<AuthStep>('login');
+  const [forgotEmail, setForgotEmail] = useState('');
+  const [forgotOtp, setForgotOtp] = useState('');
+  const [forgotNewPw, setForgotNewPw] = useState('');
+  const [forgotNewPwConfirm, setForgotNewPwConfirm] = useState('');
+  const [showForgotPw, setShowForgotPw] = useState(false);
+  const [forgotLoading, setForgotLoading] = useState(false);
+  const [forgotMsg, setForgotMsg] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
+  const [otpCooldown, setOtpCooldown] = useState(0);
+
+  // ── Ref to keep needsPasswordSetup accessible inside auth listener ────────
+  // Using a ref avoids stale-closure bugs in onAuthStateChange which causes
+  // the page to blink / re-render on every SIGNED_IN event.
+  const needsPasswordSetupRef = React.useRef(false);
 
   const getInitialModule = () => {
     const path = window.location.pathname.replace('/', '');
@@ -126,14 +191,16 @@ export default function App() {
 
   const isAdminOrHO = ['superadmin', 'admin', 'ho'].includes(profile?.role || '');
 
-  // ─── ROBUST AUTHENTICATION HANDLER ───────────────────────────────────────
+  // ─── ROBUST AUTHENTICATION HANDLER ─────────────────────────────────────────
+  // KEY FIX: we use needsPasswordSetupRef (a ref) inside the listener so the
+  // closure always reads the latest value without needing the effect to re-run.
+  // This eliminates the stale-closure blink where SIGNED_IN kept calling
+  // fetchProfile even when the user was mid-password-reset.
   useEffect(() => {
-    // Step 1 — resolve any existing session (handles page reload mid-recovery)
+    // Step 1 — resolve any existing session
     supabase.auth.getSession().then(({ data: { session } }) => {
-      // If the URL contains a recovery/invite token, Supabase will exchange it
-      // for a session automatically. We detect it here AND in onAuthStateChange.
       if (urlContainsRecoveryToken()) {
-        // Keep loading=true; onAuthStateChange will fire PASSWORD_RECOVERY shortly
+        // Token in URL — wait for onAuthStateChange to fire PASSWORD_RECOVERY
         setUser(session?.user ?? null);
         return;
       }
@@ -145,36 +212,50 @@ export default function App() {
       }
     });
 
-    // Step 2 — listen for future auth events
+    // Step 2 — listen for auth events
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      // PASSWORD_RECOVERY → user clicked the reset-password / invite email link.
-      // This fires immediately when the token is exchanged, before any password is set.
+      // PASSWORD_RECOVERY fires when user clicks a reset/invite link.
+      // Show ForcePasswordSetup immediately — do NOT call fetchProfile yet.
       if (event === 'PASSWORD_RECOVERY') {
+        needsPasswordSetupRef.current = true;
         setNeedsPasswordSetup(true);
         setUser(session?.user ?? null);
-        // Clean the tokens from the URL so they don't persist on refresh
-        if (window.location.hash.includes('type=recovery') || window.location.hash.includes('type=invite') ||
-            window.location.search.includes('type=recovery') || window.location.search.includes('type=invite') ||
-            window.location.search.includes('token_hash') || window.location.search.includes('code=')) {
-          window.history.replaceState(null, '', window.location.pathname);
-        }
+        // Clean tokens from URL bar
+        window.history.replaceState(null, '', window.location.pathname);
         setLoading(false);
-        return; // don't call fetchProfile — user hasn't set a password yet
+        return;
       }
 
-      // SIGNED_IN fires right after PASSWORD_RECOVERY on the same page load.
-      // If we already know we are in recovery mode, don't redirect away.
-      setUser(session?.user ?? null);
-
-      if (session?.user) {
-        if (needsPasswordSetup) {
+      // SIGNED_IN fires after PASSWORD_RECOVERY AND after a normal login.
+      // Guard: if we are in password-setup mode, do NOT call fetchProfile.
+      if (event === 'SIGNED_IN') {
+        setUser(session?.user ?? null);
+        if (needsPasswordSetupRef.current) {
+          // User just verified OTP for forgot-password flow — keep setup screen
           setLoading(false);
           return;
         }
-        fetchProfile(session.user);
-      } else {
+        if (session?.user) {
+          fetchProfile(session.user);
+        } else {
+          setLoading(false);
+        }
+        return;
+      }
+
+      // SIGNED_OUT — clear everything
+      if (event === 'SIGNED_OUT') {
+        setUser(null);
         setProfile(null);
+        needsPasswordSetupRef.current = false;
+        setNeedsPasswordSetup(false);
         setLoading(false);
+        return;
+      }
+
+      // TOKEN_REFRESHED, USER_UPDATED — keep session in sync, no page reload
+      if (session?.user) {
+        setUser(session.user);
       }
     });
 
@@ -182,11 +263,10 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ─── Re-run fetchProfile whenever needsPasswordSetup flips to false ───────
-  // ForcePasswordSetup calls onComplete() → needsPasswordSetup → false →
-  // this effect fires fetchProfile so the dashboard loads cleanly.
+  // ─── After ForcePasswordSetup completes, load the user profile ───────────
   useEffect(() => {
     if (!needsPasswordSetup && user) {
+      needsPasswordSetupRef.current = false;
       fetchProfile(user);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -400,6 +480,111 @@ export default function App() {
     }
   };
 
+  // ── OTP cooldown ticker ──────────────────────────────────────────────────
+  React.useEffect(() => {
+    if (otpCooldown <= 0) return;
+    const t = setTimeout(() => setOtpCooldown(c => c - 1), 1000);
+    return () => clearTimeout(t);
+  }, [otpCooldown]);
+
+  // ── Step 1: verify email exists then send 6-digit OTP via SMTP ───────────
+  const sendOtp = async (emailAddr: string) => {
+    const { error } = await supabase.auth.signInWithOtp({
+      email: emailAddr,
+      options: { shouldCreateUser: false },
+    });
+    if (error) throw error;
+    setOtpCooldown(60);
+  };
+
+  const handleForgotSendOtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setForgotLoading(true);
+    setForgotMsg(null);
+    try {
+      const clean = forgotEmail.trim().toLowerCase();
+      const { data: userRow } = await supabase
+        .from('users').select('uid').eq('email', clean).maybeSingle();
+      if (!userRow) {
+        setForgotMsg({ type: 'error', text: 'No account found with this email address.' });
+        return;
+      }
+      await sendOtp(clean);
+      setAuthStep('forgot_otp');
+    } catch (err: any) {
+      setForgotMsg({ type: 'error', text: err.message || 'Failed to send code. Try again.' });
+    } finally {
+      setForgotLoading(false);
+    }
+  };
+
+  // ── Step 2: verify the 6-digit OTP ───────────────────────────────────────
+  const handleForgotVerifyOtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (forgotOtp.trim().length !== 6) {
+      setForgotMsg({ type: 'error', text: 'Please enter the full 6-digit code.' });
+      return;
+    }
+    setForgotLoading(true);
+    setForgotMsg(null);
+    try {
+      const { error } = await supabase.auth.verifyOtp({
+        email: forgotEmail.trim().toLowerCase(),
+        token: forgotOtp.trim(),
+        type: 'email',
+      });
+      if (error) throw error;
+      // OTP verified — session is now live, move to new password screen
+      setAuthStep('forgot_newpw');
+    } catch (err: any) {
+      setForgotMsg({
+        type: 'error',
+        text: err.message?.toLowerCase().includes('expired') || err.message?.toLowerCase().includes('invalid')
+          ? 'Invalid or expired code. Please request a new one.'
+          : err.message || 'Verification failed.',
+      });
+    } finally {
+      setForgotLoading(false);
+    }
+  };
+
+  // ── Step 3: set the new password ─────────────────────────────────────────
+  const handleForgotSetPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (forgotNewPw.length < 6) {
+      setForgotMsg({ type: 'error', text: 'Password must be at least 6 characters.' });
+      return;
+    }
+    if (forgotNewPw !== forgotNewPwConfirm) {
+      setForgotMsg({ type: 'error', text: 'Passwords do not match.' });
+      return;
+    }
+    setForgotLoading(true);
+    setForgotMsg(null);
+    try {
+      const { error } = await supabase.auth.updateUser({ password: forgotNewPw });
+      if (error) throw error;
+      // Clear setup flag if needed
+      const { data: { user: cu } } = await supabase.auth.getUser();
+      if (cu) {
+        await supabase.from('users').update({ password_setup_required: false }).eq('uid', cu.id);
+      }
+      // Sign out so the user lands on a clean login screen
+      await supabase.auth.signOut();
+      setForgotMsg({ type: 'success', text: 'Password updated! Redirecting to login…' });
+      setTimeout(() => {
+        setAuthStep('login');
+        setForgotEmail(''); setForgotOtp('');
+        setForgotNewPw(''); setForgotNewPwConfirm('');
+        setForgotMsg(null);
+      }, 1800);
+    } catch (err: any) {
+      setForgotMsg({ type: 'error', text: err.message || 'Failed to update password.' });
+    } finally {
+      setForgotLoading(false);
+    }
+  };
+
   const signOut = async () => {
     await supabase.auth.signOut();
   };
@@ -442,56 +627,283 @@ export default function App() {
     );
   }
 
-  // ─── LOGIN SCREEN ──────────────────────────────────────────────────────────
+  // ─── LOGIN / FORGOT PASSWORD SCREEN ─────────────────────────────────────
   if (!user || !profile) {
-    return (
-      <div className="min-h-screen bg-[#0f172a] bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-indigo-900 via-slate-900 to-black flex items-center justify-center p-4 sm:p-6 md:p-8 relative overflow-hidden">
-        <div className="absolute top-0 left-0 w-full h-full overflow-hidden z-0 pointer-events-none">
-          <div className="absolute -top-[20%] -right-[10%] w-[600px] h-[600px] bg-indigo-500/20 rounded-full blur-[120px]"></div>
-          <div className="absolute -bottom-[20%] -left-[10%] w-[500px] h-[500px] bg-emerald-500/10 rounded-full blur-[100px]"></div>
-        </div>
 
-        <motion.div 
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="max-w-[420px] w-full bg-slate-900/60 backdrop-blur-2xl p-8 sm:p-10 rounded-[2.5rem] shadow-[0_8px_30px_rgb(0,0,0,0.4)] border border-slate-700/50 relative z-10"
-        >
-          <div className="flex justify-center mb-8">
-            <div className="w-16 h-16 bg-white/10 rounded-2xl flex items-center justify-center shadow-lg shadow-indigo-500/10 p-2.5 border border-white/10 backdrop-blur-sm">
-              <img src={logo} alt="Logo" className="w-full h-full object-contain" />
-            </div>
-          </div>
-          
+    // ── STEP: Login ──────────────────────────────────────────────────────────
+    if (authStep === 'login') return (
+      <AuthBg>
+        <motion.div key="step-login" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className={AUTH_CARD}>
+          <AuthLogo src={logo} />
           <div className="text-center mb-8">
             <h2 className="text-2xl font-bold tracking-tight text-white">Reliance Audit</h2>
             <p className="text-slate-400 text-sm mt-2 font-medium">Enterprise Management Portal</p>
           </div>
-          
+
           {authError && (
-            <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mb-6 p-4 bg-rose-500/10 text-rose-400 text-sm font-bold rounded-2xl text-center border border-rose-500/20">
+            <div className="mb-6 p-4 bg-rose-500/10 text-rose-400 text-sm font-bold rounded-2xl text-center border border-rose-500/20">
               {authError}
-            </motion.div>
+            </div>
           )}
-          
+
           <form onSubmit={handleLogin} className="space-y-5">
             <div>
               <label className="text-[11px] font-bold uppercase tracking-wider text-slate-400 ml-2">Email Address</label>
-              <input type="email" required className="w-full mt-1.5 px-5 py-4 bg-slate-800/50 border border-slate-700 text-white rounded-2xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all text-sm placeholder:text-slate-500" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@company.com" />
+              <input
+                type="email" required
+                className="w-full mt-1.5 px-5 py-4 bg-slate-800/50 border border-slate-700 text-white rounded-2xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all text-sm placeholder:text-slate-500"
+                value={email} onChange={e => setEmail(e.target.value)} placeholder="name@company.com"
+              />
             </div>
             <div>
               <label className="text-[11px] font-bold uppercase tracking-wider text-slate-400 ml-2">Password</label>
-              <input type="password" required className="w-full mt-1.5 px-5 py-4 bg-slate-800/50 border border-slate-700 text-white rounded-2xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all text-sm placeholder:text-slate-500" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" />
+              <div className="relative mt-1.5">
+                <input
+                  type={showPw ? 'text' : 'password'} required
+                  className="w-full px-5 py-4 pr-14 bg-slate-800/50 border border-slate-700 text-white rounded-2xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all text-sm placeholder:text-slate-500"
+                  value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••"
+                />
+                <button type="button" tabIndex={-1} onClick={() => setShowPw(v => !v)}
+                  className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200 transition-colors p-1">
+                  {showPw ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
             </div>
-            <button type="submit" disabled={isLoggingIn} className="w-full mt-8 py-4 bg-indigo-600 text-white rounded-2xl font-bold hover:bg-indigo-500 transition-all shadow-lg shadow-indigo-600/30 active:scale-[0.98] disabled:opacity-70 flex justify-center items-center text-sm sm:text-base">
+
+            <div className="flex justify-end">
+              <button type="button"
+                onClick={() => { setAuthError(''); setForgotEmail(email); setForgotMsg(null); setAuthStep('forgot_email'); }}
+                className="text-xs font-bold text-indigo-400 hover:text-indigo-300 transition-colors">
+                Forgot password?
+              </button>
+            </div>
+
+            <button type="submit" disabled={isLoggingIn}
+              className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-bold hover:bg-indigo-500 transition-all shadow-lg shadow-indigo-600/30 active:scale-[0.98] disabled:opacity-70 flex justify-center items-center gap-2 text-sm sm:text-base">
               {isLoggingIn ? <Loader2 size={20} className="animate-spin text-white/70" /> : 'Secure Sign In'}
             </button>
           </form>
         </motion.div>
-      </div>
+      </AuthBg>
     );
+
+    // ── STEP: Enter email ────────────────────────────────────────────────────
+    if (authStep === 'forgot_email') return (
+      <AuthBg>
+        <motion.div key="step-forgot-email" initial={{ opacity: 0, x: 30 }} animate={{ opacity: 1, x: 0 }} className={AUTH_CARD}>
+          <button onClick={() => { setAuthStep('login'); setForgotMsg(null); setForgotEmail(''); }}
+            className="flex items-center gap-2 text-slate-400 hover:text-white text-sm font-bold mb-6 transition-colors">
+            <ArrowLeft size={16} /> Back to login
+          </button>
+
+          <div className="flex justify-center mb-6">
+            <div className="w-14 h-14 bg-indigo-500/20 rounded-2xl flex items-center justify-center border border-indigo-500/30">
+              <Mail size={26} className="text-indigo-400" />
+            </div>
+          </div>
+
+          <div className="text-center mb-8">
+            <h2 className="text-2xl font-bold tracking-tight text-white">Reset Password</h2>
+            <p className="text-slate-400 text-sm mt-2">Enter your account email and we'll send a 6-digit verification code.</p>
+          </div>
+
+          <AuthMsg msg={forgotMsg} />
+
+          <form onSubmit={handleForgotSendOtp} className="space-y-5">
+            <div>
+              <label className="text-[11px] font-bold uppercase tracking-wider text-slate-400 ml-2">Account Email</label>
+              <input type="email" required autoFocus
+                className="w-full mt-1.5 px-5 py-4 bg-slate-800/50 border border-slate-700 text-white rounded-2xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all text-sm placeholder:text-slate-500"
+                value={forgotEmail} onChange={e => { setForgotEmail(e.target.value); setForgotMsg(null); }} placeholder="name@company.com"
+              />
+            </div>
+            <button type="submit" disabled={forgotLoading}
+              className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-bold hover:bg-indigo-500 transition-all shadow-lg shadow-indigo-600/30 active:scale-[0.98] disabled:opacity-70 flex justify-center items-center gap-2">
+              {forgotLoading ? <Loader2 size={20} className="animate-spin" /> : <><Mail size={18} /> Send Verification Code</>}
+            </button>
+          </form>
+        </motion.div>
+      </AuthBg>
+    );
+
+    // ── STEP: Enter OTP ──────────────────────────────────────────────────────
+    if (authStep === 'forgot_otp') return (
+      <AuthBg>
+        <motion.div key="step-forgot-otp" initial={{ opacity: 0, x: 30 }} animate={{ opacity: 1, x: 0 }} className={AUTH_CARD}>
+          <button onClick={() => { setAuthStep('forgot_email'); setForgotOtp(''); setForgotMsg(null); }}
+            className="flex items-center gap-2 text-slate-400 hover:text-white text-sm font-bold mb-6 transition-colors">
+            <ArrowLeft size={16} /> Change email
+          </button>
+
+          <div className="flex justify-center mb-6">
+            <div className="w-14 h-14 bg-indigo-500/20 rounded-2xl flex items-center justify-center border border-indigo-500/30">
+              <ShieldCheck size={26} className="text-indigo-400" />
+            </div>
+          </div>
+
+          <div className="text-center mb-2">
+            <h2 className="text-2xl font-bold tracking-tight text-white">Enter OTP</h2>
+          </div>
+          <p className="text-slate-400 text-sm text-center mb-8 leading-relaxed">
+            We sent a 6-digit code to<br />
+            <span className="text-indigo-400 font-bold">{forgotEmail}</span>
+          </p>
+
+          <AuthMsg msg={forgotMsg} />
+
+          <form onSubmit={handleForgotVerifyOtp} className="space-y-6">
+            {/* 6 individual OTP digit boxes */}
+            <div>
+              <label className="text-[11px] font-bold uppercase tracking-wider text-slate-400 ml-1 mb-3 block">6-Digit Code</label>
+              <div className="flex gap-2 justify-between">
+                {Array.from({ length: 6 }).map((_, idx) => (
+                  <input
+                    key={idx}
+                    id={`otp-${idx}`}
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={1}
+                    value={forgotOtp[idx] || ''}
+                    onChange={e => {
+                      const val = e.target.value.replace(/\D/g, '');
+                      const arr = forgotOtp.split('');
+                      arr[idx] = val.slice(-1);
+                      const next = arr.join('').slice(0, 6);
+                      setForgotOtp(next.padEnd(forgotOtp.length < next.length ? next.length : forgotOtp.length, '').slice(0,6));
+                      setForgotMsg(null);
+                      // Auto-advance to next box
+                      if (val && idx < 5) {
+                        const nextEl = document.getElementById(`otp-${idx + 1}`);
+                        nextEl?.focus();
+                      }
+                    }}
+                    onKeyDown={e => {
+                      if (e.key === 'Backspace' && !forgotOtp[idx] && idx > 0) {
+                        const arr = forgotOtp.split('');
+                        arr[idx - 1] = '';
+                        setForgotOtp(arr.join(''));
+                        document.getElementById(`otp-${idx - 1}`)?.focus();
+                      }
+                    }}
+                    onPaste={e => {
+                      e.preventDefault();
+                      const pasted = e.clipboardData.getData('text').replace(/\D/g, '').slice(0, 6);
+                      setForgotOtp(pasted);
+                      const focusIdx = Math.min(pasted.length, 5);
+                      document.getElementById(`otp-${focusIdx}`)?.focus();
+                    }}
+                    className="w-11 h-14 text-center text-xl font-black text-white bg-slate-800/50 border border-slate-600 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all caret-transparent"
+                  />
+                ))}
+              </div>
+              <p className="text-[11px] text-slate-500 mt-3 ml-1">Code expires in 10 minutes. Check your spam folder if not received.</p>
+            </div>
+
+            <button type="submit" disabled={forgotLoading || forgotOtp.replace(/\s/g,'').length < 6}
+              className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-bold hover:bg-indigo-500 transition-all shadow-lg shadow-indigo-600/30 active:scale-[0.98] disabled:opacity-60 flex justify-center items-center gap-2">
+              {forgotLoading ? <Loader2 size={20} className="animate-spin" /> : 'Verify Code'}
+            </button>
+
+            {/* Resend */}
+            <div className="text-center">
+              {otpCooldown > 0 ? (
+                <p className="text-xs text-slate-500">Resend code in <span className="text-slate-300 font-bold">{otpCooldown}s</span></p>
+              ) : (
+                <button type="button" disabled={forgotLoading}
+                  onClick={async () => {
+                    setForgotLoading(true);
+                    setForgotMsg(null);
+                    try {
+                      await sendOtp(forgotEmail.trim().toLowerCase());
+                      setForgotMsg({ type: 'success', text: 'A new code has been sent!' });
+                    } catch (err: any) {
+                      setForgotMsg({ type: 'error', text: err.message || 'Failed to resend.' });
+                    } finally { setForgotLoading(false); }
+                  }}
+                  className="text-xs font-bold text-indigo-400 hover:text-indigo-300 transition-colors disabled:opacity-50">
+                  Didn't receive it? Resend code
+                </button>
+              )}
+            </div>
+          </form>
+        </motion.div>
+      </AuthBg>
+    );
+
+    // ── STEP: Set new password ────────────────────────────────────────────────
+    if (authStep === 'forgot_newpw') return (
+      <AuthBg>
+        <motion.div key="step-forgot-newpw" initial={{ opacity: 0, x: 30 }} animate={{ opacity: 1, x: 0 }} className={AUTH_CARD}>
+          <div className="flex justify-center mb-6">
+            <div className="w-14 h-14 bg-emerald-500/20 rounded-2xl flex items-center justify-center border border-emerald-500/30">
+              <ShieldCheck size={26} className="text-emerald-400" />
+            </div>
+          </div>
+
+          <div className="text-center mb-8">
+            <h2 className="text-2xl font-bold tracking-tight text-white">New Password</h2>
+            <p className="text-slate-400 text-sm mt-2">Identity verified! Choose a strong new password.</p>
+          </div>
+
+          <AuthMsg msg={forgotMsg} />
+
+          <form onSubmit={handleForgotSetPassword} className="space-y-5">
+            <div>
+              <label className="text-[11px] font-bold uppercase tracking-wider text-slate-400 ml-2">New Password</label>
+              <div className="relative mt-1.5">
+                <input type={showForgotPw ? 'text' : 'password'} required autoFocus minLength={6}
+                  className="w-full px-5 py-4 pr-14 bg-slate-800/50 border border-slate-700 text-white rounded-2xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all text-sm placeholder:text-slate-500"
+                  value={forgotNewPw}
+                  onChange={e => { setForgotNewPw(e.target.value); setForgotMsg(null); }}
+                  placeholder="Minimum 6 characters"
+                />
+                <button type="button" tabIndex={-1} onClick={() => setShowForgotPw(v => !v)}
+                  className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200 transition-colors">
+                  {showForgotPw ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
+              {forgotNewPw.length > 0 && (
+                <div className="flex gap-1 mt-2 px-1">
+                  {[1,2,3,4].map(n => (
+                    <div key={n} className={cn('h-1 flex-1 rounded-full transition-all',
+                      forgotNewPw.length >= n * 3
+                        ? forgotNewPw.length >= 12 ? 'bg-emerald-500' : forgotNewPw.length >= 8 ? 'bg-amber-400' : 'bg-rose-500'
+                        : 'bg-slate-700')} />
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div>
+              <label className="text-[11px] font-bold uppercase tracking-wider text-slate-400 ml-2">Confirm Password</label>
+              <input type="password" required
+                className={cn('w-full mt-1.5 px-5 py-4 bg-slate-800/50 border rounded-2xl focus:ring-2 focus:border-transparent outline-none transition-all text-sm placeholder:text-slate-500 text-white',
+                  forgotNewPwConfirm && forgotNewPwConfirm !== forgotNewPw
+                    ? 'border-rose-500/60 focus:ring-rose-500'
+                    : 'border-slate-700 focus:ring-indigo-500')}
+                value={forgotNewPwConfirm}
+                onChange={e => { setForgotNewPwConfirm(e.target.value); setForgotMsg(null); }}
+                placeholder="Re-enter new password"
+              />
+              {forgotNewPwConfirm && forgotNewPwConfirm !== forgotNewPw && (
+                <p className="text-[11px] text-rose-400 font-bold mt-1.5 ml-2">Passwords don't match</p>
+              )}
+            </div>
+
+            <button type="submit"
+              disabled={forgotLoading || forgotNewPw.length < 6 || forgotNewPw !== forgotNewPwConfirm}
+              className="w-full py-4 bg-emerald-600 text-white rounded-2xl font-bold hover:bg-emerald-500 transition-all shadow-lg shadow-emerald-600/30 active:scale-[0.98] disabled:opacity-60 flex justify-center items-center gap-2">
+              {forgotLoading ? <Loader2 size={20} className="animate-spin" /> : 'Save Password & Log In'}
+            </button>
+          </form>
+        </motion.div>
+      </AuthBg>
+    );
+
+    return null;
   }
 
-  const renderModule = () => {
+    const renderModule = () => {
     switch (activeModuleState) {
       case 'dashboard': return <DashboardModule />;
       case 'today': return <TodayAssignmentsModule />;

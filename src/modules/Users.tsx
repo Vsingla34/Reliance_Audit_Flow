@@ -29,8 +29,8 @@ export function UsersModule() {
   const isMeAdmin = profile?.role === 'admin';
   const canManageUsers = isMeSuperadmin || isMeAdmin;
 
-  // Create a secondary Supabase client that DOES NOT save the session. 
-  // This prevents the Admin from being logged out when creating new users.
+  // Secondary Supabase client that does NOT persist session —
+  // prevents the admin from being logged out when creating new users.
   const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
   const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
   const adminAuthClient = useMemo(() => createClient(supabaseUrl, supabaseKey, { 
@@ -44,11 +44,10 @@ export function UsersModule() {
         .from('users')
         .select('*')
         .order('role', { ascending: true });
-        
       if (error) throw error;
       if (data) setUsersList(data as UserProfile[]);
     } catch (error) {
-      console.error("Error fetching users:", error);
+      console.error('Error fetching users:', error);
     }
   };
 
@@ -61,10 +60,11 @@ export function UsersModule() {
   }, [profile]);
 
   const filteredUsers = usersList.filter(u => {
-    const matchesSearch = u.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                          u.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                          (u.phone?.toLowerCase() || '').includes(searchTerm.toLowerCase()) ||
-                          (u.region?.toLowerCase() || '').includes(searchTerm.toLowerCase());
+    const matchesSearch =
+      u.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      u.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (u.phone?.toLowerCase() || '').includes(searchTerm.toLowerCase()) ||
+      (u.region?.toLowerCase() || '').includes(searchTerm.toLowerCase());
     const matchesRole = filterRole === 'all' || u.role === filterRole;
     return matchesSearch && matchesRole;
   });
@@ -85,11 +85,46 @@ export function UsersModule() {
     if (!window.confirm(`Are you sure you want to delete the user: ${targetName}?`)) return;
     try {
       await supabase.from('users').delete().eq('uid', targetUid);
-      logActivity(user, profile, "User Deleted", `Deleted user account for ${targetName}`);
+      logActivity(user, profile, 'User Deleted', `Deleted user account for ${targetName}`);
       fetchData();
     } catch (error: any) {
       alert(`Failed to delete user: ${error.message}`);
     }
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // createOrGetAuthUser
+  //
+  // Supabase's signUp() silently returns the EXISTING auth user when the
+  // email is already registered — it does NOT throw. This causes a 409 on
+  // the subsequent DB insert because the uid is already in our users table.
+  //
+  // Fix strategy:
+  //   1. Call signUp() to create the Supabase Auth user (or get existing one).
+  //   2. Always use upsert() instead of insert() for the users table row so
+  //      a duplicate uid never causes a conflict error.
+  //   3. Only call resetPasswordForEmail() if this is genuinely a new user
+  //      (no existing row in our users table with that email).
+  // ─────────────────────────────────────────────────────────────────────────
+  const createOrGetAuthUser = async (email: string): Promise<{ uid: string; isNew: boolean }> => {
+    const tempPassword = Math.random().toString(36).slice(-10) + 'Aa1!';
+
+    const { data: authData, error: authError } = await adminAuthClient.auth.signUp({
+      email,
+      password: tempPassword,
+    });
+
+    if (authError) throw authError;
+
+    const newUid = authData.user?.id;
+    if (!newUid) throw new Error('Failed to generate user ID from Authentication service.');
+
+    // Detect whether Supabase returned a brand-new user or an existing one.
+    // A newly created user has identities array with items; a duplicate
+    // signUp returns the existing user but identities is empty.
+    const isNew = !!(authData.user?.identities && authData.user.identities.length > 0);
+
+    return { uid: newUid, isNew };
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -97,56 +132,93 @@ export function UsersModule() {
     if (!canManageUsers) return;
 
     if (isMeAdmin && formData.role === 'superadmin') {
-      return alert("Action Denied: You do not have permission to assign the Super Admin role.");
+      return alert('Action Denied: You do not have permission to assign the Super Admin role.');
     }
 
     setIsSubmitting(true);
 
     try {
       if (editingUser) {
-        // UPDATE EXISTING USER
+        // ── UPDATE EXISTING USER ──────────────────────────────────────────
         const { error } = await supabase.from('users').update(formData).eq('uid', editingUser.uid);
         if (error) throw error;
-        logActivity(user, profile, "User Updated", `Updated details/role for ${formData.name}`);
-        
+        logActivity(user, profile, 'User Updated', `Updated details/role for ${formData.name}`);
         setIsModalOpen(false);
         fetchData();
-        
+
       } else {
-        // CREATE NEW USER + SEND PASSWORD EMAIL
-        const tempPassword = Math.random().toString(36).slice(-10) + 'A1!@';
-        
-        const { data: authData, error: authError } = await adminAuthClient.auth.signUp({
-          email: formData.email!,
-          password: tempPassword,
-        });
-        
-        if (authError) throw authError;
-        
-        const newUid = authData.user?.id;
-        if (!newUid) throw new Error("Failed to generate user ID from Authentication service.");
+        // ── CREATE NEW USER ───────────────────────────────────────────────
 
-        const { error: dbError } = await supabase.from('users').insert([{ 
-          ...formData, 
-          uid: newUid,
-          password_setup_required: true 
-        }]);
-        
-        if (dbError) throw dbError;
+        // 1. Check if this email already exists in our users table
+        const { data: existingRow } = await supabase
+          .from('users')
+          .select('uid, email')
+          .eq('email', formData.email!)
+          .maybeSingle();
 
-        // 🔥 DYNAMIC REDIRECT FIX 🔥
-        const { error: resetError } = await adminAuthClient.auth.resetPasswordForEmail(formData.email!, {
-          redirectTo: 'https://reliance.stockcheck360.com/',
-        });
-        
-        if (resetError) {
-          console.error("Failed to trigger password email:", resetError);
-          alert("User was created successfully, but the password generation email failed to send. Please check your Supabase email settings.");
-        } else {
-          alert(`Success! An email has been sent to ${formData.email} for password generation.`);
+        if (existingRow) {
+          // User row already exists — just update it and resend the email
+          const { error: updateErr } = await supabase
+            .from('users')
+            .update({
+              name: formData.name,
+              phone: formData.phone,
+              role: formData.role,
+              region: formData.region,
+              active: formData.active,
+              password_setup_required: true,
+            })
+            .eq('uid', existingRow.uid);
+
+          if (updateErr) throw updateErr;
+
+          // Resend the password setup email
+          await adminAuthClient.auth.resetPasswordForEmail(formData.email!, {
+            redirectTo: window.location.origin + '/',
+          });
+
+          logActivity(user, profile, 'User Re-invited', `Re-sent password setup email to ${formData.name}`);
+          alert(`This email already has an account. A new password setup link has been sent to ${formData.email}.`);
+          setIsModalOpen(false);
+          fetchData();
+          return;
         }
 
-        logActivity(user, profile, "User Added", `Created new user account for ${formData.name} as ${formData.role.toUpperCase()}`);
+        // 2. Create or get the Supabase Auth user
+        const { uid: newUid, isNew } = await createOrGetAuthUser(formData.email!);
+
+        // 3. Upsert the row in our users table (handles edge case where
+        //    auth user exists but our DB row was previously deleted)
+        const { error: dbError } = await supabase.from('users').upsert(
+          {
+            uid: newUid,
+            name: formData.name,
+            email: formData.email,
+            phone: formData.phone,
+            role: formData.role,
+            region: formData.region,
+            active: formData.active,
+            password_setup_required: true,
+          },
+          { onConflict: 'uid' }
+        );
+
+        if (dbError) throw dbError;
+
+        // 4. Send the password setup email
+        const { error: resetError } = await adminAuthClient.auth.resetPasswordForEmail(
+          formData.email!,
+          { redirectTo: window.location.origin + '/' }
+        );
+
+        if (resetError) {
+          console.error('Failed to send password email:', resetError);
+          alert(`User was created successfully, but the password setup email failed to send. Please check your Supabase email settings.\n\nError: ${resetError.message}`);
+        } else {
+          alert(`Success! A password setup email has been sent to ${formData.email}.`);
+        }
+
+        logActivity(user, profile, 'User Added', `Created new user account for ${formData.name} as ${(formData.role || '').toUpperCase()}`);
         setIsModalOpen(false);
         fetchData();
       }
@@ -157,13 +229,13 @@ export function UsersModule() {
     }
   };
 
-  // --- 🔥 BULK UPLOAD LOGIC 🔥 ---
+  // ── BULK UPLOAD ───────────────────────────────────────────────────────────
   const downloadTemplate = () => {
-    const csv = "Name,Email,Phone,Role,Region\nJohn Doe,john@example.com,9876543210,auditor,North\nJane Smith,jane@example.com,9876543211,ase,South";
+    const csv = 'Name,Email,Phone,Role,Region\nJohn Doe,john@example.com,9876543210,auditor,North\nJane Smith,jane@example.com,9876543211,ase,South';
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement('a'); 
-    link.href = URL.createObjectURL(blob); 
-    link.download = "Users_Bulk_Upload_Template.csv"; 
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = 'Users_Bulk_Upload_Template.csv';
     link.click();
   };
 
@@ -181,57 +253,72 @@ export function UsersModule() {
         try {
           const parsedData = results.data;
           setBulkProgress({ current: 0, total: parsedData.length });
-          
+
           let successCount = 0;
           let failCount = 0;
 
           for (let i = 0; i < parsedData.length; i++) {
             const row: any = parsedData[i];
-            
-            // Map common column name variations
+
             const name = row.Name || row.name || '';
             const email = row.Email || row.email || '';
             const phone = row.Phone || row.phone || '';
             const rawRole = (row.Role || row.role || 'auditor').toLowerCase();
             const region = row.Region || row.region || '';
-            
-            // Validate Role & Permissions
+
             const validRoles = ['superadmin', 'admin', 'ho', 'dm', 'sm', 'asm', 'ase', 'auditor'];
             const finalRole = validRoles.includes(rawRole) ? rawRole : 'auditor';
-            
+
             if (!name || !email) { failCount++; continue; }
-            if (isMeAdmin && finalRole === 'superadmin') { failCount++; continue; } // Block unauthorized superadmin creation
-            
+            if (isMeAdmin && finalRole === 'superadmin') { failCount++; continue; }
+
             try {
-              const tempPassword = Math.random().toString(36).slice(-10) + 'A1!@';
-              const { data: authData, error: authError } = await adminAuthClient.auth.signUp({
-                email: email, password: tempPassword,
-              });
-              
-              if (authError) throw authError;
-              const newUid = authData.user?.id;
-              
-              if (newUid) {
-                 await supabase.from('users').insert([{ 
-                   uid: newUid, name, email, phone, role: finalRole, region, active: true, password_setup_required: true 
-                 }]);
-                 
-                 // 🔥 DYNAMIC REDIRECT FIX FOR BULK 🔥
-                 await adminAuthClient.auth.resetPasswordForEmail(email, {
-                   redirectTo: 'https://reliance.stockcheck360.com/',
-                 });
-                 
-                 successCount++;
+              // Check for existing row first
+              const { data: existingRow } = await supabase
+                .from('users')
+                .select('uid')
+                .eq('email', email)
+                .maybeSingle();
+
+              if (existingRow) {
+                // Already exists — update and resend
+                await supabase.from('users').update({
+                  name, phone, role: finalRole, region, active: true,
+                  password_setup_required: true,
+                }).eq('uid', existingRow.uid);
+                await adminAuthClient.auth.resetPasswordForEmail(email, {
+                  redirectTo: window.location.origin + '/',
+                });
+                successCount++;
+              } else {
+                const tempPassword = Math.random().toString(36).slice(-10) + 'Aa1!';
+                const { data: authData, error: authError } = await adminAuthClient.auth.signUp({
+                  email, password: tempPassword,
+                });
+                if (authError) throw authError;
+
+                const newUid = authData.user?.id;
+                if (!newUid) throw new Error('No uid returned');
+
+                await supabase.from('users').upsert(
+                  { uid: newUid, name, email, phone, role: finalRole, region, active: true, password_setup_required: true },
+                  { onConflict: 'uid' }
+                );
+                await adminAuthClient.auth.resetPasswordForEmail(email, {
+                  redirectTo: window.location.origin + '/',
+                });
+                successCount++;
               }
             } catch (err) {
               console.error(`Failed to create ${email}:`, err);
               failCount++;
             }
+
             setBulkProgress({ current: i + 1, total: parsedData.length });
           }
 
-          logActivity(user, profile, "Bulk Users Uploaded", `Bulk uploaded ${successCount} users.`);
-          alert(`Bulk Upload Complete!\n\nSuccessfully created: ${successCount} users.\nFailed/Skipped: ${failCount} rows.`);
+          logActivity(user, profile, 'Bulk Users Uploaded', `Bulk uploaded/updated ${successCount} users.`);
+          alert(`Bulk Upload Complete!\n\nSuccessfully created/updated: ${successCount} users.\nFailed/Skipped: ${failCount} rows.`);
           fetchData();
         } catch (error: any) {
           alert(`Upload failed: ${error.message || 'Invalid CSV format'}`);
@@ -242,7 +329,7 @@ export function UsersModule() {
         }
       },
       error: (error) => {
-        alert("Error reading CSV: " + error.message);
+        alert('Error reading CSV: ' + error.message);
         setIsBulkUploading(false);
         if (fileInputRef.current) fileInputRef.current.value = '';
       }
@@ -282,7 +369,6 @@ export function UsersModule() {
 
         {canManageUsers && (
           <div className="flex flex-wrap sm:flex-nowrap items-center gap-2 sm:gap-3 w-full xl:w-auto">
-            
             <button onClick={downloadTemplate} className="flex-1 sm:flex-none flex justify-center items-center gap-2 px-4 sm:px-5 py-3 sm:py-3.5 bg-white text-zinc-700 rounded-xl sm:rounded-2xl font-bold hover:bg-zinc-50 transition-all text-sm border border-zinc-200 shadow-sm whitespace-nowrap">
               <Download size={18} /> <span className="hidden sm:inline">Template</span>
             </button>
@@ -291,7 +377,7 @@ export function UsersModule() {
             <button onClick={() => fileInputRef.current?.click()} disabled={isBulkUploading} className="flex-1 sm:flex-none flex justify-center items-center gap-2 px-4 sm:px-5 py-3 sm:py-3.5 bg-indigo-50 text-indigo-700 border border-indigo-100 rounded-xl sm:rounded-2xl font-bold hover:bg-indigo-100 transition-all shadow-sm text-sm whitespace-nowrap relative overflow-hidden disabled:opacity-80">
               {isBulkUploading ? (
                 <>
-                  <Loader2 size={18} className="animate-spin relative z-10" /> 
+                  <Loader2 size={18} className="animate-spin relative z-10" />
                   <span className="relative z-10">Creating ({bulkProgress.current}/{bulkProgress.total})...</span>
                   <div className="absolute left-0 bottom-0 h-1 bg-indigo-500 transition-all duration-300" style={{ width: `${(bulkProgress.current / bulkProgress.total) * 100}%` }} />
                 </>
@@ -303,7 +389,6 @@ export function UsersModule() {
             <button onClick={openAddModal} disabled={isBulkUploading} className="w-full sm:w-auto flex justify-center items-center gap-2 px-5 sm:px-6 py-3 sm:py-3.5 bg-black text-white rounded-xl sm:rounded-2xl font-bold hover:bg-zinc-800 transition-all shadow-md active:scale-95 text-sm sm:text-base whitespace-nowrap disabled:opacity-50">
               <Plus size={18} /> Add User
             </button>
-
           </div>
         )}
       </div>
@@ -375,7 +460,7 @@ export function UsersModule() {
                       </td>
                     )}
                   </tr>
-                )
+                );
               })}
               {filteredUsers.length === 0 && (
                 <tr>
@@ -418,7 +503,7 @@ export function UsersModule() {
                     <label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-500 ml-1">Email Address *</label>
                     <input required type="email" placeholder="jane@company.com" disabled={!!editingUser} className="w-full mt-1.5 px-3 sm:px-4 py-2.5 sm:py-3 bg-white border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black outline-none transition-all shadow-sm text-sm disabled:bg-zinc-100 disabled:text-zinc-500" value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})} />
                     {editingUser && <p className="text-[10px] text-amber-600 font-medium mt-1 ml-1">Email cannot be changed after creation.</p>}
-                    {!editingUser && <p className="text-[10px] text-blue-600 font-medium mt-1 ml-1">An email will be sent automatically to generate a password.</p>}
+                    {!editingUser && <p className="text-[10px] text-blue-600 font-medium mt-1 ml-1">A password setup email will be sent automatically.</p>}
                   </div>
 
                   <div>
@@ -467,7 +552,6 @@ export function UsersModule() {
                   {editingUser ? 'Save Changes' : (isSubmitting ? 'Creating & Sending Email...' : 'Create User & Send Email')}
                 </button>
               </div>
-
             </motion.div>
           </div>
         )}
