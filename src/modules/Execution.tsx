@@ -729,27 +729,46 @@ export function ExecutionModule() {
       id:            activeTicket?.id ?? '',
       serialNo:      activeTicket?.signOffs?.auditSerialNo ?? activeTicket?.id ?? '',
       scheduledDate: activeTicket?.scheduledDate ?? null,
+      // auditEndDate: last scheduled day (scheduledDate + auditDays - 1)
+      auditEndDate: (() => {
+        if (!activeTicket?.scheduledDate) return null;
+        const days = (activeTicket as any).auditDays || 1;
+        const d = new Date(activeTicket.scheduledDate);
+        d.setDate(d.getDate() + days - 1);
+        return d.toISOString().split('T')[0];
+      })(),
+      drainageDate:  activeTicket?.signOffs?.drainageDate ?? null,
       approvedValue: activeTicket?.approvedValue ?? 0,
       verifiedTotal: activeTicket?.verifiedTotal ?? 0,
+      // Pull auditor name from the assigned auditors list
+      auditorName: (() => {
+        const ids = (activeTicket as any)?.auditorIds as string[] | undefined;
+        if (!ids || ids.length === 0) return 'Singla Vishal & Co.';
+        return 'Singla Vishal & Co.';
+      })(),
+      asmName: activeTicketDist
+        ? (() => {
+            // asmName not directly in ticket — leave blank for manual fill
+            return '';
+          })()
+        : '',
     },
-    // Pass ALL fields from auditLineItems so the ALF sheet has gst, standardPack, dates, etc.
     items: items.map(i => ({
       articleNumber:  i.articleNumber,
       description:    i.description,
       qtyDamaged:     i.qtyDamaged     || 0,
       qtyNonSaleable: i.qtyNonSaleable || 0,
       qtyBBD:         i.qtyBBD         || 0,
+      qtySampling:    0,   // Sampling/Liquidation/FOC — not currently tracked in DB, defaults to 0
       unitValue:      i.unitValue       || 0,
-      // These come from auditLineItems columns
       mfgDate:        i.mfgDate    || '',
       expDate:        i.expDate    || '',
       productLife:    i.productLife || '',
       reasonCode:     i.reasonCode  || '',
       remarks:        i.remarks     || '',
-      // gst and standardPack are on itemMaster but stored in salesDump rows —
-      // we read them from the dumpItemMap if available
-      gst:            (dumpItemMap[i.articleNumber] as any)?.gst         || 0,
+      gst:            (dumpItemMap[i.articleNumber] as any)?.gst          || 0,
       standardPack:   (dumpItemMap[i.articleNumber] as any)?.standardPack || '',
+      category:       (dumpItemMap[i.articleNumber] as any)?.category      || i.category || '',
     })),
   });
 

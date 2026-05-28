@@ -256,13 +256,26 @@ export function DistributorsModule() {
     setIsModalOpen(true);
   };
 
-  // --- UPDATED CSV EXPORT TEMPLATE ---
+  // ─────────────────────────────────────────────────────────────────────────
+  // CSV TEMPLATE — includes Assignment No column so imports work correctly
+  // Columns: Code, AssignmentNo, AnchorName, Name, ApprovedValue,
+  //          HO_Emails, DM_Emails, SM_Emails, ASM_Emails, ASE_Emails,
+  //          Region, City, State, Address
+  // ─────────────────────────────────────────────────────────────────────────
   const downloadTemplate = () => {
-    const csvContent = "Code,AnchorName,Name,ApprovedValue,HO_Emails,DM_Emails,SM_Emails,ASM_Emails,ASE_Emails,Region,City,State,Address\nDIST-001,Reliance,Reliance Smart Point,500000,ho@comp.com,,sm1@comp.com;sm2@comp.com,asm@comp.com,ase1@comp.com;ase2@comp.com,North,Delhi,Delhi,123 Main Street Sector 4";
+    const headers = 'Code,AssignmentNo,AnchorName,Name,ApprovedValue,HO_Emails,DM_Emails,SM_Emails,ASM_Emails,ASE_Emails,Region,City,State,Address';
+    const example = 'DIST-001,ASN-2024-001,Reliance,Reliance Smart Point,500000,ho@comp.com,,sm1@comp.com;sm2@comp.com,asm@comp.com,ase1@comp.com;ase2@comp.com,North,Delhi,Delhi,123 Main Street Sector 4';
+    const csvContent = `${headers}\n${example}`;
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = "Distributor_Import_Template.csv"; link.click();
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = 'Distributor_Import_Template.csv';
+    link.click();
   };
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // CSV IMPORT — reads Assignment No (col index 1) and maps it correctly
+  // ─────────────────────────────────────────────────────────────────────────
   const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!hasWriteAccess()) return;
     
@@ -273,9 +286,9 @@ export function DistributorsModule() {
     reader.onload = async (event) => {
       try {
         const text = event.target?.result as string;
-        
         const lines = text.split(/\r?\n/).filter(line => line.trim() !== '');
-        
+
+        // Proper CSV parser — handles quoted fields with commas inside
         const parseCSVRow = (str: string) => {
           const result = [];
           let cur = '';
@@ -286,59 +299,101 @@ export function DistributorsModule() {
             else cur += str[i];
           }
           result.push(cur.trim());
-          return result.map(s => s.replace(/^"|"$/g, '').trim()); 
+          return result.map(s => s.replace(/^"|"$/g, '').trim());
+        };
+
+        // Parse header row to find column indices dynamically
+        // This makes import resilient to column reordering
+        const rawHeaders = parseCSVRow(lines[0]);
+        const headers = rawHeaders.map(h => h.toLowerCase().replace(/[\s_]/g, ''));
+
+        const col = (names: string[]): number => {
+          for (const name of names) {
+            const idx = headers.findIndex(h => h === name.toLowerCase().replace(/[\s_]/g, ''));
+            if (idx !== -1) return idx;
+          }
+          return -1;
+        };
+
+        // Column index map — supports both old and new header names
+        const COL = {
+          code:              col(['code', 'distributorcode']),
+          assignmentNo:      col(['assignmentno', 'assignmentserialno', 'assignment_serial_no', 'assignno']),
+          anchorName:        col(['anchorname', 'anchor']),
+          name:              col(['name', 'distributorname']),
+          approvedValue:     col(['approvedvalue', 'value', 'budget']),
+          hoEmails:          col(['ho_emails', 'hoemails', 'ho']),
+          dmEmails:          col(['dm_emails', 'dmemails', 'dm']),
+          smEmails:          col(['sm_emails', 'smemails', 'sm']),
+          asmEmails:         col(['asm_emails', 'asmemails', 'asm']),
+          aseEmails:         col(['ase_emails', 'aseemails', 'ase']),
+          region:            col(['region']),
+          city:              col(['city']),
+          state:             col(['state']),
+          address:           col(['address']),
+        };
+
+        const get = (cols: number[], row: string[]) => {
+          for (const c of cols) {
+            if (c !== -1 && row[c] !== undefined) return row[c].trim();
+          }
+          return '';
         };
 
         const findUserIds = (emailStr: string, role: string) => {
-          if (!emailStr || !emailStr.trim()) return [];
+          if (!emailStr?.trim()) return [];
           const emails = emailStr.split(/[;|,]/).map(e => e.trim().toLowerCase()).filter(Boolean);
-          const matchedUsers = users.filter(u => emails.includes(u.email.toLowerCase()) && u.role === role);
-          return matchedUsers.map(u => u.uid);
+          return users
+            .filter(u => emails.includes(u.email.toLowerCase()) && u.role === role)
+            .map(u => u.uid);
         };
 
         const newDistributors = lines.slice(1).map(line => {
           const cols = parseCSVRow(line);
-          
-          if (cols.length < 4) return null; 
+          if (cols.length < 4) return null;
 
-          const [code, anchorName, name, approvedValue, hoEmails, dmEmails, smEmails, asmEmails, aseEmails, region, city, state, address] = cols;
+          const code = get([COL.code], cols);
+          const name = get([COL.name], cols);
           if (!code || !name) return null;
-          
+
           return {
-            id: Math.random().toString(36).substring(7), 
-            code: code, 
-            anchorName: anchorName || '', 
-            name: name, 
-            approvedValue: parseFloat(approvedValue) || 0, 
-            hoIds: findUserIds(hoEmails, 'ho'), 
-            dmIds: findUserIds(dmEmails, 'dm'), 
-            smIds: findUserIds(smEmails, 'sm'), 
-            asmIds: findUserIds(asmEmails, 'asm'), 
-            aseIds: findUserIds(aseEmails, 'ase'), 
-            region: region || '', 
-            city: city || '', 
-            state: state || '', 
-            address: address || '',
-            active: true
+            id:                 Math.random().toString(36).substring(7),
+            code,
+            assignment_serial_no: get([COL.assignmentNo], cols) || '',
+            anchorName:         get([COL.anchorName], cols) || '',
+            name,
+            approvedValue:      parseFloat(get([COL.approvedValue], cols).replace(/[^0-9.]/g, '')) || 0,
+            hoIds:              findUserIds(get([COL.hoEmails], cols), 'ho'),
+            dmIds:              findUserIds(get([COL.dmEmails], cols), 'dm'),
+            smIds:              findUserIds(get([COL.smEmails], cols), 'sm'),
+            asmIds:             findUserIds(get([COL.asmEmails], cols), 'asm'),
+            aseIds:             findUserIds(get([COL.aseEmails], cols), 'ase'),
+            region:             get([COL.region], cols) || '',
+            city:               get([COL.city], cols) || '',
+            state:              get([COL.state], cols) || '',
+            address:            get([COL.address], cols) || '',
+            active:             true,
           };
         }).filter(Boolean);
 
-        if (newDistributors.length > 0) {
-          const { error } = await supabase.from('distributors').insert(newDistributors);
-          if (error) throw error; 
-          
-          logActivity(user!, profile!, "Distributors Imported", `Bulk imported ${newDistributors.length} distributors via CSV`);
-          alert(`Successfully imported ${newDistributors.length} distributors!`);
-          fetchData();
-        } else {
-          alert("No valid distributor rows found in the CSV.");
+        if (newDistributors.length === 0) {
+          alert('No valid distributor rows found in the CSV. Make sure your file has the correct headers.');
+          return;
         }
-      } catch (error: any) { 
+
+        const { error } = await supabase.from('distributors').insert(newDistributors);
+        if (error) throw error;
+
+        logActivity(user!, profile!, "Distributors Imported", `Bulk imported ${newDistributors.length} distributors via CSV`);
+        alert(`Successfully imported ${newDistributors.length} distributors!`);
+        fetchData();
+
+      } catch (error: any) {
         console.error(error);
-        alert(`Failed to import.\n\nError: ${error.message}\n\nDid you update your Supabase Database columns (e.g., aseIds) to be Text Arrays (text[])?`); 
-      } finally { 
-        setIsImportModalOpen(false); 
-        if (e.target) e.target.value = ''; 
+        alert(`Failed to import.\n\nError: ${error.message}\n\nCheck that your CSV columns match the template headers.`);
+      } finally {
+        setIsImportModalOpen(false);
+        if (e.target) e.target.value = '';
       }
     };
     reader.readAsText(file);
@@ -541,7 +596,7 @@ export function DistributorsModule() {
         )}
       </div>
 
-      {/* --- BULK EMAIL MODAL WITH MULTI-SELECT --- */}
+      {/* --- BULK EMAIL MODAL --- */}
       <AnimatePresence>
         {isEmailModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 md:p-6">
@@ -561,7 +616,6 @@ export function DistributorsModule() {
               
               <div className="p-6 md:p-8 flex-1 min-h-0 overflow-y-auto bg-zinc-50/50 custom-scrollbar">
                 <form id="bulk-email-form" onSubmit={handleSendBulkEmail} className="space-y-6">
-                  
                   <div>
                     <label className="text-xs font-bold uppercase tracking-wider text-zinc-500 ml-1">Select Target Roles (Multi-Select)</label>
                     <div className="flex flex-wrap gap-2 mt-2">
@@ -572,31 +626,22 @@ export function DistributorsModule() {
                         { id: 'asmIds', label: 'Area Sales Mgr (ASM)' },
                         { id: 'aseIds', label: 'Area Sales Exec (ASE)' }
                       ].map(role => (
-                        <button
-                          key={role.id}
-                          type="button"
+                        <button key={role.id} type="button"
                           onClick={() => {
                             if (emailTargetRoles.includes(role.id)) {
-                              if (emailTargetRoles.length > 1) {
-                                setEmailTargetRoles(emailTargetRoles.filter(r => r !== role.id));
-                              }
+                              if (emailTargetRoles.length > 1) setEmailTargetRoles(emailTargetRoles.filter(r => r !== role.id));
                             } else {
                               setEmailTargetRoles([...emailTargetRoles, role.id]);
                             }
                           }}
-                          className={cn(
-                            "px-4 py-2 text-sm font-bold rounded-xl border transition-all active:scale-95",
-                            emailTargetRoles.includes(role.id)
-                              ? "bg-blue-50 border-blue-200 text-blue-700 shadow-sm"
-                              : "bg-white border-zinc-200 text-zinc-600 hover:bg-zinc-50"
-                          )}
-                        >
+                          className={cn("px-4 py-2 text-sm font-bold rounded-xl border transition-all active:scale-95",
+                            emailTargetRoles.includes(role.id) ? "bg-blue-50 border-blue-200 text-blue-700 shadow-sm" : "bg-white border-zinc-200 text-zinc-600 hover:bg-zinc-50"
+                          )}>
                           {role.label}
                         </button>
                       ))}
                     </div>
                   </div>
-
                   <div>
                     <label className="text-xs font-bold uppercase tracking-wider text-zinc-500 ml-1">Subject</label>
                     <input required type="text" placeholder="Important Policy Update..." className="w-full mt-2 px-4 py-3 bg-white border border-zinc-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all shadow-sm font-bold text-lg" value={emailSubject} onChange={(e) => setEmailSubject(e.target.value)} />
@@ -643,41 +688,19 @@ export function DistributorsModule() {
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
                       <div className="space-y-2">
                         <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 ml-1">Distributor Code *</label>
-                        <input
-                          required
-                          className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black transition-all"
-                          value={formData.code}
-                          onChange={(e) => setFormData({ ...formData, code: e.target.value })}
-                          placeholder="e.g. DIST-001"
-                        />
+                        <input required className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black transition-all" value={formData.code} onChange={(e) => setFormData({ ...formData, code: e.target.value })} placeholder="e.g. DIST-001" />
                       </div>
                       <div className="space-y-2">
                         <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 ml-1">Assignment No.</label>
-                        <input
-                          className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black transition-all"
-                          value={formData.assignment_serial_no || ''}
-                          onChange={(e) => setFormData({ ...formData, assignment_serial_no: e.target.value })}
-                          placeholder="e.g. ASN-2024-001"
-                        />
+                        <input className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black transition-all" value={formData.assignment_serial_no || ''} onChange={(e) => setFormData({ ...formData, assignment_serial_no: e.target.value })} placeholder="e.g. ASN-2024-001" />
                       </div>
                       <div className="space-y-2">
                         <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 ml-1">Distributor Name *</label>
-                        <input
-                          required
-                          className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black transition-all"
-                          value={formData.name}
-                          onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                          placeholder="Company Name Ltd."
-                        />
+                        <input required className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black transition-all" value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} placeholder="Company Name Ltd." />
                       </div>
                       <div className="space-y-2">
                         <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 ml-1">Anchor Name</label>
-                        <input
-                          className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black transition-all"
-                          value={formData.anchorName}
-                          onChange={(e) => setFormData({ ...formData, anchorName: e.target.value })}
-                          placeholder="e.g. Reliance"
-                        />
+                        <input className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black transition-all" value={formData.anchorName} onChange={(e) => setFormData({ ...formData, anchorName: e.target.value })} placeholder="e.g. Reliance" />
                       </div>
                     </div>
                   </div>
