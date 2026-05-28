@@ -160,19 +160,54 @@ export function ExecutionModule() {
     if (activeTicket) {
       fetchItems(activeTicket.id);
       if (activeDistCode) loadDumpData(activeDistCode);
-      setItemSearchQuery(''); 
-      
-      const channel = supabase.channel(`items-${activeTicket.id}`)
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'auditLineItems', filter: `ticketId=eq.${activeTicket.id}` }, () => fetchItems(activeTicket.id))
+      setItemSearchQuery('');
+
+      const channel = supabase
+        .channel(`items-${activeTicket.id}`)
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'auditLineItems', filter: `ticketId=eq.${activeTicket.id}` },
+          (payload: any) => {
+            const { eventType, new: updated, old } = payload;
+
+            if (eventType === 'INSERT') {
+              // New row added (e.g. from AddItemModal) — append without touching existing rows.
+              // This is the key fix: a full fetchItems() here would overwrite any
+              // mfg/exp dates the user has typed in other rows but not yet saved.
+              setItems(prev => {
+                // Skip if already present (optimistic insert)
+                if (prev.some(i => i.id === updated.id)) return prev;
+                return [...prev, updated as AuditLineItem].sort((a, b) =>
+                  a.articleNumber.localeCompare(b.articleNumber)
+                );
+              });
+              return;
+            }
+
+            if (eventType === 'DELETE') {
+              setItems(prev => prev.filter(i => i.id !== old.id));
+              return;
+            }
+
+            if (eventType === 'UPDATE') {
+              // Don't overwrite a row if the saveQueue has a pending write for it —
+              // the local state is more up-to-date than the DB echo coming back.
+              if (saveQueue.hasPending(updated.id)) return;
+              setItems(prev =>
+                prev.map(i => i.id === updated.id ? { ...i, ...updated } : i)
+              );
+            }
+          }
+        )
         .subscribe();
-        
+
       return () => { supabase.removeChannel(channel); };
-    } else { 
-      setItems([]); 
-      setAvailableDumpItems([]); 
-      setItemSearchQuery(''); 
+    } else {
+      setItems([]);
+      setAvailableDumpItems([]);
+      setItemSearchQuery('');
     }
-  }, [activeTicket?.id, activeDistCode]); 
+  }, [activeTicket?.id, activeDistCode]);
 
   useEffect(() => {
     if (activeTicket) {
