@@ -171,16 +171,26 @@ export function applyLineItemPatch(
 // ── OPTIMIZED FETCH FUNCTIONS ──────────────────────────────────────────────────
 
 export async function fetchTickets(profile: { role: string; uid: string }, distIds: string[]) {
-  let q = supabase.from('auditTickets').select(TICKET_COLS);
-  if (profile.role === 'auditor') {
-    q = q.or(`auditorIds.cs.{${profile.uid}}`);
-  } else if (['ase','asm','sm','dm'].includes(profile.role)) {
-    if (distIds.length === 0) return [];
-    q = q.in('distributorId', distIds);
+  // Paginated — fetches all pages to handle 1100+ assignments
+  const pageSize = 1000;
+  let allRows: AuditTicket[] = [];
+  let from = 0;
+  while (true) {
+    let q = supabase.from('auditTickets').select(TICKET_COLS);
+    if (profile.role === 'auditor') {
+      q = q.or(`auditorIds.cs.{${profile.uid}}`);
+    } else if (['ase','asm','sm','dm'].includes(profile.role)) {
+      if (distIds.length === 0) return [];
+      q = q.in('distributorId', distIds);
+    }
+    const { data, error } = await q.range(from, from + pageSize - 1);
+    if (error) throw error;
+    if (!data || data.length === 0) break;
+    allRows = allRows.concat(data as AuditTicket[]);
+    if (data.length < pageSize) break;
+    from += pageSize;
   }
-  const { data, error } = await q;
-  if (error) throw error;
-  return (data || []) as AuditTicket[];
+  return allRows;
 }
 
 export async function fetchLineItems(ticketId: string): Promise<AuditLineItem[]> {
@@ -197,23 +207,23 @@ export async function fetchLineItems(ticketId: string): Promise<AuditLineItem[]>
 
 export async function fetchDumpItems(distCode: string) {
   return dedupedFetch(`dump-${distCode}`, async () => {
-    const { data, error } = await supabase
-      .from('salesDump')
-      .select(DUMP_COLS)
-      // eq is index-friendly; ilike forces a full table scan
-      .eq('distributorCode', distCode.trim());
-    if (error) {
-      // Fallback to ilike if eq returns nothing (case sensitivity)
-      const { data: d2 } = await supabase
+    // Paginated salesDump fetch — a single distributor can have hundreds of lines
+    const pageSize = 1000;
+    let allRows: any[] = [];
+    let from = 0;
+    while (true) {
+      const { data, error } = await supabase
         .from('salesDump')
         .select(DUMP_COLS)
-        .ilike('distributorCode', distCode.trim());
-      return d2 || [];
+        .ilike('distributorCode', distCode.trim())
+        .range(from, from + pageSize - 1);
+      if (error) break;
+      if (!data || data.length === 0) break;
+      allRows = allRows.concat(data);
+      if (data.length < pageSize) break;
+      from += pageSize;
     }
-    return data && data.length > 0 ? data : (
-      // Second attempt with ilike for case-insensitive match
-      (await supabase.from('salesDump').select(DUMP_COLS).ilike('distributorCode', distCode.trim())).data || []
-    );
+    return allRows;
   });
 }
 

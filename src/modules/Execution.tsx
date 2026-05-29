@@ -9,6 +9,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { CheckInBlock } from '../components/Execution/CheckInBlock';
 import { AddItemModal } from '../components/Execution/AddItemModal';
 import { ChatModal } from '../components/Execution/ChatModal';
+import { saveQueue } from '../supabaseOptimized';
 
 const BUCKET_NAME = 'audit-media'; 
 
@@ -26,6 +27,27 @@ export interface CombinedDumpItem {
   billingDate?: string; plant?: string; billingDoc?: string; gst?: number; approxShelfLife?: string; standardPack?: string;
 }
 
+
+// ─── Paginated fetch — Supabase default limit is 1000 rows. ─────────────────
+// This fetches all pages automatically so 1100+ assignments never get truncated.
+async function fetchAllRows<T>(
+  queryBuilder: () => any,
+  pageSize = 1000
+): Promise<T[]> {
+  let allRows: T[] = [];
+  let from = 0;
+  while (true) {
+    const { data, error } = await queryBuilder()
+      .range(from, from + pageSize - 1);
+    if (error) throw error;
+    if (!data || data.length === 0) break;
+    allRows = allRows.concat(data as T[]);
+    if (data.length < pageSize) break;  // last page
+    from += pageSize;
+  }
+  return allRows;
+}
+
 export function ExecutionModule() {
   const { profile, user } = useAuth();
   const [tickets, setTickets] = useState<AuditTicket[]>([]);
@@ -41,6 +63,7 @@ export function ExecutionModule() {
   const [itemSearchQuery, setItemSearchQuery] = useState('');
   
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [isStatusExporting, setIsStatusExporting] = useState(false);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [drainageDateInput, setDrainageDateInput] = useState('');
   
@@ -81,38 +104,148 @@ export function ExecutionModule() {
     return map;
   }, [availableDumpItems]);
 
+  // ── Download Status Report — all tickets in a single "Reporting Format" sheet ──
+  const downloadStatusReport = async () => {
+    if (isStatusExporting) return;
+    setIsStatusExporting(true);
+    try {
+      const ExcelJS = (await import('exceljs')).default;
+      const wb = new ExcelJS.Workbook();
+      wb.creator = 'Reliance Audit System';
+      const ws = wb.addWorksheet('Reporting Format - Audit Status');
+
+      const thinS = { style: 'thin' as any };
+      const thinB = { top: thinS, left: thinS, bottom: thinS, right: thinS };
+      const fillHdr = { type: 'pattern' as any, pattern: 'solid' as any, fgColor: { argb: 'FFD9E1F2' } };
+
+      const headers = [
+        'Std. Serial No.', 'Phase', 'Auditor Name', 'Approved Date', 'Audit Date',
+        'Region', 'State', 'Anchor Code', 'Anchor Name', 'Distributor name',
+        'Reported/ Approved Value', 'Value as per Auditor (Including GST)', 'Fin Review Value With GST',
+        'Diff Proposed V/S Actual', 'Audit Status (RCPL)', 'Auditor Remark (As per Auditor)',
+        'Approved Value in Cr.', 'Audit Date (as per Auditor)', 'End Date of Physical Verification',
+        'Drainage start date', 'Drainage end date', 'Audit Sharing Date', 'Audit Planned Date',
+        'Direct/ Indirect Customer', 'ASM Name',
+      ];
+      const colWidths = [16,14,16,14,14,10,12,16,18,20,16,16,16,14,14,18,14,16,22,14,14,18,14,14,14];
+      ws.columns = colWidths.map(w => ({ width: w }));
+      ws.getRow(1).height = 40;
+      headers.forEach((h, i) => {
+        const cell = ws.getRow(1).getCell(i + 1);
+        cell.value = h;
+        cell.font = { name: 'Arial', bold: true, size: 9 };
+        cell.fill = fillHdr;
+        cell.border = thinB;
+        cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+      });
+
+      const statusLabel: Record<string, string> = {
+        tentative: 'Tentative', scheduled: 'Scheduled', in_progress: 'In Progress',
+        auditor_submitted: 'Auditor Submitted', submitted: 'Submitted',
+        drainage_pending: 'Drainage Pending', closed: 'Closed',
+      };
+
+      let rowNum = 2;
+      for (const ticket of tickets) {
+        const dist = distMap[ticket.distributorId];
+        if (!dist) continue;
+        const auditDays = (ticket as any).auditDays || 1;
+        let endDate = '';
+        if (ticket.scheduledDate) {
+          const d = new Date(ticket.scheduledDate);
+          d.setDate(d.getDate() + auditDays - 1);
+          endDate = d.toISOString().split('T')[0];
+        }
+        const verifiedVal = ticket.verifiedTotal || 0;
+        const diff = verifiedVal - (ticket.approvedValue || 0);
+        const row = [
+          dist.assignment_serial_no || '',
+          'Phase V - Part 2',
+          'Singla Vishal & Co.',
+          ticket.scheduledDate ? new Date(ticket.scheduledDate) : '',
+          ticket.scheduledDate ? new Date(ticket.scheduledDate) : '',
+          dist.region || '',
+          dist.state || '',
+          dist.code || '',
+          dist.anchorName || '',
+          dist.name || '',
+          ticket.approvedValue || 0,
+          verifiedVal,
+          '',
+          diff,
+          statusLabel[ticket.status] || ticket.status,
+          '',
+          ticket.approvedValue ? (ticket.approvedValue / 10000000) : 0,
+          ticket.scheduledDate ? new Date(ticket.scheduledDate) : '',
+          endDate ? new Date(endDate) : '',
+          (ticket as any).signOffs?.drainageDate ? new Date((ticket as any).signOffs.drainageDate) : '',
+          '',
+          '',
+          ticket.scheduledDate ? new Date(ticket.scheduledDate) : '',
+          'Direct',
+          '',
+        ];
+        ws.getRow(rowNum).height = 16;
+        row.forEach((v, i) => {
+          const cell = ws.getRow(rowNum).getCell(i + 1);
+          const isCurrency = [11, 12, 13, 14, 17].includes(i + 1);
+          const isDate = v instanceof Date;
+          cell.value = v as any;
+          cell.font = { name: 'Arial', size: 9 };
+          cell.border = thinB;
+          cell.alignment = { horizontal: isCurrency ? 'right' : 'left', vertical: 'middle' };
+          if (isDate) cell.numFmt = 'DD-MM-YYYY';
+          else if (isCurrency) cell.numFmt = '[$₹-en-IN]#,##0.00';
+        });
+        rowNum++;
+      }
+
+      const buffer = await wb.xlsx.writeBuffer();
+      const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `Audit_Status_Report_${new Date().toISOString().split('T')[0]}.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Status report error:', err);
+      alert('Failed to generate status report.');
+    } finally {
+      setIsStatusExporting(false);
+    }
+  };
+
   const fetchData = async () => {
     if (!profile) return;
     try {
-      let tQuery = supabase.from('auditTickets')
-        .select('*')
-        .in('status', ['scheduled', 'in_progress', 'auditor_submitted', 'submitted', 'drainage_pending', 'signed', 'evidence_uploaded', 'closed']);
-      
-      if (profile.role === 'auditor') {
-        tQuery = tQuery.or(`auditorId.eq.${profile.uid},auditorIds.cs.{${profile.uid}}`);
-      }
-
-      let dQuery = supabase.from('distributors').select('*');
-      if (['ase', 'asm', 'sm', 'dm'].includes(profile.role)) {
-        if (profile.role === 'ase') dQuery = dQuery.contains('aseIds', [profile.uid]);
-        else if (profile.role === 'asm') dQuery = dQuery.contains('asmIds', [profile.uid]);
-        else if (profile.role === 'sm') dQuery = dQuery.contains('smIds', [profile.uid]);
-        else if (profile.role === 'dm') dQuery = dQuery.contains('dmIds', [profile.uid]);
-      } 
-
-      const [tRes, dRes] = await Promise.all([tQuery, dQuery]);
-      
-      if (tRes.error) throw tRes.error;
-      if (dRes.error) throw dRes.error;
-
-      const fetchedTickets = (tRes.data || []) as AuditTicket[];
-      const fetchedDistributors = (dRes.data || []) as any[];
-
+      // Paginated distributors fetch — handles 1100+ distributors without truncation
+      let distBaseQuery = () => {
+        let q = supabase.from('distributors').select('id,code,name,anchorName,address,city,state,region,approvedValue,aseIds,asmIds,smIds,dmIds,hoIds,active,assignment_serial_no');
+        if (profile.role === 'ase') q = q.contains('aseIds', [profile.uid]);
+        else if (profile.role === 'asm') q = q.contains('asmIds', [profile.uid]);
+        else if (profile.role === 'sm')  q = q.contains('smIds',  [profile.uid]);
+        else if (profile.role === 'dm')  q = q.contains('dmIds',  [profile.uid]);
+        return q;
+      };
+      const fetchedDistributors = await fetchAllRows<any>(distBaseQuery);
       setDistributors(fetchedDistributors);
 
-      const validDistIds = new Set(fetchedDistributors.map(d => d.id));
+      const validDistIds = new Set(fetchedDistributors.map((d: any) => d.id));
+
+      // Paginated tickets fetch
+      let ticketBaseQuery = () => {
+        let q = supabase.from('auditTickets')
+          .select('id,distributorId,status,scheduledDate,proposedDate,auditorIds,approvedValue,maxAllowedValue,verifiedTotal,signOffs,presenceLogs,drainageDate,auditDays,updatedAt,createdAt')
+          .in('status', ['scheduled', 'in_progress', 'auditor_submitted', 'submitted', 'drainage_pending', 'signed', 'evidence_uploaded', 'closed']);
+        if (profile.role === 'auditor')
+          q = q.or(`auditorId.eq.${profile.uid},auditorIds.cs.{${profile.uid}}`);
+        return q;
+      };
+      const fetchedTickets = await fetchAllRows<AuditTicket>(ticketBaseQuery);
       const validTickets = fetchedTickets.filter(t => validDistIds.has(t.distributorId));
-      
       setTickets(validTickets);
 
     } catch (error) {
@@ -122,7 +255,31 @@ export function ExecutionModule() {
 
   useEffect(() => {
     fetchData();
-    const channel = supabase.channel('execution-channel').on('postgres_changes', { event: '*', schema: 'public', table: 'auditTickets' }, fetchData).subscribe();
+    // Realtime: listen for any auditTicket change, then surgically update local state
+    // (full fetchData only runs on mount; realtime uses applyTicketPatch pattern)
+    const channel = supabase.channel('execution-channel')
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'auditTickets' },
+        (payload: any) => {
+          const updated = payload.new as AuditTicket;
+          setTickets(prev => prev.map(t => t.id === updated.id ? { ...t, ...updated } : t));
+        })
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'auditTickets' },
+        (payload: any) => {
+          const inserted = payload.new as AuditTicket;
+          // Only add if it belongs to a distributor this user can see
+          setDistributors(prevDist => {
+            const ids = new Set(prevDist.map((d: any) => d.id));
+            if (ids.has(inserted.distributorId)) {
+              setTickets(prev => prev.some(t => t.id === inserted.id) ? prev : [...prev, inserted]);
+            }
+            return prevDist;
+          });
+        })
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'auditTickets' },
+        (payload: any) => {
+          setTickets(prev => prev.filter(t => t.id !== payload.old.id));
+        })
+      .subscribe();
     return () => { supabase.removeChannel(channel); };
   }, [profile]);
 
@@ -133,8 +290,13 @@ export function ExecutionModule() {
 
   const loadDumpData = async (distCode: string) => {
     try {
-      const { data: dump } = await supabase.from('salesDump').select('*').ilike('distributorCode', distCode.trim());
-      if (dump && dump.length > 0) {
+      // salesDump: paginated, column-projected (no select('*') which pulls all columns)
+      const dump = await fetchAllRows<any>(
+        () => supabase.from('salesDump')
+          .select('id,distributorCode,itemCode,itemName,quantity,rate,totalValue,category,gst,standardPack,billingDate,plant,billingDoc')
+          .ilike('distributorCode', distCode.trim())
+      );
+      if (dump.length > 0) {
         const combined = dump.map(d => {
           // Strip commas/spaces before parsing — DB may have stored "472,145.17" as string
           const parseNum = (v: any) => parseFloat(String(v ?? '').replace(/[^0-9.]/g, '')) || 0;
@@ -727,7 +889,7 @@ export function ExecutionModule() {
     distributor: activeTicketDist,
     audit: {
       id:            activeTicket?.id ?? '',
-      serialNo:      activeTicket?.signOffs?.auditSerialNo ?? activeTicket?.id ?? '',
+      serialNo:      activeTicketDist?.assignment_serial_no || activeTicket?.signOffs?.auditSerialNo || activeTicket?.id || '',
       scheduledDate: activeTicket?.scheduledDate ?? null,
       // auditEndDate: last scheduled day (scheduledDate + auditDays - 1)
       auditEndDate: (() => {
@@ -1367,10 +1529,10 @@ export function ExecutionModule() {
 
   return (
     <div className="space-y-6 sm:space-y-8 pb-12 w-full min-w-0">
-      
-      {/* Scrollable Tabs */}
-      <div className="-mx-4 sm:mx-0 px-4 sm:px-0">
-        <div className="flex bg-slate-100/80 p-1.5 rounded-xl sm:rounded-2xl overflow-x-auto w-full md:w-fit custom-scrollbar scroll-smooth">
+
+      {/* Tabs row + Status Report download button */}
+      <div className="-mx-4 sm:mx-0 px-4 sm:px-0 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="flex bg-slate-100/80 p-1.5 rounded-xl sm:rounded-2xl overflow-x-auto w-full sm:w-fit custom-scrollbar scroll-smooth">
           <button onClick={() => setActiveTab('active')} className={cn("px-4 sm:px-6 py-2.5 sm:py-3 rounded-lg sm:rounded-xl text-xs sm:text-sm font-bold transition-all whitespace-nowrap flex items-center gap-2", activeTab === 'active' ? "bg-white text-indigo-700 shadow-sm border border-slate-200/50" : "text-slate-500 hover:text-slate-900")}>
             Active <span className={cn("px-1.5 sm:px-2 py-0.5 rounded-md text-[9px] sm:text-[10px]", activeTab === 'active' ? "bg-indigo-50 text-indigo-700" : "bg-slate-200/50 text-slate-500")}>{activeTickets.length}</span>
           </button>
@@ -1384,47 +1546,147 @@ export function ExecutionModule() {
             Completed <span className={cn("px-1.5 sm:px-2 py-0.5 rounded-md text-[9px] sm:text-[10px]", activeTab === 'completed' ? "bg-indigo-50 text-indigo-700" : "bg-slate-200/50 text-slate-500")}>{completedTickets.length}</span>
           </button>
         </div>
+
+        {/* Download Status Report — all assignments in one Excel sheet */}
+        {isAdminOrSuperadmin && (
+          <button
+            onClick={downloadStatusReport}
+            disabled={isStatusExporting || tickets.length === 0}
+            title="Download all assignments as Reporting Format - Audit Status Excel"
+            className={cn(
+              "flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-sm transition-all border shadow-sm active:scale-95 whitespace-nowrap shrink-0",
+              tickets.length > 0
+                ? "bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100"
+                : "bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed"
+            )}
+          >
+            {isStatusExporting
+              ? <><Loader2 size={16} className="animate-spin" /> Generating…</>
+              : <><Download size={16} /> Status Report</>
+            }
+          </button>
+        )}
       </div>
 
-      {displayTickets.length === 0 ? (
-        <div className="p-8 sm:p-16 text-center bg-white rounded-[1.5rem] sm:rounded-[2.5rem] border border-slate-200 shadow-sm flex flex-col items-center justify-center mx-4 sm:mx-0">
-          <ClipboardCheck size={40} className="text-slate-300 mb-3 sm:mb-4 sm:w-12 sm:h-12" />
-          <h3 className="text-base sm:text-lg font-bold text-slate-900">No Audits Found</h3>
-          <p className="text-xs sm:text-sm text-slate-500 mt-1">There are currently no audits in this category.</p>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6 w-full px-4 sm:px-0">
-          {displayTickets.map(ticket => {
-            const dist = distMap[ticket.distributorId];
-            return (
-              <motion.div layout key={ticket.id} onClick={() => setActiveTicket(ticket)} className="bg-white p-5 sm:p-6 rounded-[1.5rem] sm:rounded-[2rem] border border-slate-200 shadow-sm hover:shadow-md hover:border-indigo-300 transition-all cursor-pointer group flex flex-col w-full">
-                <div className="flex justify-between items-start mb-3 sm:mb-4">
-                  <div className="w-10 h-10 sm:w-12 sm:h-12 bg-slate-100 rounded-xl sm:rounded-2xl flex items-center justify-center group-hover:bg-indigo-50 transition-colors"><Store className="text-slate-600 group-hover:text-indigo-600" size={18} /></div>
-                  <span className={cn("px-2.5 py-1 rounded-md text-[9px] sm:text-[10px] font-black uppercase tracking-wider bg-slate-100 text-slate-600")}>{ticket.status.replace('_', ' ')}</span>
-                </div>
-                <h4 className="text-base sm:text-lg font-bold tracking-tight mb-1 line-clamp-1 text-slate-900">{dist?.name || 'Loading...'}</h4>
-                <p className="text-xs sm:text-sm text-slate-500 flex items-center gap-1.5 mb-4 sm:mb-6"><MapPin size={12} className="shrink-0" /> <span className="truncate">{dist?.city}</span></p>
+      {/* ── Assignment list table ────────────────────────────────────────── */}
+      <div className="bg-white rounded-[1.5rem] sm:rounded-[2rem] border border-slate-200 shadow-sm overflow-hidden w-full">
+        {displayTickets.length === 0 ? (
+          <div className="p-8 sm:p-16 text-center flex flex-col items-center justify-center">
+            <ClipboardCheck size={40} className="text-slate-200 mb-3" />
+            <h3 className="text-base font-bold text-slate-900">No Audits Found</h3>
+            <p className="text-sm text-slate-500 mt-1">There are currently no audits in this category.</p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto w-full custom-scrollbar">
+            <table className="w-full text-sm min-w-[700px]">
+              <thead className="bg-slate-50 border-b border-slate-200">
+                <tr>
+                  <th className="px-5 py-3.5 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Distributor</th>
+                  <th className="px-5 py-3.5 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Assignment No.</th>
+                  <th className="px-5 py-3.5 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Location</th>
+                  <th className="px-5 py-3.5 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Scheduled</th>
+                  <th className="px-5 py-3.5 text-right text-xs font-bold text-slate-500 uppercase tracking-wider">Verified Value</th>
+                  <th className="px-5 py-3.5 text-center text-xs font-bold text-slate-500 uppercase tracking-wider">Status</th>
+                  <th className="px-5 py-3.5 text-center text-xs font-bold text-slate-500 uppercase tracking-wider">Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {displayTickets.map(ticket => {
+                  const dist = distMap[ticket.distributorId];
 
-                {ticket.status === 'scheduled' ? (
-                  (isAuditor || isAdminOrSuperadmin) ? (
-                    <button onClick={(e) => { e.stopPropagation(); startAudit(ticket); }} className="w-full py-3 bg-slate-900 text-white font-bold rounded-xl hover:bg-slate-800 transition-all text-sm shadow-md active:scale-95">
-                      Start Execution
-                    </button>
-                  ) : (
-                    <button onClick={(e) => { e.stopPropagation(); setActiveTicket(ticket); }} className="w-full py-3 bg-slate-100 text-slate-900 font-bold rounded-xl group-hover:bg-slate-200 transition-all text-sm shadow-sm active:scale-95">
-                      View Details
-                    </button>
-                  )
-                ) : (
-                  <button className="w-full py-3 bg-indigo-50 text-indigo-700 border border-indigo-100 font-bold rounded-xl group-hover:bg-indigo-600 group-hover:text-white transition-all text-sm shadow-sm active:scale-95 flex items-center justify-center gap-2">
-                    {['auditor', 'ase', 'admin', 'superadmin', 'ho'].includes(profile?.role || '') ? 'Resume / Review Audit' : 'View Audit'}
-                  </button>
-                )}
-              </motion.div>
-            );
-          })}
-        </div>
-      )}
+                  // Status badge config
+                  const statusConfig: Record<string, { label: string; cls: string }> = {
+                    scheduled:         { label: 'Scheduled',        cls: 'bg-blue-50 text-blue-700 border-blue-100' },
+                    in_progress:       { label: 'In Progress',      cls: 'bg-indigo-50 text-indigo-700 border-indigo-100' },
+                    auditor_submitted: { label: 'ASE Review',       cls: 'bg-amber-50 text-amber-700 border-amber-100' },
+                    submitted:         { label: 'Pending Sign-off', cls: 'bg-purple-50 text-purple-700 border-purple-100' },
+                    drainage_pending:  { label: 'Drainage Pending', cls: 'bg-cyan-50 text-cyan-700 border-cyan-100' },
+                    closed:            { label: 'Closed',           cls: 'bg-emerald-50 text-emerald-700 border-emerald-100' },
+                  };
+                  const sc = statusConfig[ticket.status] || { label: ticket.status.replace(/_/g, ' '), cls: 'bg-slate-100 text-slate-600 border-slate-200' };
+
+                  return (
+                    <tr
+                      key={ticket.id}
+                      className="hover:bg-slate-50/60 transition-colors group cursor-pointer"
+                      onClick={() => setActiveTicket(ticket)}
+                    >
+                      {/* Distributor */}
+                      <td className="px-5 py-3.5">
+                        <div className="flex items-center gap-3">
+                          <div className="w-8 h-8 rounded-xl bg-slate-100 group-hover:bg-indigo-50 flex items-center justify-center shrink-0 transition-colors">
+                            <Store size={15} className="text-slate-500 group-hover:text-indigo-600 transition-colors" />
+                          </div>
+                          <div>
+                            <p className="font-bold text-slate-900 text-sm leading-tight">{dist?.name || '—'}</p>
+                            <p className="text-[10px] font-mono text-slate-400 mt-0.5">{dist?.code || ''}</p>
+                          </div>
+                        </div>
+                      </td>
+
+                      {/* Assignment No */}
+                      <td className="px-5 py-3.5">
+                        <span className="text-xs font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-100">
+                          {dist?.assignment_serial_no || <span className="text-slate-400 font-normal">—</span>}
+                        </span>
+                      </td>
+
+                      {/* Location */}
+                      <td className="px-5 py-3.5">
+                        <p className="text-sm text-slate-600 flex items-center gap-1">
+                          <MapPin size={11} className="text-slate-400 shrink-0" />
+                          <span className="truncate max-w-[120px]">{[dist?.city, dist?.state].filter(Boolean).join(', ') || '—'}</span>
+                        </p>
+                      </td>
+
+                      {/* Scheduled date */}
+                      <td className="px-5 py-3.5 text-sm text-slate-600 whitespace-nowrap">
+                        {ticket.scheduledDate
+                          ? new Date(ticket.scheduledDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+                          : <span className="text-slate-400">—</span>}
+                      </td>
+
+                      {/* Verified value */}
+                      <td className="px-5 py-3.5 text-right">
+                        <span className="text-sm font-bold text-slate-900">
+                          ₹{(ticket.verifiedTotal || 0).toLocaleString('en-IN')}
+                        </span>
+                        <p className="text-[10px] text-slate-400 mt-0.5">of ₹{(ticket.approvedValue || 0).toLocaleString('en-IN')}</p>
+                      </td>
+
+                      {/* Status badge */}
+                      <td className="px-5 py-3.5 text-center">
+                        <span className={cn('px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider border', sc.cls)}>
+                          {sc.label}
+                        </span>
+                      </td>
+
+                      {/* Action button */}
+                      <td className="px-5 py-3.5 text-center" onClick={e => e.stopPropagation()}>
+                        {ticket.status === 'scheduled' && (isAuditor || isAdminOrSuperadmin) ? (
+                          <button
+                            onClick={() => startAudit(ticket)}
+                            className="px-4 py-1.5 bg-slate-900 text-white text-xs font-bold rounded-lg hover:bg-slate-700 transition-all active:scale-95 shadow-sm"
+                          >
+                            Start
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => setActiveTicket(ticket)}
+                            className="px-4 py-1.5 bg-indigo-50 text-indigo-700 border border-indigo-100 text-xs font-bold rounded-lg hover:bg-indigo-600 hover:text-white transition-all active:scale-95"
+                          >
+                            {['auditor', 'ase', 'admin', 'superadmin', 'ho'].includes(profile?.role || '') ? 'Open' : 'View'}
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

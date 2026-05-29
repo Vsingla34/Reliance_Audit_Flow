@@ -8,6 +8,27 @@ import {
 import { cn, useAuth } from '../App';
 import { motion, AnimatePresence } from 'motion/react';
 
+
+// ─── Paginated fetch — Supabase default limit is 1000 rows. ─────────────────
+// This fetches all pages automatically so 1100+ assignments never get truncated.
+async function fetchAllRows<T>(
+  queryBuilder: () => any,
+  pageSize = 1000
+): Promise<T[]> {
+  let allRows: T[] = [];
+  let from = 0;
+  while (true) {
+    const { data, error } = await queryBuilder()
+      .range(from, from + pageSize - 1);
+    if (error) throw error;
+    if (!data || data.length === 0) break;
+    allRows = allRows.concat(data as T[]);
+    if (data.length < pageSize) break;  // last page
+    from += pageSize;
+  }
+  return allRows;
+}
+
 export function DistributorsModule() {
   const { profile, user } = useAuth();
   const [distributors, setDistributors] = useState<any[]>([]); 
@@ -42,23 +63,20 @@ export function DistributorsModule() {
   const fetchData = async () => {
     if (!profile) return;
     try {
-      let distQuery = supabase.from('distributors').select('*');
+      let distQuery = supabase.from('distributors').select('id,code,name,anchorName,address,city,state,region,approvedValue,aseIds,asmIds,smIds,dmIds,hoIds,active,assignment_serial_no');
       
       if (profile.role === 'ase') distQuery = distQuery.contains('aseIds', [profile.uid]);
       if (profile.role === 'asm') distQuery = distQuery.contains('asmIds', [profile.uid]);
       if (profile.role === 'sm') distQuery = distQuery.contains('smIds', [profile.uid]);
       if (profile.role === 'dm') distQuery = distQuery.contains('dmIds', [profile.uid]);
 
-      const [distRes, usersRes] = await Promise.all([
-        distQuery.order('name', { ascending: true }),
-        supabase.from('users').select('*')
+      const [distData, usersData] = await Promise.all([
+        fetchAllRows<any>(() => distQuery.order('name', { ascending: true })),
+        fetchAllRows<UserProfile>(() => supabase.from('users').select('uid,name,email,role,phone,region,active')),
       ]);
-      
-      if (distRes.error) throw distRes.error;
-      if (usersRes.error) throw usersRes.error;
 
-      if (distRes.data) setDistributors(distRes.data);
-      if (usersRes.data) setUsers(usersRes.data as UserProfile[]);
+      setDistributors(distData);
+      setUsers(usersData as UserProfile[]);
     } catch (error) { console.error("Error fetching data:", error); }
   };
 

@@ -268,7 +268,7 @@ function buildSignSheet(
 
   // ROWS 4-10 — Info block
   const infoLines = [
-    `Audit Serial No. - ${audit.serialNo || audit.id || ''}`,
+    `Audit Serial No. - ${audit.serialNo || ''}`,
     `Audit Firm Name - Singla Vishal & Co.`,
     `Anchor Code - ${dist.code || ''}`,
     `Anchor Name/ Direct DB Name - ${dist.anchorName || ''}`,
@@ -348,26 +348,8 @@ function buildSignSheet(
     scT(r, col, val, { hAlign: 'center', vAlign: 'middle', wrap: false, border: thinBorder, numFmt: fmt });
   }
 
-  // Individual article rows
-  for (const [code, v] of agg) {
-    nr(16);
-    const qT   = v.dmg + v.samp + v.ns + v.bbd;
-    const vvDmg  = v.dmg  * v.uv;
-    const vvSamp = v.samp * v.uv;
-    const vvNs   = v.ns   * v.uv;
-    const vvBbd  = v.bbd  * v.uv;
-    const vvT    = vvDmg + vvSamp + vvNs + vvBbd;
-    const artRows: Array<[number, ExcelJS.CellValue, string | undefined]> = [
-      [2,  fmtQ(v.dmg),  QTY], [3, fmtQ(v.samp), QTY], [4, fmtQ(v.ns),  QTY],
-      [5,  fmtQ(v.bbd),  QTY], [6, qT,           QTY],
-      [7,  fmtV(vvDmg),  INR], [8, fmtV(vvSamp), INR], [9, fmtV(vvNs),  INR],
-      [10, fmtV(vvBbd),  INR], [11, vvT,          INR],
-      [12, '',           undefined], [13, '',      undefined],
-    ];
-    for (const [col, val, fmt] of artRows) {
-      scT(r, col, val, { size: 9, hAlign: 'center', vAlign: 'middle', wrap: false, border: thinBorder, numFmt: fmt });
-    }
-  }
+  // NOTE: Sign Format shows ONE summary row only (totals row above) — no per-article rows.
+  // The totals row already contains the sum of all Primary/Sampling/Non-Saleable/BBD quantities.
 
   // Spacers
   nr(6); nr(6);
@@ -679,6 +661,70 @@ function buildALFSheet(
     setCell(ws, dataRow, col, val, { font: ariFont({ bold: true, size: 9 }), fill: C.TOTAL_ROW, hAlign: 'center', border: thinBorder, numFmt: fmt });
   }
   for (let c = 27; c <= 32; c++) setCell(ws, dataRow, c, '', { fill: C.TOTAL_ROW, border: thinBorder });
+
+  // ── SIGN SECTION — white background, no wrap, appears right after totals ────
+  // Image shows: declaration text (col C), then three sign columns (C/O/AB)
+  const whiteFill = solidFill(C.WHITE);
+  const noB: Partial<ExcelJS.Borders> = {};
+
+  const clearSignRow = (rowNum: number, h = 18) => {
+    ws.getRow(rowNum).height = h;
+    for (let c = 1; c <= 32; c++) {
+      const cell = ws.getRow(rowNum).getCell(c);
+      cell.fill   = whiteFill;
+      cell.border = noB;
+      cell.font   = ariFont({ size: 9 });
+      cell.alignment = { wrapText: false, vertical: 'middle', horizontal: 'left' };
+    }
+  };
+
+  const writeSign = (rowNum: number, col: number, text: string, bold = false) => {
+    const cell = ws.getRow(rowNum).getCell(col);
+    cell.value     = text;
+    cell.font      = ariFont({ bold, size: 9 });
+    cell.fill      = whiteFill;
+    cell.border    = noB;
+    cell.alignment = { wrapText: false, vertical: 'middle', horizontal: 'left' };
+  };
+
+  // Spacer after totals
+  clearSignRow(dataRow + 1, 10);
+  clearSignRow(dataRow + 2, 10);
+
+  // Declaration rows — text in col C (3), white fill, no wrap
+  const declLines = [
+    '1. This is to certify that the quantity mentioned in report is final for all the issues related to quality / leakage / breakage / damage / BBD / Primary or transit damage till the date of Audit.',
+    "2. No Stock shall be taken into consideration before Oct'23 Manufacturing date.",
+    '3. Stock with above-mentioned quality & value has been verified and drained in front of us and no further claim shall be raised by for such cases in future.',
+    '4. We understood that, value mentioned in Audit report is indicative and final claim value shall be accessed by Reliance before processing the expiry claim.',
+  ];
+  for (let i = 0; i < declLines.length; i++) {
+    clearSignRow(dataRow + 3 + i, 16);
+    writeSign(dataRow + 3 + i, 3, declLines[i]);
+  }
+
+  // Spacer
+  clearSignRow(dataRow + 7, 10);
+
+  // Sign header row: names
+  clearSignRow(dataRow + 8, 18);
+  writeSign(dataRow + 8,  3,  "Customer's Authorised person Name -", true);
+  writeSign(dataRow + 8,  15, '3rd Party Auditor',                   true);
+  writeSign(dataRow + 8,  28, 'Sales Team Name & contact no.',       true);
+
+  // Firm name under auditor
+  clearSignRow(dataRow + 9, 16);
+  writeSign(dataRow + 9, 15, 'Singla Vishal & Co.');
+
+  // Two blank spacer rows
+  clearSignRow(dataRow + 10, 16);
+  clearSignRow(dataRow + 11, 16);
+
+  // Sign label row
+  clearSignRow(dataRow + 12, 18);
+  writeSign(dataRow + 12,  3,  'Seal & Sign -',  true);
+  writeSign(dataRow + 12, 15, 'Auditor Sign',   true);
+  writeSign(dataRow + 12, 28, 'Sign');
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -843,10 +889,7 @@ export function useSignOffExport(params: {
       wb.creator = 'Reliance Audit System';
       wb.created = new Date();
 
-      // Sheet order matches template exactly
-      const ws1 = wb.addWorksheet('Reporting Format - Audit Status');
-      buildReportingStatusSheet(ws1, params.distributor, params.audit, params.items);
-
+      // Sheet order: Sign Format first (Reporting Status moved to separate Status Report)
       const ws2 = wb.addWorksheet('Sign Format.');
       buildSignSheet(ws2, params.distributor, params.audit, params.items);
 

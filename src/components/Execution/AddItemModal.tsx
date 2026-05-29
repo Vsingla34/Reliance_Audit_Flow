@@ -277,12 +277,24 @@ export function AddItemModal({ isOpen, onClose, activeTicket, distributor, avail
 
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">Mfg Date (Optional)</label>
-                <input type="date" className="w-full mt-1 px-3 py-2 text-sm font-bold bg-white border border-zinc-200 text-zinc-900 rounded-xl focus:ring-2 focus:ring-black outline-none" value={mfgDate} onChange={e => setMfgDate(e.target.value)} />
+                <label className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">
+                  Mfg Date <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="date" required
+                  className={cn("w-full mt-1 px-3 py-2 text-sm font-bold bg-white border text-zinc-900 rounded-xl focus:ring-2 focus:ring-black outline-none transition-all", !mfgDate ? "border-red-300 bg-red-50/30" : "border-zinc-200")}
+                  value={mfgDate} onChange={e => setMfgDate(e.target.value)}
+                />
               </div>
               <div>
-                <label className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">Exp Date (Optional)</label>
-                <input type="date" className="w-full mt-1 px-3 py-2 text-sm font-bold bg-white border border-zinc-200 text-zinc-900 rounded-xl focus:ring-2 focus:ring-black outline-none" value={expDate} onChange={e => setExpDate(e.target.value)} />
+                <label className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">
+                  Exp Date <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="date" required
+                  className={cn("w-full mt-1 px-3 py-2 text-sm font-bold bg-white border text-zinc-900 rounded-xl focus:ring-2 focus:ring-black outline-none transition-all", !expDate ? "border-red-300 bg-red-50/30" : "border-zinc-200")}
+                  value={expDate} onChange={e => setExpDate(e.target.value)}
+                />
               </div>
             </div>
             
@@ -320,7 +332,7 @@ export function AddItemModal({ isOpen, onClose, activeTicket, distributor, avail
               />
             </div>
 
-            <button type="submit" disabled={totalQty === 0} className="w-full py-4 bg-black text-white rounded-xl font-bold hover:bg-zinc-800 transition-all shadow-lg active:scale-95 text-lg disabled:opacity-50">Save & Split Rows</button>
+            <button type="submit" disabled={totalQty === 0 || !mfgDate || !expDate} className="w-full py-4 bg-black text-white rounded-xl font-bold hover:bg-zinc-800 transition-all shadow-lg active:scale-95 text-lg disabled:opacity-50">{!mfgDate || !expDate ? "Fill Mfg & Exp Dates to Save" : "Save & Split Rows"}</button>
           </form>
         )}
 
@@ -417,12 +429,24 @@ export function AddItemModal({ isOpen, onClose, activeTicket, distributor, avail
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">Mfg Date</label>
-                    <input type="date" className="w-full mt-1 px-3 py-2 text-sm font-bold bg-white border border-zinc-200 text-zinc-900 rounded-xl focus:ring-2 focus:ring-black outline-none" value={mfgDate} onChange={e => setMfgDate(e.target.value)} />
+                    <label className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">
+                      Mfg Date <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="date" required
+                      className={cn("w-full mt-1 px-3 py-2 text-sm font-bold bg-white border text-zinc-900 rounded-xl focus:ring-2 focus:ring-black outline-none transition-all", !mfgDate ? "border-red-300 bg-red-50/30" : "border-zinc-200")}
+                      value={mfgDate} onChange={e => setMfgDate(e.target.value)}
+                    />
                   </div>
                   <div>
-                    <label className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">Exp Date</label>
-                    <input type="date" className="w-full mt-1 px-3 py-2 text-sm font-bold bg-white border border-zinc-200 text-zinc-900 rounded-xl focus:ring-2 focus:ring-black outline-none" value={expDate} onChange={e => setExpDate(e.target.value)} />
+                    <label className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">
+                      Exp Date <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="date" required
+                      className={cn("w-full mt-1 px-3 py-2 text-sm font-bold bg-white border text-zinc-900 rounded-xl focus:ring-2 focus:ring-black outline-none transition-all", !expDate ? "border-red-300 bg-red-50/30" : "border-zinc-200")}
+                      value={expDate} onChange={e => setExpDate(e.target.value)}
+                    />
                   </div>
                 </div>
                 
@@ -460,7 +484,7 @@ export function AddItemModal({ isOpen, onClose, activeTicket, distributor, avail
                   />
                 </div>
 
-                <button type="submit" disabled={totalQty === 0} className="w-full mt-2 py-4 bg-black text-white rounded-xl font-bold hover:bg-zinc-800 transition-all shadow-lg active:scale-95 text-lg disabled:opacity-50">Save & Split Rows</button>
+                <button type="submit" disabled={totalQty === 0 || !mfgDate || !expDate} className="w-full mt-2 py-4 bg-black text-white rounded-xl font-bold hover:bg-zinc-800 transition-all shadow-lg active:scale-95 text-lg disabled:opacity-50">{!mfgDate || !expDate ? "Fill Mfg & Exp Dates to Save" : "Save & Split Rows"}</button>
               </form>
             )}
           </div>

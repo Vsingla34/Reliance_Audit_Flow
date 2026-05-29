@@ -14,6 +14,27 @@ const calculateAuditDays = (approvedValue: number) => {
   return Math.ceil(approvedValue / 150000); 
 };
 
+
+// ─── Paginated fetch — Supabase default limit is 1000 rows. ─────────────────
+// This fetches all pages automatically so 1100+ assignments never get truncated.
+async function fetchAllRows<T>(
+  queryBuilder: () => any,
+  pageSize = 1000
+): Promise<T[]> {
+  let allRows: T[] = [];
+  let from = 0;
+  while (true) {
+    const { data, error } = await queryBuilder()
+      .range(from, from + pageSize - 1);
+    if (error) throw error;
+    if (!data || data.length === 0) break;
+    allRows = allRows.concat(data as T[]);
+    if (data.length < pageSize) break;  // last page
+    from += pageSize;
+  }
+  return allRows;
+}
+
 export function SchedulerModule() {
   const { user, profile } = useAuth();
   const [tickets, setTickets] = useState<AuditTicket[]>([]);
@@ -108,35 +129,35 @@ export function SchedulerModule() {
         else if (profile.role === 'sm')  dQuery = dQuery.contains('smIds',  [profile.uid]);
         else if (profile.role === 'dm')  dQuery = dQuery.contains('dmIds',  [profile.uid]);
         
-        const [dRes, uRes] = await Promise.all([
-          dQuery,
-          supabase.from('users').select('uid,name,email,role,phone,region,active'),
+        const [fetchedDistributors, usersList] = await Promise.all([
+          fetchAllRows<any>(() => dQuery),
+          fetchAllRows<UserProfile>(() => supabase.from('users').select('uid,name,email,role,phone,region,active')),
         ]);
-        if (dRes.error) throw dRes.error;
-        
-        const fetchedDistributors = (dRes.data || []) as any[];
         setDistributors(fetchedDistributors);
         
-        if (uRes.data) {
-          const usersList = uRes.data as UserProfile[];
+        if (true) {
           setAllUsers(usersList);
           setAuditors(usersList.filter(u => u.role === 'auditor'));
         }
 
-        let tQuery = supabase.from('auditTickets').select('id,distributorId,status,scheduledDate,proposedDate,auditorIds,approvedValue,auditDays,dateProposals,createdAt,updatedAt');
-        if (profile.role === 'auditor') {
-          tQuery = tQuery.or(`auditorId.eq.${profile.uid},auditorIds.cs.{${profile.uid}}`);
-        } else if (['ase', 'asm', 'sm', 'dm'].includes(profile.role)) {
-          const distIds = fetchedDistributors.map(d => d.id);
-          if (distIds.length > 0) tQuery = tQuery.in('distributorId', distIds);
-          else return setTickets([]);
-        }
-
-        const tRes = await tQuery;
-        if (tRes.error) throw tRes.error;
-        if (tRes.data) {
-          const validTickets = (tRes.data as AuditTicket[]).filter(t => fetchedDistributors.some(d => d.id === t.distributorId));
+        // Paginated ticket fetch — prevents truncation at 1000 rows
+        let tBaseQuery = () => {
+          let q = supabase.from('auditTickets').select('id,distributorId,status,scheduledDate,proposedDate,auditorIds,approvedValue,auditDays,dateProposals,createdAt,updatedAt');
+          if (profile.role === 'auditor')
+            q = q.or(`auditorId.eq.${profile.uid},auditorIds.cs.{${profile.uid}}`);
+          else if (['ase', 'asm', 'sm', 'dm'].includes(profile.role)) {
+            const distIds = fetchedDistributors.map((d: any) => d.id);
+            if (distIds.length > 0) q = q.in('distributorId', distIds);
+          }
+          return q;
+        };
+        if (profile.role !== 'ase' && profile.role !== 'asm' && profile.role !== 'sm' && profile.role !== 'dm'
+            || fetchedDistributors.length > 0) {
+          const allTickets = await fetchAllRows<AuditTicket>(tBaseQuery);
+          const validTickets = allTickets.filter((t: AuditTicket) => fetchedDistributors.some((d: any) => d.id === t.distributorId));
           setTickets(validTickets);
+        } else {
+          setTickets([]);
         }
       } catch (error) { console.error("Error fetching scheduler data:", error); }
     };
