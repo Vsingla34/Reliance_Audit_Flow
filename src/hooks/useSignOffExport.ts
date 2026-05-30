@@ -8,7 +8,6 @@
  *  Sheet 3: "Article Level Format Revised"     — 32-column article level data
  *  Sheet 4: "Invoie details - Primary Damage"  — invoice level primary damage
  *  Sheet 5: "Attendance Sheet"                 — auditor attendance
- *  Sheet 6: "RSO Format"                       — RSO claim format
  *
  * INSTALL:  npm install exceljs
  * PLACE AT: src/hooks/useSignOffExport.ts
@@ -796,80 +795,6 @@ function buildAttendanceSheet(ws: ExcelJS.Worksheet, dist: SignOffDistributor, a
   setCell(ws, 14, 1, 'Auditor:', { font: ariFont({ size: 10 }), hAlign: 'left', border: {} });
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
-// SHEET 6 — RSO Format
-// ═════════════════════════════════════════════════════════════════════════════
-function buildRSOSheet(ws: ExcelJS.Worksheet, dist: SignOffDistributor, audit: SignOffAudit, items: SignOffItem[]) {
-  ws.pageSetup = { orientation: 'landscape', paperSize: 9, fitToPage: true, fitToWidth: 1, fitToHeight: 0 };
-  ws.columns = [14, 18, 18, 12, 14, 14, 18, 12, 14, 22, 12, 10, 14, 14, 10, 14, 8, 8, 12, 14, 8, 14, 12].map(w => ({ width: w }));
-
-  const headers = [
-    'Customer Code', 'Customer Name', 'Distributor Name', 'Location', 'Claim Reason',
-    'Billing Site code', 'Invoice Internal Ref no', 'Invoice Date', 'Article Code', 'Brand Pack',
-    'Category', 'Billed Qty', 'Rate in Invoice (With GST)', 'Billed Value (With GST)',
-    'RSO Qty in EA', 'RSO Value (Total Audited Value\n(Including GST)', 'Qty Diff',
-    'Add/Del', 'Revised RSO Qty', 'Revised RSO Value', 'Qty Diff', 'Remarks', 'Balance Value',
-  ];
-  ws.getRow(1).height = 35;
-  headers.forEach((h, i) => {
-    setCell(ws, 1, i + 1, h, { font: ariFont({ bold: true, size: 9 }), fill: C.MASTER_HDR, hAlign: 'center', vAlign: 'middle', wrap: true, border: thinBorder });
-  });
-
-  // Aggregate by article for RSO
-  const agg = new Map<string, { item: SignOffItem; dmg: number; ns: number; bbd: number; samp: number }>();
-  for (const item of items) {
-    if (!agg.has(item.articleNumber)) agg.set(item.articleNumber, { item, dmg: 0, ns: 0, bbd: 0, samp: 0 });
-    const a = agg.get(item.articleNumber)!;
-    a.dmg  += item.qtyDamaged     || 0;
-    a.ns   += item.qtyNonSaleable || 0;
-    a.bbd  += item.qtyBBD         || 0;
-    a.samp += item.qtySampling    || 0;
-    if ((item.unitValue || 0) > (a.item.unitValue || 0)) a.item = { ...a.item, ...item };
-  }
-
-  let rowNum = 2;
-  for (const [code, { item, dmg, ns, bbd, samp }] of agg) {
-    const qTot = dmg + samp + ns + bbd;
-    const vTot = qTot * (item.unitValue || 0);
-    ws.getRow(rowNum).height = 15;
-    const row: ExcelJS.CellValue[] = [
-      dist.code || '',
-      dist.anchorName || '',
-      dist.name || '',
-      dist.city || '',
-      item.reasonCode || '',
-      '',                   // Billing Site code
-      '',                   // Invoice ref
-      '',                   // Invoice date
-      code,
-      item.description,
-      item.category || '',
-      qTot,
-      item.unitValue || 0,
-      vTot,
-      qTot,
-      vTot,
-      0,                    // Qty Diff
-      '',                   // Add/Del
-      qTot,
-      vTot,
-      0,                    // Qty Diff
-      item.remarks || '',
-      0,                    // Balance Value
-    ];
-    row.forEach((v, i) => {
-      const isCurrency = [13, 14, 16, 20, 23].includes(i + 1);
-      const isQty      = [12, 15, 17, 19, 21].includes(i + 1);
-      setCell(ws, rowNum, i + 1, v, {
-        font:   ariFont({ size: 9 }),
-        hAlign: isCurrency || isQty ? 'right' : 'left',
-        border: thinBorder,
-        numFmt: isCurrency ? '[$₹-en-IN]#,##0.00' : isQty ? '#,##0' : undefined,
-      });
-    });
-    rowNum++;
-  }
-}
 
 // ═════════════════════════════════════════════════════════════════════════════
 // PUBLIC HOOK
@@ -902,8 +827,6 @@ export function useSignOffExport(params: {
       const ws5 = wb.addWorksheet('Attendance Sheet');
       buildAttendanceSheet(ws5, params.distributor, params.audit);
 
-      const ws6 = wb.addWorksheet('RSO Format');
-      buildRSOSheet(ws6, params.distributor, params.audit, params.items);
 
       const buffer = await wb.xlsx.writeBuffer();
       const blob   = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });

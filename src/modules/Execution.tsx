@@ -64,6 +64,7 @@ export function ExecutionModule() {
   
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isStatusExporting, setIsStatusExporting] = useState(false);
+  const [listSearch, setListSearch] = useState('');
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [drainageDateInput, setDrainageDateInput] = useState('');
   
@@ -1521,11 +1522,42 @@ export function ExecutionModule() {
   const drainageTickets = tickets.filter(t => t.status === 'drainage_pending');
   const completedTickets = tickets.filter(t => t.status === 'closed' && t.updatedAt?.startsWith(todayStr));
 
-  let displayTickets: AuditTicket[] = [];
-  if (activeTab === 'active') displayTickets = activeTickets;
-  else if (activeTab === 'signoff') displayTickets = signoffTickets;
-  else if (activeTab === 'drainage') displayTickets = drainageTickets;
-  else if (activeTab === 'completed') displayTickets = completedTickets;
+  let baseDisplayTickets: AuditTicket[] = [];
+  if (activeTab === 'active') baseDisplayTickets = activeTickets;
+  else if (activeTab === 'signoff') baseDisplayTickets = signoffTickets;
+  else if (activeTab === 'drainage') baseDisplayTickets = drainageTickets;
+  else if (activeTab === 'completed') baseDisplayTickets = completedTickets;
+
+  // ── Search filter across all assignment fields ───────────────────────────
+  const displayTickets = listSearch.trim()
+    ? baseDisplayTickets.filter(t => {
+        const dist = distMap[t.distributorId];
+        if (!dist) return false;
+        const q = listSearch.toLowerCase();
+        return (
+          // Assignment / serial no
+          (dist.assignment_serial_no || '').toLowerCase().includes(q) ||
+          // Distributor code
+          (dist.code || '').toLowerCase().includes(q) ||
+          // Anchor code
+          (dist.anchorName || '').toLowerCase().includes(q) ||
+          // Distributor name
+          (dist.name || '').toLowerCase().includes(q) ||
+          // City / State / Region
+          (dist.city || '').toLowerCase().includes(q) ||
+          (dist.state || '').toLowerCase().includes(q) ||
+          (dist.region || '').toLowerCase().includes(q) ||
+          // Address
+          (dist.address || '').toLowerCase().includes(q) ||
+          // Status
+          t.status.replace(/_/g, ' ').toLowerCase().includes(q) ||
+          // Scheduled date
+          (t.scheduledDate || '').includes(q) ||
+          // Ticket id
+          t.id.toLowerCase().includes(q)
+        );
+      })
+    : baseDisplayTickets;
 
   return (
     <div className="space-y-6 sm:space-y-8 pb-12 w-full min-w-0">
@@ -1533,16 +1565,16 @@ export function ExecutionModule() {
       {/* Tabs row + Status Report download button */}
       <div className="-mx-4 sm:mx-0 px-4 sm:px-0 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div className="flex bg-slate-100/80 p-1.5 rounded-xl sm:rounded-2xl overflow-x-auto w-full sm:w-fit custom-scrollbar scroll-smooth">
-          <button onClick={() => setActiveTab('active')} className={cn("px-4 sm:px-6 py-2.5 sm:py-3 rounded-lg sm:rounded-xl text-xs sm:text-sm font-bold transition-all whitespace-nowrap flex items-center gap-2", activeTab === 'active' ? "bg-white text-indigo-700 shadow-sm border border-slate-200/50" : "text-slate-500 hover:text-slate-900")}>
+          <button onClick={() => { setActiveTab('active');    setListSearch(''); }} className={cn("px-4 sm:px-6 py-2.5 sm:py-3 rounded-lg sm:rounded-xl text-xs sm:text-sm font-bold transition-all whitespace-nowrap flex items-center gap-2", activeTab === 'active' ? "bg-white text-indigo-700 shadow-sm border border-slate-200/50" : "text-slate-500 hover:text-slate-900")}>
             Active <span className={cn("px-1.5 sm:px-2 py-0.5 rounded-md text-[9px] sm:text-[10px]", activeTab === 'active' ? "bg-indigo-50 text-indigo-700" : "bg-slate-200/50 text-slate-500")}>{activeTickets.length}</span>
           </button>
-          <button onClick={() => setActiveTab('signoff')} className={cn("px-4 sm:px-6 py-2.5 sm:py-3 rounded-lg sm:rounded-xl text-xs sm:text-sm font-bold transition-all whitespace-nowrap flex items-center gap-2", activeTab === 'signoff' ? "bg-white text-indigo-700 shadow-sm border border-slate-200/50" : "text-slate-500 hover:text-slate-900")}>
+          <button onClick={() => { setActiveTab('signoff');   setListSearch(''); }} className={cn("px-4 sm:px-6 py-2.5 sm:py-3 rounded-lg sm:rounded-xl text-xs sm:text-sm font-bold transition-all whitespace-nowrap flex items-center gap-2", activeTab === 'signoff' ? "bg-white text-indigo-700 shadow-sm border border-slate-200/50" : "text-slate-500 hover:text-slate-900")}>
             Sign-off <span className={cn("px-1.5 sm:px-2 py-0.5 rounded-md text-[9px] sm:text-[10px]", activeTab === 'signoff' ? "bg-indigo-50 text-indigo-700" : "bg-slate-200/50 text-slate-500")}>{signoffTickets.length}</span>
           </button>
-          <button onClick={() => setActiveTab('drainage')} className={cn("px-4 sm:px-6 py-2.5 sm:py-3 rounded-lg sm:rounded-xl text-xs sm:text-sm font-bold transition-all whitespace-nowrap flex items-center gap-2", activeTab === 'drainage' ? "bg-white text-indigo-700 shadow-sm border border-slate-200/50" : "text-slate-500 hover:text-slate-900")}>
+          <button onClick={() => { setActiveTab('drainage');  setListSearch(''); }} className={cn("px-4 sm:px-6 py-2.5 sm:py-3 rounded-lg sm:rounded-xl text-xs sm:text-sm font-bold transition-all whitespace-nowrap flex items-center gap-2", activeTab === 'drainage' ? "bg-white text-indigo-700 shadow-sm border border-slate-200/50" : "text-slate-500 hover:text-slate-900")}>
             Drainage <span className="hidden sm:inline">Pending</span> <span className={cn("px-1.5 sm:px-2 py-0.5 rounded-md text-[9px] sm:text-[10px]", activeTab === 'drainage' ? "bg-indigo-50 text-indigo-700" : "bg-slate-200/50 text-slate-500")}>{drainageTickets.length}</span>
           </button>
-          <button onClick={() => setActiveTab('completed')} className={cn("px-4 sm:px-6 py-2.5 sm:py-3 rounded-lg sm:rounded-xl text-xs sm:text-sm font-bold transition-all whitespace-nowrap flex items-center gap-2", activeTab === 'completed' ? "bg-white text-indigo-700 shadow-sm border border-slate-200/50" : "text-slate-500 hover:text-slate-900")}>
+          <button onClick={() => { setActiveTab('completed'); setListSearch(''); }} className={cn("px-4 sm:px-6 py-2.5 sm:py-3 rounded-lg sm:rounded-xl text-xs sm:text-sm font-bold transition-all whitespace-nowrap flex items-center gap-2", activeTab === 'completed' ? "bg-white text-indigo-700 shadow-sm border border-slate-200/50" : "text-slate-500 hover:text-slate-900")}>
             Completed <span className={cn("px-1.5 sm:px-2 py-0.5 rounded-md text-[9px] sm:text-[10px]", activeTab === 'completed' ? "bg-indigo-50 text-indigo-700" : "bg-slate-200/50 text-slate-500")}>{completedTickets.length}</span>
           </button>
         </div>
@@ -1568,18 +1600,65 @@ export function ExecutionModule() {
         )}
       </div>
 
+      {/* ── Search bar ──────────────────────────────────────────────────── */}
+      <div className="relative group">
+        <Search
+          size={17}
+          className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-indigo-500 transition-colors pointer-events-none"
+        />
+        <input
+          type="text"
+          placeholder="Search by Assignment No., Distributor Code, Anchor Code, Name, City, Status…"
+          className="w-full pl-11 pr-10 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all shadow-sm text-sm text-slate-700 placeholder:text-slate-400"
+          value={listSearch}
+          onChange={e => setListSearch(e.target.value)}
+        />
+        {listSearch && (
+          <button
+            onClick={() => setListSearch('')}
+            className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-slate-100 transition-colors"
+          >
+            <X size={15} />
+          </button>
+        )}
+      </div>
+
       {/* ── Assignment list table ────────────────────────────────────────── */}
       <div className="bg-white rounded-[1.5rem] sm:rounded-[2rem] border border-slate-200 shadow-sm overflow-hidden w-full">
         {displayTickets.length === 0 ? (
           <div className="p-8 sm:p-16 text-center flex flex-col items-center justify-center">
             <ClipboardCheck size={40} className="text-slate-200 mb-3" />
-            <h3 className="text-base font-bold text-slate-900">No Audits Found</h3>
-            <p className="text-sm text-slate-500 mt-1">There are currently no audits in this category.</p>
+            <h3 className="text-base font-bold text-slate-900">
+              {listSearch ? 'No Matches Found' : 'No Audits Found'}
+            </h3>
+            <p className="text-sm text-slate-500 mt-1">
+              {listSearch
+                ? `No assignments match "${listSearch}". Try a different search term.`
+                : 'There are currently no audits in this category.'}
+            </p>
+            {listSearch && (
+              <button
+                onClick={() => setListSearch('')}
+                className="mt-4 px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition-colors"
+              >
+                Clear Search
+              </button>
+            )}
           </div>
         ) : (
           <div className="overflow-x-auto w-full custom-scrollbar">
             <table className="w-full text-sm min-w-[700px]">
               <thead className="bg-slate-50 border-b border-slate-200">
+                {listSearch && (
+                  <tr>
+                    <td colSpan={7} className="px-5 py-2 bg-indigo-50 border-b border-indigo-100">
+                      <p className="text-xs font-bold text-indigo-700">
+                        {displayTickets.length} result{displayTickets.length !== 1 ? 's' : ''} for "{listSearch}"
+                        <button onClick={() => setListSearch('')} className="ml-3 text-indigo-500 hover:text-indigo-700 underline font-bold">Clear</button>
+                      </p>
+                    </td>
+                  </tr>
+                )}
                 <tr>
                   <th className="px-5 py-3.5 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Distributor</th>
                   <th className="px-5 py-3.5 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Assignment No.</th>

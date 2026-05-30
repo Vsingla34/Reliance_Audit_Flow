@@ -252,7 +252,8 @@ export function DistributorsModule() {
       code: '', assignment_serial_no: '', anchorName: '', name: '', approvedValue: 0, 
       hoIds: [], dmIds: [], smIds: [], asmIds: [], aseIds: [], 
       active: true, address: '', city: '', state: '', region: '' 
-    }); 
+    });
+    setRoleSearchTerms({});
   };
 
   const openEditModal = (dist: any) => {
@@ -422,32 +423,112 @@ export function DistributorsModule() {
   const ases = users.filter(u => u.role === 'ase');
   const asms = users.filter(u => u.role === 'asm');
 
+  // Per-role search state — one key per fieldName so each panel searches independently
+  const [roleSearchTerms, setRoleSearchTerms] = React.useState<Record<string, string>>({});
+
   const renderMultiUserSelect = (label: string, roleFilter: string, fieldName: string) => {
-    const roleUsers = users.filter(u => u.role === roleFilter && u.active);
+    const allRoleUsers  = users.filter(u => u.role === roleFilter && u.active);
+    const searchTerm    = roleSearchTerms[fieldName] || '';
+    const visibleUsers  = searchTerm.trim()
+      ? allRoleUsers.filter(u =>
+          u.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+          (u.region || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+          (u.email  || '').toLowerCase().includes(searchTerm.toLowerCase())
+        )
+      : allRoleUsers;
+
+    const selectedCount = ((formData[fieldName] || []) as string[])
+      .filter(id => allRoleUsers.some(u => u.uid === id)).length;
+
     return (
-      <div className="space-y-2">
-        <label className="text-xs font-bold uppercase tracking-wider text-zinc-400">{label}</label>
-        <div className="h-32 overflow-y-auto bg-white border border-zinc-200 rounded-xl p-2 custom-scrollbar space-y-1">
-          {roleUsers.length > 0 ? roleUsers.map(u => (
-            <label key={u.uid} className="flex items-center gap-2 cursor-pointer p-1.5 hover:bg-zinc-50 rounded-lg transition-colors">
-              <input 
-                type="checkbox" 
-                checked={(formData[fieldName] || []).includes(u.uid)}
-                onChange={(e) => {
-                  const currentList = formData[fieldName] || [];
-                  const newList = e.target.checked 
-                    ? [...currentList, u.uid] 
-                    : currentList.filter((id: string) => id !== u.uid);
-                  setFormData({ ...formData, [fieldName]: newList });
-                }}
-                className="w-3.5 h-3.5 rounded border-zinc-300 text-blue-600 focus:ring-blue-600"
-              />
-              <span className="text-xs font-medium text-zinc-700 truncate">{u.name} {u.region ? `(${u.region})` : ''}</span>
-            </label>
-          )) : (
-            <div className="text-[10px] text-zinc-400 p-2 text-center">No active users</div>
+      <div className="flex flex-col gap-1.5">
+        {/* Label + selected count badge */}
+        <div className="flex items-center justify-between">
+          <label className="text-xs font-bold uppercase tracking-wider text-zinc-400">{label}</label>
+          {selectedCount > 0 && (
+            <span className="text-[10px] font-black text-blue-700 bg-blue-100 px-1.5 py-0.5 rounded-md">
+              {selectedCount} selected
+            </span>
           )}
         </div>
+
+        {/* Search input */}
+        <div className="relative">
+          <Search
+            size={13}
+            className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-400 pointer-events-none"
+          />
+          <input
+            type="text"
+            placeholder={`Search ${label}…`}
+            className="w-full pl-7 pr-7 py-1.5 text-xs bg-zinc-50 border border-zinc-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
+            value={searchTerm}
+            onChange={e =>
+              setRoleSearchTerms(prev => ({ ...prev, [fieldName]: e.target.value }))
+            }
+          />
+          {searchTerm && (
+            <button
+              type="button"
+              onClick={() => setRoleSearchTerms(prev => ({ ...prev, [fieldName]: '' }))}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-700 transition-colors"
+            >
+              <X size={12} />
+            </button>
+          )}
+        </div>
+
+        {/* Checkbox list */}
+        <div className="h-36 overflow-y-auto bg-white border border-zinc-200 rounded-xl p-1.5 custom-scrollbar space-y-0.5">
+          {allRoleUsers.length === 0 ? (
+            <div className="text-[10px] text-zinc-400 p-3 text-center">No active {label} users</div>
+          ) : visibleUsers.length === 0 ? (
+            <div className="text-[10px] text-zinc-400 p-3 text-center">
+              No matches for "{searchTerm}"
+            </div>
+          ) : (
+            visibleUsers.map(u => {
+              const isChecked = ((formData[fieldName] || []) as string[]).includes(u.uid);
+              return (
+                <label
+                  key={u.uid}
+                  className={cn(
+                    'flex items-center gap-2 cursor-pointer px-2 py-1.5 rounded-lg transition-colors',
+                    isChecked ? 'bg-blue-50 hover:bg-blue-100' : 'hover:bg-zinc-50'
+                  )}
+                >
+                  <input
+                    type="checkbox"
+                    checked={isChecked}
+                    onChange={e => {
+                      const currentList = (formData[fieldName] || []) as string[];
+                      const newList = e.target.checked
+                        ? [...currentList, u.uid]
+                        : currentList.filter((id: string) => id !== u.uid);
+                      setFormData({ ...formData, [fieldName]: newList });
+                    }}
+                    className="w-3.5 h-3.5 rounded border-zinc-300 text-blue-600 focus:ring-blue-500 shrink-0"
+                  />
+                  <div className="min-w-0">
+                    <p className={cn('text-xs font-medium truncate', isChecked ? 'text-blue-800' : 'text-zinc-700')}>
+                      {u.name}
+                    </p>
+                    {u.region && (
+                      <p className="text-[10px] text-zinc-400 truncate">{u.region}</p>
+                    )}
+                  </div>
+                </label>
+              );
+            })
+          )}
+        </div>
+
+        {/* Match count when searching */}
+        {searchTerm && (
+          <p className="text-[10px] text-zinc-400 font-medium text-right">
+            {visibleUsers.length} of {allRoleUsers.length} shown
+          </p>
+        )}
       </div>
     );
   };
