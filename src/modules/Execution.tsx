@@ -928,7 +928,7 @@ export function ExecutionModule() {
     const approvedLogs = activeTicket.presenceLogs?.filter((l: any) => l.status === 'approved') || [];
     const hasApprovedCheckIn = approvedLogs.length > 0;
 
-    const canUploadFiles = isAuditor && (!isSubmittedPhase && !['auditor_submitted'].includes(activeTicket.status));
+    const canUploadFiles = (isAuditor || isAdminOrSuperadmin) && (!isSubmittedPhase && !['auditor_submitted'].includes(activeTicket.status));
 
     // addItemApprovalGranted gates only the manual/unlisted item path inside the modal
     const addItemApprovalGranted = activeTicket.signOffs?.addItemApprovalGranted === true;
@@ -936,8 +936,8 @@ export function ExecutionModule() {
     // SuperAdmin has full edit access regardless of other gates
     const canEditItems = isSuperAdmin
       ? activeTicket.status === 'in_progress' && !isClosedPhase
-      : isAuditor && canUploadFiles && isActionableDate && hasApprovedCheckIn && activeTicket.status === 'in_progress' && !isClosedPhase;
-    const canEditDrainage = (isSuperAdmin || isAuditor) && activeTicket.status === 'drainage_pending' && !isClosedPhase && isDrainageToday;
+      : (isAuditor || isAdminOrSuperadmin) && canUploadFiles && activeTicket.status === 'in_progress' && !isClosedPhase;
+    const canEditDrainage = (isSuperAdmin || isAdminOrSuperadmin || isAuditor) && activeTicket.status === 'drainage_pending' && !isClosedPhase;
 
     // ── Sign-off export unlock condition ──────────────────────────────────────
     // Schema: auditTickets.whatsappMediaApproved is a direct bool column
@@ -1375,7 +1375,7 @@ export function ExecutionModule() {
                   </div>
                   
                   <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
-                    {!activeTicket.signOffs?.signoffDocumentUrl && (isAuditor || isASE) && !isClosedPhase && (
+                    {!activeTicket.signOffs?.signoffDocumentUrl && (isAuditor || isASE || isAdminOrSuperadmin) && !isClosedPhase && (
                       <>
                         <input type="file" accept="image/*,application/pdf" capture="environment" className="hidden" ref={signoffFileRef} onChange={handleSignoffUpload} />
                         <button onClick={() => signoffFileRef.current?.click()} disabled={isUploadingSignoff} className="w-full sm:w-auto px-4 py-2 bg-white border border-slate-200 text-slate-700 text-xs font-bold rounded-xl hover:bg-slate-50 transition-all shadow-sm">
@@ -1404,7 +1404,7 @@ export function ExecutionModule() {
 
               <div className="space-y-3 sm:space-y-4">
                 <h4 className="font-bold text-base sm:text-lg text-slate-900">Digital Sign-offs</h4>
-                {(isSubmittedPhase || isAuditor) && (
+                {(isSubmittedPhase || isAuditor || isSuperAdmin) && (
                   <div className="space-y-2 sm:space-y-3">
                     {['auditor', 'ase', 'distributor'].map((role) => {
                       const signedData = activeTicket.signOffs?.[role as keyof SignOff];
