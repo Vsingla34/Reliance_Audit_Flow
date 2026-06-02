@@ -14,6 +14,7 @@
  */
 import { useState } from 'react';
 import ExcelJS from 'exceljs';
+import { supabase } from '../supabase';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 export interface SignOffDistributor {
@@ -275,8 +276,14 @@ function buildSignSheet(
     `Audit Start Date - ${audit.scheduledDate || ''}`,
     `Audit End Date- ${audit.auditEndDate || audit.scheduledDate || ''}`,
   ];
-  const addrParts = [dist.name, dist.address, dist.city, dist.state, dist.region].filter(Boolean);
-  const customerAddress = 'Customer Full Address :- ' + addrParts.join(', ');
+  // Build full address — address field may be empty in DB, use all available parts
+  const addrParts: string[] = [];
+  if (dist.name)    addrParts.push(dist.name);
+  if (dist.address) addrParts.push(dist.address);
+  if (dist.city)    addrParts.push(dist.city);
+  if (dist.state)   addrParts.push(dist.state);
+  if (dist.region)  addrParts.push(dist.region);
+  const customerAddress = addrParts.join(', ') || (dist.name || 'N/A');
 
   infoLines.forEach((line, i) => {
     nr(16); safeMerge(ws, r, 2, r, 6);
@@ -284,7 +291,7 @@ function buildSignSheet(
     if (i === 0) { // Row 4 — Customer address spans G-M rows 4-6
       safeMerge(ws, r, 7, r + 2, 13);
       const addrCell = ws.getCell(r, 7);
-      addrCell.value     = customerAddress;
+      addrCell.value     = 'Address - ' + customerAddress;
       addrCell.font      = tnrFont({ bold: true, size: 10, underline: true });
       addrCell.alignment = aln('left', 'top', true);
       addrCell.border    = thinBorder;
@@ -810,19 +817,48 @@ export function useSignOffExport(params: {
     if (!params.distributor) return;
     setIsExporting(true);
     try {
+      // ── Fetch itemMaster to get accurate gst + standardPack ───────────────
+      // auditLineItems don't store gst/standardPack — we need itemMaster as source
+      const sb = supabase;  // supabase is imported at top of file
+      const articleCodes = [...new Set(params.items.map(i => i.articleNumber))];
+      let itemMasterMap: Record<string, { gst: number; standardPack: string; category: string }> = {};
+      if (articleCodes.length > 0) {
+        const { data: masterRows } = await sb
+          .from('itemMaster')
+          .select('itemCode, gst, standardPack, category')
+          .in('itemCode', articleCodes);
+        if (masterRows) {
+          masterRows.forEach((m: any) => {
+            itemMasterMap[m.itemCode] = {
+              gst:          Number(m.gst)          || 0,
+              standardPack: m.standardPack          || '',
+              category:     m.category              || '',
+            };
+          });
+        }
+      }
+
+      // Enrich items with itemMaster data (overrides salesDump values)
+      const enrichedItems = params.items.map(item => ({
+        ...item,
+        gst:          itemMasterMap[item.articleNumber]?.gst          ?? item.gst          ?? 0,
+        standardPack: itemMasterMap[item.articleNumber]?.standardPack ?? item.standardPack ?? '',
+        category:     itemMasterMap[item.articleNumber]?.category     || item.category     || '',
+      }));
+
       const wb = new ExcelJS.Workbook();
       wb.creator = 'Reliance Audit System';
       wb.created = new Date();
 
       // Sheet order: Sign Format first (Reporting Status moved to separate Status Report)
       const ws2 = wb.addWorksheet('Sign Format.');
-      buildSignSheet(ws2, params.distributor, params.audit, params.items);
+      buildSignSheet(ws2, params.distributor, params.audit, enrichedItems);
 
       const ws3 = wb.addWorksheet('Article Level Format Revised');
-      buildALFSheet(ws3, params.distributor, params.audit, params.items);
+      buildALFSheet(ws3, params.distributor, params.audit, enrichedItems);
 
       const ws4 = wb.addWorksheet('Invoie details - Primary Damage');  // matches template typo
-      buildInvoiceDetailsSheet(ws4, params.distributor, params.audit, params.items);
+      buildInvoiceDetailsSheet(ws4, params.distributor, params.audit, enrichedItems);
 
       const ws5 = wb.addWorksheet('Attendance Sheet');
       buildAttendanceSheet(ws5, params.distributor, params.audit);
@@ -847,4 +883,4 @@ export function useSignOffExport(params: {
   };
 
   return { exportSignOff, isExporting };
-}
+} 

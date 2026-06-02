@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
 import { supabase, logActivity, notifyLinkedUsers } from '../supabase';
 import { Distributor, SignOff, AuditTicket as BaseTicket, AuditLineItem as BaseItem } from '../types';
-import { ClipboardCheck, Plus, Store, MapPin, CheckCircle2, ArrowLeft, AlertCircle, MessageSquare, PackageSearch, Lock, Trash2, Send, RotateCcw, CalendarClock, FileText, Upload, Loader2, User as UserIcon, X, Droplets, Search, Download, FileSpreadsheet } from 'lucide-react';
+import { ClipboardCheck, Plus, Store, MapPin, CheckCircle2, ArrowLeft, AlertCircle, MessageSquare, PackageSearch, Lock, Trash2, Send, RotateCcw, CalendarClock, FileText, Upload, Loader2, User as UserIcon, X, Droplets, Search, Download, FileSpreadsheet, FileUp, CheckCheck } from 'lucide-react';
 import { useSignOffExport } from '../hooks/useSignOffExport';
 import { cn, useAuth } from '../App';
 import { motion, AnimatePresence } from 'motion/react';
@@ -64,6 +64,9 @@ export function ExecutionModule() {
   
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isStatusExporting, setIsStatusExporting] = useState(false);
+  const [isBulkUploading, setIsBulkUploading]     = useState(false);
+  const [bulkUploadResult, setBulkUploadResult]   = useState<{ inserted: number; skipped: number; errors: string[] } | null>(null);
+  const bulkUploadRef = useRef<HTMLInputElement>(null);
   const [listSearch, setListSearch] = useState('');
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [drainageDateInput, setDrainageDateInput] = useState('');
@@ -709,6 +712,296 @@ export function ExecutionModule() {
     } catch (e) { console.error(e); }
   };
 
+  // ── Bulk upload: parse Excel → insert line items from file ─────────────────
+  const handleBulkUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !activeTicket) return;
+    if (bulkUploadRef.current) bulkUploadRef.current.value = '';
+
+    setIsBulkUploading(true);
+    setBulkUploadResult(null);
+
+    try {
+      const ExcelJS = (await import('exceljs')).default;
+      const wb = new ExcelJS.Workbook();
+      const buffer = await file.arrayBuffer();
+      await wb.xlsx.load(buffer);
+
+      const ws = wb.worksheets[0];
+      if (!ws) throw new Error('No worksheet found in the uploaded file.');
+
+      // ── Detect header row — scan rows 1-5 to find which one has ArticleNo ────
+      // Our template has: row1=title, row2=instructions, row3=headers, row4+=data
+      // But user may also upload a plain file with headers in row 1
+      const headers: Record<string, number> = {};
+      let headerRowNum = 1;
+      let dataStartRow = 2;
+
+      const normalise = (v: any): string =>
+        String(v ?? '').split('\n')[0].trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+
+      for (let tryRow = 1; tryRow <= 5; tryRow++) {
+        const row = ws.getRow(tryRow);
+        const tmp: Record<string, number> = {};
+        row.eachCell((cell, colNum) => {
+          const h = normalise(cell.value);
+          if (h) tmp[h] = colNum;
+        });
+        // Check if this row contains an article-like column
+        const articleKeys = ['articleno','articlenumber','materialno','material','itemcode','article'];
+        if (articleKeys.some(k => tmp[k] !== undefined)) {
+          Object.assign(headers, tmp);
+          headerRowNum = tryRow;
+          dataStartRow = tryRow + 1;
+          break;
+        }
+      }
+
+      // Flexible column detection
+      const col = (candidates: string[]): number | null => {
+        for (const c of candidates) {
+          const key = normalise(c);
+          if (headers[key] !== undefined) return headers[key];
+        }
+        return null;
+      };
+
+      const articleCol   = col(['ArticleNo','ArticleNumber','MaterialNo','Material','ItemCode','Article']);
+      const soldToCol    = col(['SoldToParty','SoldTo','DistributorCode','Distributor']);
+      const dmgCol       = col(['PrimaryDamage','Damaged','Damage','Dmg','QtyDamaged']);
+      const nsCol        = col(['NonSaleable','NonSaleableProduct','NS','QtyNonSaleable','NonManufacturing']);
+      const bbdCol       = col(['BBD','BBDStock','Expired','QtyBBD','BBDQty']);
+      const mfgCol       = col(['MfgDate','ManufacturingDate','MFGDate','Mfg Date','Mfg']);
+      const expCol       = col(['ExpDate','ExpiryDate','EXPDate','BBDDate','Exp Date','Exp']);
+      const descCol      = col(['Description','BrandPack','ItemName','Name']);
+      const rateCol      = col(['Rate','UnitValue','Price']);
+
+      if (!articleCol) throw new Error(`Column "ArticleNo" not found. Header row detected at row ${headerRowNum}. Found columns: ${Object.keys(headers).join(', ')}`);
+
+      // ── Parse data rows ─────────────────────────────────────────────────────
+      const dist = distMap[activeTicket.distributorId];
+      const distCode = dist?.code?.trim().toLowerCase() || '';
+
+      let inserted = 0;
+      let skipped  = 0;
+      const errors: string[] = [];
+      const inserts: any[]   = [];
+
+      ws.eachRow((row, rowNum) => {
+        if (rowNum <= headerRowNum) return; // skip title, instructions, header rows
+
+        const getCellVal = (colIdx: number | null) => {
+          if (!colIdx) return null;
+          const v = row.getCell(colIdx).value;
+          if (v === null || v === undefined || v === '') return null;
+          return v;
+        };
+
+        const articleRaw = getCellVal(articleCol);
+        if (!articleRaw) return; // skip empty rows
+
+        const articleCode = String(articleRaw).trim();
+
+        // SoldToParty filter — if column exists, only import rows matching this distributor
+        if (soldToCol) {
+          const rowDist = String(getCellVal(soldToCol) ?? '').trim().toLowerCase();
+          if (rowDist && distCode && rowDist !== distCode) {
+            skipped++;
+            return;
+          }
+        }
+
+        // Quantities — default 0
+        const qDmg  = Math.max(0, Math.round(Number(getCellVal(dmgCol)) || 0));
+        const qNs   = Math.max(0, Math.round(Number(getCellVal(nsCol))  || 0));
+        const qBbd  = Math.max(0, Math.round(Number(getCellVal(bbdCol)) || 0));
+        const qTot  = Math.max(0, Math.round(Number(getCellVal(col(['Quantity','TotalQuantity','Qty','Total']))) || 0));
+        // If split columns are all zero but a Total Quantity is given, treat it as Non-Saleable
+        const splitTotal = qDmg + qNs + qBbd;
+        const effectiveNs  = splitTotal === 0 && qTot > 0 ? qTot : qNs;
+        const total = qDmg + effectiveNs + qBbd;
+
+        if (total === 0) { skipped++; return; } // nothing to insert
+
+        // Rate — from salesDump map first, then Excel column, then 0
+        const dumpItem = dumpItemMap[articleCode];
+        const unitValue = dumpItem?.rate || Math.max(0, Number(getCellVal(rateCol)) || 0);
+        const totalValue = total * unitValue;
+
+        // Description — from dump map first, then Excel column
+        const description = dumpItem?.itemName
+          || String(getCellVal(descCol) || articleCode);
+
+        // Dates
+        const rawMfg = getCellVal(mfgCol);
+        const rawExp = getCellVal(expCol);
+        const parseDateVal = (v: any): string => {
+          if (!v) return '';
+          if (v instanceof Date) return v.toISOString().split('T')[0];
+          const s = String(v).trim();
+          // Try common formats
+          if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+          const d = new Date(s);
+          return isNaN(d.getTime()) ? '' : d.toISOString().split('T')[0];
+        };
+        const mfgDate = parseDateVal(rawMfg);
+        const expDate = parseDateVal(rawExp);
+
+        // Product life
+        let productLife = '';
+        if (mfgDate && expDate) {
+          const diff = Math.ceil((new Date(expDate).getTime() - new Date(mfgDate).getTime()) / 86400000);
+          if (diff > 0) productLife = `${diff} Days`;
+        }
+
+        // Build one row per qty type (matches how AddItemModal splits rows)
+        if (qDmg > 0) inserts.push({
+          id: crypto.randomUUID(), ticketId: activeTicket.id,
+          articleNumber: articleCode, description, category: dumpItem?.category || '',
+          quantity: qDmg, qtyDamaged: qDmg, qtyNonSaleable: 0, qtyBBD: 0,
+          unitValue, totalValue: qDmg * unitValue,
+          reasonCode: 'Verified / OK', mfgDate, expDate, productLife,
+          bbdApprovalStatus: 'none', qtyDrained: 0,
+        });
+        if (effectiveNs > 0) inserts.push({
+          id: crypto.randomUUID(), ticketId: activeTicket.id,
+          articleNumber: articleCode, description, category: dumpItem?.category || '',
+          quantity: effectiveNs, qtyDamaged: 0, qtyNonSaleable: effectiveNs, qtyBBD: 0,
+          unitValue, totalValue: effectiveNs * unitValue,
+          reasonCode: 'Verified / OK', mfgDate, expDate, productLife,
+          bbdApprovalStatus: 'none', qtyDrained: 0,
+        });
+        if (qBbd > 0) inserts.push({
+          id: crypto.randomUUID(), ticketId: activeTicket.id,
+          articleNumber: articleCode, description, category: dumpItem?.category || '',
+          quantity: qBbd, qtyDamaged: 0, qtyNonSaleable: 0, qtyBBD: qBbd,
+          unitValue, totalValue: qBbd * unitValue,
+          reasonCode: 'Verified / OK', mfgDate, expDate, productLife,
+          bbdApprovalStatus: qBbd > 0 && expDate && activeTicket.scheduledDate && expDate > activeTicket.scheduledDate ? 'pending' : 'none',
+          qtyDrained: 0,
+        });
+        inserted++;
+      });
+
+      if (inserts.length === 0) {
+        setBulkUploadResult({ inserted: 0, skipped, errors: ['No valid rows with non-zero quantities found.'] });
+        return;
+      }
+
+      // ── Insert in batches of 500 ────────────────────────────────────────────
+      const BATCH = 500;
+      for (let i = 0; i < inserts.length; i += BATCH) {
+        const { error } = await supabase.from('auditLineItems').insert(inserts.slice(i, i + BATCH));
+        if (error) throw new Error(`DB insert error: ${error.message}`);
+      }
+
+      // ── Update verifiedTotal on the ticket ────────────────────────────────
+      const addedValue = inserts.reduce((s: number, r: any) => s + r.totalValue, 0);
+      const newVerifiedTotal = (activeTicket.verifiedTotal || 0) + addedValue;
+      await supabase.from('auditTickets')
+        .update({ verifiedTotal: newVerifiedTotal, updatedAt: new Date().toISOString() })
+        .eq('id', activeTicket.id);
+
+      setBulkUploadResult({ inserted, skipped, errors });
+      logActivity(user, profile, 'Bulk Items Uploaded',
+        `${inserted} articles uploaded via Excel for ${dist?.name}`);
+
+      // Refresh items
+      await fetchItems(activeTicket.id);
+
+    } catch (err: any) {
+      console.error('Bulk upload error:', err);
+      setBulkUploadResult({ inserted: 0, skipped: 0, errors: [err.message || 'Unknown error'] });
+    } finally {
+      setIsBulkUploading(false);
+    }
+  };
+
+  // ── Download template for bulk upload ────────────────────────────────────
+  const downloadBulkTemplate = async () => {
+    if (!activeTicket) return;
+    const dist = distMap[activeTicket.distributorId];
+    const distCode = dist?.code?.trim() || '';
+
+    // Fetch fresh from salesDump for this distributor
+    const ExcelJS = (await import('exceljs')).default;
+    let dumpRows: CombinedDumpItem[] = [];
+
+    if (distCode) {
+      const { data: rawDump } = await supabase
+        .from('salesDump')
+        .select('id,itemCode,itemName,quantity,rate,category')
+        .ilike('distributorCode', distCode);
+      if (rawDump && rawDump.length > 0) {
+        const dedupMap = new Map<string, CombinedDumpItem>();
+        rawDump.forEach((d: any) => {
+          const existing = dedupMap.get(d.itemCode);
+          if (!existing || d.quantity > existing.expectedQty) {
+            dedupMap.set(d.itemCode, {
+              id: d.id, itemCode: d.itemCode,
+              itemName: d.itemName || d.itemCode,
+              expectedQty: d.quantity || 0,
+              rate: d.rate || 0,
+              category: d.category || '',
+            });
+          }
+        });
+        dumpRows = Array.from(dedupMap.values());
+      }
+    }
+
+    if (dumpRows.length === 0 && availableDumpItems.length > 0) {
+      const seen = new Map<string, CombinedDumpItem>();
+      availableDumpItems.forEach(d => { if (!seen.has(d.itemCode)) seen.set(d.itemCode, d); });
+      dumpRows = Array.from(seen.values());
+    }
+
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('Upload');
+
+    // Simple plain headers — row 1
+    ws.columns = [
+      { header: 'SoldToParty',   key: 'SoldToParty',   width: 16 },
+      { header: 'ArticleNo',     key: 'ArticleNo',      width: 18 },
+      { header: 'Description',   key: 'Description',    width: 32 },
+      { header: 'SystemQty',     key: 'SystemQty',      width: 14 },
+      { header: 'PrimaryDamage', key: 'PrimaryDamage',  width: 16 },
+      { header: 'NonSaleable',   key: 'NonSaleable',    width: 16 },
+      { header: 'BBD',           key: 'BBD',            width: 14 },
+      { header: 'MfgDate',       key: 'MfgDate',        width: 14 },
+      { header: 'ExpDate',       key: 'ExpDate',        width: 14 },
+    ];
+
+    // Bold header row
+    ws.getRow(1).font = { bold: true };
+
+    // Data rows
+    dumpRows.forEach(item => {
+      ws.addRow({
+        SoldToParty:   distCode,
+        ArticleNo:     item.itemCode,
+        Description:   item.itemName,
+        SystemQty:     item.expectedQty,
+        PrimaryDamage: 0,
+        NonSaleable:   0,
+        BBD:           0,
+        MfgDate:       '',
+        ExpDate:       '',
+      });
+    });
+
+    const buf  = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = `AuditUpload_${distCode}_${activeTicket?.scheduledDate || 'draft'}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
   const setDrainageDate = async () => {
     if (!activeTicket || !drainageDateInput) return;
     
@@ -872,7 +1165,29 @@ export function ExecutionModule() {
 
 
   // ── Sign-off Excel export hook — at top level per React rules of hooks ───────
-  const activeTicketDist = activeTicket ? distMap[activeTicket.distributorId] : undefined;
+  // Build distributor object explicitly so all fields (including address) are passed to export
+  const activeTicketDist = activeTicket ? (() => {
+    const d = distMap[activeTicket.distributorId];
+    if (!d) return undefined;
+    return {
+      id:                  d.id,
+      code:                d.code                || '',
+      name:                d.name                || '',
+      anchorName:          d.anchorName          || '',
+      address:             d.address             || '',
+      city:                d.city                || '',
+      state:               d.state               || '',
+      region:              d.region              || '',
+      approvedValue:       d.approvedValue       || 0,
+      assignment_serial_no: d.assignment_serial_no || '',
+      aseIds:              d.aseIds              || [],
+      asmIds:              d.asmIds              || [],
+      smIds:               d.smIds               || [],
+      dmIds:               d.dmIds               || [],
+      hoIds:               d.hoIds               || [],
+      active:              d.active,
+    };
+  })() : undefined;
   const { exportSignOff, isExporting } = useSignOffExport({
     distributor: activeTicketDist,
     audit: {
@@ -1112,18 +1427,76 @@ export function ExecutionModule() {
                       onChange={(e) => setItemSearchQuery(e.target.value)}
                     />
                   </div>
-                  {/* Add Item button — shown to auditors when in progress */}
+                  {/* Bulk upload + Add Item buttons */}
                   {canEditItems && (
-                    <button 
-                      onClick={() => setIsAddModalOpen(true)} 
-                      className="w-full sm:w-auto flex justify-center items-center gap-2 px-6 py-2.5 sm:py-2.5 rounded-xl text-sm font-bold transition-all shadow-md active:scale-95 whitespace-nowrap bg-slate-900 text-white hover:bg-slate-800"
-                    >
-                      <Plus size={18} /> Add Item
-                    </button>
+                    <>
+                      {/* Hidden file input */}
+                      <input
+                        type="file"
+                        accept=".xlsx,.xls,.csv"
+                        className="hidden"
+                        ref={bulkUploadRef}
+                        onChange={handleBulkUpload}
+                      />
+                      {/* Download template */}
+                      <button
+                        onClick={downloadBulkTemplate}
+                        className="w-full sm:w-auto flex justify-center items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-bold transition-all shadow-sm active:scale-95 whitespace-nowrap bg-white border border-slate-200 text-slate-700 hover:bg-slate-50"
+                        title="Download Excel template pre-filled with this distributor's items"
+                      >
+                        <Download size={16} /> Template
+                      </button>
+                      {/* Upload Excel */}
+                      <button
+                        onClick={() => bulkUploadRef.current?.click()}
+                        disabled={isBulkUploading}
+                        className="w-full sm:w-auto flex justify-center items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-bold transition-all shadow-md active:scale-95 whitespace-nowrap bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60"
+                        title="Upload Excel with ArticleNo + quantities to bulk-fill items"
+                      >
+                        {isBulkUploading
+                          ? <><Loader2 size={16} className="animate-spin" /> Uploading…</>
+                          : <><FileUp size={16} /> Upload Excel</>
+                        }
+                      </button>
+                      {/* Manual Add */}
+                      <button 
+                        onClick={() => setIsAddModalOpen(true)} 
+                        className="w-full sm:w-auto flex justify-center items-center gap-2 px-6 py-2.5 sm:py-2.5 rounded-xl text-sm font-bold transition-all shadow-md active:scale-95 whitespace-nowrap bg-slate-900 text-white hover:bg-slate-800"
+                      >
+                        <Plus size={18} /> Add Item
+                      </button>
+                    </>
                   )}
                 </div>
               </div>
               
+              {/* Bulk upload result banner */}
+              {bulkUploadResult && (
+                <div className={cn(
+                  'flex items-start justify-between gap-3 p-3.5 rounded-xl mb-3 border text-sm font-bold',
+                  bulkUploadResult.errors.length > 0
+                    ? 'bg-rose-50 border-rose-200 text-rose-800'
+                    : 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                )}>
+                  <div className="flex items-start gap-2">
+                    {bulkUploadResult.errors.length > 0
+                      ? <AlertCircle size={16} className="shrink-0 mt-0.5 text-rose-500" />
+                      : <CheckCheck size={16} className="shrink-0 mt-0.5 text-emerald-600" />
+                    }
+                    <div>
+                      <p>
+                        {bulkUploadResult.inserted > 0 && `✅ ${bulkUploadResult.inserted} articles inserted. `}
+                        {bulkUploadResult.skipped  > 0 && `⏭ ${bulkUploadResult.skipped} rows skipped (zero qty or different distributor). `}
+                        {bulkUploadResult.errors.map((e, i) => <span key={i} className="text-rose-700">❌ {e}</span>)}
+                      </p>
+                    </div>
+                  </div>
+                  <button onClick={() => setBulkUploadResult(null)} className="shrink-0 p-0.5 hover:bg-black/10 rounded-lg transition-colors">
+                    <X size={14} />
+                  </button>
+                </div>
+              )}
+
               {/* --- RESPONSIVE TABLE WRAPPER --- */}
               <div className="bg-white border border-slate-200 rounded-2xl sm:rounded-3xl overflow-hidden shadow-sm w-full">
                 <div className="w-full overflow-x-auto custom-scrollbar">
