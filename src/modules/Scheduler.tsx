@@ -221,6 +221,7 @@ export function SchedulerModule() {
         if (error) throw error;
       } else {
         const newTicket = {
+          id: crypto.randomUUID(),
           distributorId: createData.distributorId,
           proposedDate: createData.proposedDate,
           auditorIds: [], 
@@ -294,7 +295,7 @@ export function SchedulerModule() {
 
     try {
       const newProposal: DateProposal = {
-        id: Math.random().toString(36).substring(7),
+        id: crypto.randomUUID(),
         date: '',
         proposedByUserId: user.id,
         proposedByName: profile.name,
@@ -310,6 +311,7 @@ export function SchedulerModule() {
       } else {
         const dist = distMap[negDistId];
         const newTicket = {
+                  id: crypto.randomUUID(),
           distributorId: negDistId, proposedDate: null, auditorIds: [], auditDays: calculateAuditDays(dist.approvedValue), approvedValue: dist.approvedValue, maxAllowedValue: dist.approvedValue * 1.05, status: 'tentative', scheduledDate: null, verifiedTotal: 0, presenceLogs: [], signOffs: {}, media: [], dateProposals: [newProposal], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
         };
         const { error } = await supabase.from('auditTickets').insert([newTicket]);
@@ -359,7 +361,7 @@ export function SchedulerModule() {
 
     try {
       const newProposal: DateProposal = {
-        id: Math.random().toString(36).substring(7),
+        id: crypto.randomUUID(),
         date: proposalData.date || '',
         proposedByUserId: user.id,
         proposedByName: profile.name,
@@ -372,7 +374,7 @@ export function SchedulerModule() {
       if (finalTargetDistId !== negDistId && currentNegTicket) {
         const targetDistName = distMap[finalTargetDistId]?.name;
         const redirectProposal: DateProposal = {
-          id: Math.random().toString(36).substring(7), date: proposalData.date || '', proposedByUserId: user.id, proposedByName: profile.name, role: profile.role, email: profile.email, remarks: `Counter-proposed for a different distributor: ${targetDistName}. ${finalRemarks ? `Remarks: ${finalRemarks}` : ''}`, timestamp: new Date().toISOString()
+          id: crypto.randomUUID(), date: proposalData.date || '', proposedByUserId: user.id, proposedByName: profile.name, role: profile.role, email: profile.email, remarks: `Counter-proposed for a different distributor: ${targetDistName}. ${finalRemarks ? `Remarks: ${finalRemarks}` : ''}`, timestamp: new Date().toISOString()
         };
         const updatedOldProposals = [...(currentNegTicket.dateProposals || []), redirectProposal];
         
@@ -395,6 +397,7 @@ export function SchedulerModule() {
       } else {
         const dist = distMap[finalTargetDistId];
         const newTicket = {
+                  id: crypto.randomUUID(),
           distributorId: finalTargetDistId, proposedDate: proposalData.date || null, auditorIds: [], auditDays: calculateAuditDays(dist.approvedValue), approvedValue: dist.approvedValue, maxAllowedValue: dist.approvedValue * 1.05, status: 'tentative', scheduledDate: null, verifiedTotal: 0, presenceLogs: [], signOffs: {}, media: [], dateProposals: [newProposal], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
         };
         const { error } = await supabase.from('auditTickets').insert([newTicket]);
@@ -421,7 +424,7 @@ export function SchedulerModule() {
     try {
       const finalRemarks = `🚨 LATE CANCELLATION (Past 12 PM): ${cancelReason}`;
       const newProposal: DateProposal = {
-        id: Math.random().toString(36).substring(7),
+        id: crypto.randomUUID(),
         date: '',
         proposedByUserId: user.id,
         proposedByName: profile.name,
@@ -923,7 +926,7 @@ export function SchedulerModule() {
                       </select>
 
                       <div className="flex flex-col sm:flex-row gap-3 w-full">
-                        <input type="date" required={profile?.role === 'ase'} disabled={!negDistId} min={new Date().toISOString().split('T')[0]} className="w-full sm:w-40 px-3 py-2.5 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black outline-none transition-all text-xs font-medium text-zinc-700 cursor-pointer shrink-0 disabled:opacity-50" value={proposalData.date} onChange={e => setProposalData({...proposalData, date: e.target.value})} />
+                        <input type="date" required={profile?.role === 'ase'} disabled={!negDistId} className="w-full sm:w-40 px-3 py-2.5 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black outline-none transition-all text-xs font-medium text-zinc-700 cursor-pointer shrink-0 disabled:opacity-50" value={proposalData.date} onChange={e => setProposalData({...proposalData, date: e.target.value})} />
                         <div className={cn("relative flex-1")}>
                           <input type="text" disabled={!negDistId} placeholder="Type message..." className="w-full pl-3 pr-10 py-2.5 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black outline-none transition-all text-xs disabled:opacity-50" value={proposalData.remarks} onChange={e => setProposalData({...proposalData, remarks: e.target.value})} />
                           <button type="submit" disabled={!negDistId} className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1.5 bg-black text-white rounded-lg hover:bg-zinc-800 transition-colors disabled:opacity-50"><Send size={14}/></button>
@@ -981,7 +984,7 @@ export function SchedulerModule() {
                   
                   <div>
                     <label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-400">Start Date</label>
-                    <input required type="date" min={new Date().toISOString().split('T')[0]} className="w-full mt-1 px-3 sm:px-4 py-2.5 sm:py-3 bg-zinc-50 border border-zinc-200 sm:border-none rounded-xl focus:ring-2 focus:ring-black transition-all cursor-pointer text-sm" value={createData.proposedDate} onChange={e => setCreateData({...createData, proposedDate: e.target.value})} />
+                    <input required type="date" className="w-full mt-1 px-3 sm:px-4 py-2.5 sm:py-3 bg-zinc-50 border border-zinc-200 sm:border-none rounded-xl focus:ring-2 focus:ring-black transition-all cursor-pointer text-sm" value={createData.proposedDate} onChange={e => setCreateData({...createData, proposedDate: e.target.value})} />
                   </div>
                 </div>
 

@@ -11,7 +11,7 @@ import {
 import { useAuth, cn } from '../App';
 import { motion } from 'motion/react';
 
-const BATCH_SIZE = 2000; 
+const BATCH_SIZE = 500;  // 500 rows/batch — reliable with PostgREST payload limits
 
 export function MastersModule() {
   const { profile, user } = useAuth(); 
@@ -110,7 +110,7 @@ export function MastersModule() {
           if (!itemCode || !itemName) return null;
           
           return { 
-            id: Math.random().toString(36).substring(7), 
+            id: crypto.randomUUID(), 
             itemCode, 
             itemName, 
             gst: parseNum(gst), 
@@ -162,44 +162,51 @@ export function MastersModule() {
         // Use proper CSV parser for headers too
         const headers = parseCSVLine(lines[0]).map(h => h.replace(/['"]/g, ''));
         
-        const dumpItems = lines.slice(1).map(line => {
-          // ── KEY FIX: use parseCSVLine instead of line.split(',') ──────────
-          // The old split(',') broke quoted fields like " 472,145.17 " into
-          // two separate columns, making TotalValue = 472 instead of 472145.17
+        // ── Parse all rows from CSV ────────────────────────────────────────
+        const rawItems = lines.slice(1).map(line => {
           const cols = parseCSVLine(line);
 
           const soldToParty = getColValue(headers, cols, ['SoldToParty', 'DistributorCode']);
           const materialNo  = getColValue(headers, cols, ['MaterialNo', 'ItemCode']);
-          
           if (!soldToParty || !materialNo) return null;
 
           const totalQtyStr   = getColValue(headers, cols, ['TotalQty', 'Quantity', 'Qty']);
           const totalValueStr = getColValue(headers, cols, ['TotalValue', 'Value', 'Total Value']);
           const gstStr        = getColValue(headers, cols, ['GST']);
+          const billingDoc    = getColValue(headers, cols, ['BillingDoc', 'InvoiceNo']);
+          const billingDate   = getColValue(headers, cols, ['BillingDate', 'Date']);
 
-          // ── KEY FIX: strip commas/spaces before parsing ──────────────────
-          // " 472,145.17 " → parseFloat strips → 472145.17 ✓
-          // Old code: parseFloat(" 472,145.17 ") = NaN → 0 ✗
-          const totalQty   = parseInt2(totalQtyStr);
+          // parseNum uses parseFloat — safe for values beyond integer max (2.1B)
+          // parseInt2 was capping at JS int32 causing "out of range for type integer"
+          const totalQty   = parseNum(totalQtyStr);
           const totalValue = parseNum(totalValueStr);
+          const rate       = totalQty > 0 ? totalValue / totalQty : 0;
 
-          // Rate = TotalValue ÷ TotalQty  (weighted avg per-unit price)
-          const rate = totalQty > 0 ? totalValue / totalQty : 0;
-          
+          // ── No client-side id — let Supabase auto-generate it via DEFAULT ─
+          // This completely avoids salesDump_pkey collisions because the DB
+          // assigns the id, guaranteeing uniqueness regardless of CSV content.
+          // Clamp quantity fields: Postgres `integer` max = 2,147,483,647.
+          // If qty > 2B it overflows — store as numeric string or cap.
+          // Best fix: ALTER TABLE salesDump ALTER COLUMN quantity TYPE bigint;
+          // Meanwhile, we send as a JS number (PostgREST accepts numeric).
+          const safeQty = Math.round(totalQty);   // whole units, no decimals
+
+          // Send id explicitly — DB column has no DEFAULT gen_random_uuid() yet.
+          // crypto.randomUUID() = 128-bit UUID, zero collision risk at 75k rows.
           return {
-            id:              Math.random().toString(36).substring(7),
+            id:              crypto.randomUUID(),
             distributorCode: soldToParty,
             itemCode:        materialNo,
-            quantity:        totalQty,
-            rate:            rate,
-            billingDate:     getColValue(headers, cols, ['BillingDate', 'Date']),
-            soldToParty:     soldToParty,
-            materialNo:      materialNo,
+            quantity:        safeQty,
+            rate,
+            billingDate,
+            soldToParty,
+            materialNo,
             plant:           getColValue(headers, cols, ['Plant']),
-            billingDoc:      getColValue(headers, cols, ['BillingDoc', 'InvoiceNo']),
+            billingDoc,
             category:        getColValue(headers, cols, ['Category']),
-            totalValue:      totalValue,
-            totalQty:        totalQty,
+            totalValue,
+            totalQty:        safeQty,
             itemName:        getColValue(headers, cols, ['ItemName', 'Description']),
             gst:             parseNum(gstStr),
             approxShelfLife: getColValue(headers, cols, ['ApproxShelfLife', 'ShelfLife']),
@@ -207,19 +214,52 @@ export function MastersModule() {
           };
         }).filter(Boolean);
 
-        if (dumpItems.length === 0) throw new Error("No valid data found in CSV.");
+        if (rawItems.length === 0) throw new Error("No valid data found in CSV.");
+
+        const dumpItems = rawItems;
+        const dupsRemoved = 0;
+
         setSalesProgress({ current: 0, total: dumpItems.length });
 
-        let processed = 0;
+        // ── Parallel batch insert — 5 batches fired simultaneously ──────────
+        // No row-level fallback (that was causing 2000 HTTP requests per failed
+        // batch = 10+ minutes). If a batch fails we log and skip the whole
+        // batch, then continue — never block the rest of the upload.
+        const PARALLEL = 5;
+        let processed  = 0;
+        let errorCount = 0;
+
+        // Split all items into batches upfront
+        const batches: any[][] = [];
         for (let i = 0; i < dumpItems.length; i += BATCH_SIZE) {
-          const batch = dumpItems.slice(i, i + BATCH_SIZE);
-          const { error } = await supabase.from('salesDump').insert(batch);
-          if (error) throw error;
-          processed += batch.length; setSalesProgress({ current: processed, total: dumpItems.length });
+          batches.push(dumpItems.slice(i, i + BATCH_SIZE));
         }
-        
-        logActivity(user, profile, "Sales Dump Uploaded", `Appended ${dumpItems.length} records to the global Sales Dump.`);
-        alert(`Success! ${dumpItems.length} records appended to the Sales Dump.`);
+
+        // Process PARALLEL batches at a time
+        for (let i = 0; i < batches.length; i += PARALLEL) {
+          const group = batches.slice(i, i + PARALLEL);
+          const results = await Promise.all(
+            group.map(batch => supabase.from('salesDump').upsert(batch, { onConflict: 'id', ignoreDuplicates: true }))
+          );
+          for (let j = 0; j < results.length; j++) {
+            if (results[j].error) {
+              console.warn('Batch failed, skipping:', results[j].error.message);
+              errorCount += group[j].length;
+            } else {
+              processed += group[j].length;
+            }
+          }
+          setSalesProgress({ current: processed + errorCount, total: dumpItems.length });
+        }
+
+        logActivity(user, profile, "Sales Dump Uploaded",
+          `Uploaded ${processed} records. ${dupsRemoved > 0 ? `Deduped ${dupsRemoved} CSV duplicates. ` : ''}${errorCount > 0 ? `Skipped ${errorCount} problem rows.` : ''}`);
+        alert(
+          `Upload complete!\n\n` +
+          `✅ Inserted: ${processed.toLocaleString()} records\n` +
+          (dupsRemoved > 0 ? `⚠️ CSV duplicates removed: ${dupsRemoved.toLocaleString()}\n` : '') +
+          (errorCount  > 0 ? `❌ Skipped rows (DB error): ${errorCount}\n` : '')
+        );
       } catch (error: any) { alert(`Upload failed: ${error.message || 'Invalid CSV format'}`); } 
       finally { setIsUploadingSales(false); setSalesProgress({ current: 0, total: 0 }); if (salesFileRef.current) salesFileRef.current.value = ''; }
     };

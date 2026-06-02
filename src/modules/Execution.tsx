@@ -637,20 +637,7 @@ export function ExecutionModule() {
       (sum, item) => sum + (item.id === id ? itemToSave.totalValue : item.totalValue), 0
     );
 
-    if (newVerifiedTotal > activeTicket.maxAllowedValue) { 
-      alert(`Changes reverted. This update exceeds the absolute 5% maximum limit (₹${activeTicket.maxAllowedValue.toLocaleString()}).`); 
-      fetchItems(activeTicket.id); 
-      return; 
-    }
-
     try {
-      if (newVerifiedTotal > activeTicket.approvedValue &&
-          itemsRef.current.reduce((sum, item) => sum + item.totalValue, 0) <= activeTicket.approvedValue) {
-        const dist = distMap[activeTicket.distributorId];
-        logActivity(user, profile, "Buffer Zone Triggered",
-          `Audit for ${dist?.name} exceeded the primary limit of ₹${activeTicket.approvedValue.toLocaleString()} and entered the 5% buffer zone.`);
-      }
-
       // Schedule via queue — merges burst edits, defers until 600ms after last change
       await saveQueue.schedule(id, { 
         quantity:          itemToSave.quantity, 
@@ -960,8 +947,6 @@ export function ExecutionModule() {
       activeTicket.signOffs?.whatsappMediaApproved === true;
 
     const percentUsed = ((activeTicket.verifiedTotal || 0) / activeTicket.approvedValue) * 100;
-    const isOverBudget = (activeTicket.verifiedTotal || 0) > activeTicket.approvedValue;
-    const isMaxedOut = (activeTicket.verifiedTotal || 0) >= activeTicket.maxAllowedValue;
     
     const auditDateString = activeTicket.scheduledDate?.split('T')[0] || '';
     const canSubmitToAse = activeTicket.signOffs?.whatsappMediaApproved === true && activeTicket.signOffs?.signoffDocumentApproved === true;
@@ -1062,19 +1047,7 @@ export function ExecutionModule() {
 
 
 
-          {isOverBudget && !isMaxedOut && !isClosedPhase && (
-            <div className="mb-6 sm:mb-8 p-4 sm:p-5 bg-amber-50 border border-amber-100 rounded-xl sm:rounded-2xl flex items-start gap-3 sm:gap-4">
-              <AlertCircle className="text-amber-500 shrink-0 mt-0.5" size={20} />
-              <div><h4 className="font-bold text-amber-900 text-sm sm:text-base">Budget Warning</h4><p className="text-xs sm:text-sm text-amber-800 mt-1">The verified total has exceeded the approved limit of <strong>₹{activeTicket.approvedValue.toLocaleString()}</strong>. You are currently utilizing the 5% emergency buffer.</p></div>
-            </div>
-          )}
 
-          {isMaxedOut && !isClosedPhase && (
-            <div className="mb-6 sm:mb-8 p-4 sm:p-5 bg-rose-50 border border-rose-100 rounded-xl sm:rounded-2xl flex items-start gap-3 sm:gap-4">
-              <Lock className="text-rose-500 shrink-0 mt-0.5" size={20} />
-              <div><h4 className="font-bold text-rose-900 text-sm sm:text-base">Maximum Limit Reached</h4><p className="text-xs sm:text-sm text-rose-800 mt-1">The verified total has reached the hard limit of <strong>₹{activeTicket.maxAllowedValue.toLocaleString()}</strong> (Approved + 5%). You cannot add any more items to this audit.</p></div>
-            </div>
-          )}
 
           {activeTicket.status === 'auditor_submitted' && !isClosedPhase && (
             <div className="mb-6 sm:mb-8 p-4 sm:p-5 bg-indigo-50 border border-indigo-100 rounded-xl sm:rounded-2xl flex items-start gap-3 sm:gap-4">
@@ -1143,11 +1116,7 @@ export function ExecutionModule() {
                   {canEditItems && (
                     <button 
                       onClick={() => setIsAddModalOpen(true)} 
-                      disabled={isMaxedOut}
-                      className={cn(
-                        "w-full sm:w-auto flex justify-center items-center gap-2 px-6 py-2.5 sm:py-2.5 rounded-xl text-sm font-bold transition-all shadow-md active:scale-95 whitespace-nowrap",
-                        !isMaxedOut ? "bg-slate-900 text-white hover:bg-slate-800" : "bg-slate-200 text-slate-400 cursor-not-allowed"
-                      )}
+                      className="w-full sm:w-auto flex justify-center items-center gap-2 px-6 py-2.5 sm:py-2.5 rounded-xl text-sm font-bold transition-all shadow-md active:scale-95 whitespace-nowrap bg-slate-900 text-white hover:bg-slate-800"
                     >
                       <Plus size={18} /> Add Item
                     </button>

@@ -94,15 +94,7 @@ export function AddItemModal({ isOpen, onClose, activeTicket, distributor, avail
     const totalValue = finalQty * unitValue;
     const newVerifiedTotal = (activeTicket.verifiedTotal || 0) + totalValue;
 
-    if (newVerifiedTotal > activeTicket.maxAllowedValue) {
-      alert(`HARD LIMIT REACHED: This item pushes the total to ₹${newVerifiedTotal.toLocaleString()}, which exceeds the absolute maximum 5% buffer limit of ₹${activeTicket.maxAllowedValue.toLocaleString()}.`);
-      return;
-    }
-
     try {
-      if (newVerifiedTotal > activeTicket.approvedValue && (activeTicket.verifiedTotal || 0) <= activeTicket.approvedValue) {
-        logActivity(user, profile, "Buffer Zone Triggered", `Audit for ${distributor?.name} exceeded the primary limit of ₹${activeTicket.approvedValue.toLocaleString()} and entered the 5% buffer zone.`);
-      }
 
       const inserts = [];
       const itemRemarks = remarks.trim();
