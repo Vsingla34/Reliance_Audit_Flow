@@ -266,17 +266,18 @@ function buildSignSheet(
   nr(18); safeMerge(ws, r, 2, r, 13);
   scT(r, 2, 'Audit Report - Phase V Part 2 Beverage', { bold: true, size: 12, hAlign: 'center', vAlign: 'middle', wrap: false, border: {} });
 
-  // ROWS 4-10 — Info block
-  const infoLines = [
-    `Audit Serial No. - ${audit.serialNo || ''}`,
-    `Audit Firm Name - Singla Vishal & Co.`,
-    `Anchor Code - ${dist.code || ''}`,
-    `Anchor Name/ Direct DB Name - ${dist.anchorName || ''}`,
-    `Distributor name & City - ${dist.name || ''}, ${dist.city || ''}`,
-    `Audit Start Date - ${audit.scheduledDate || ''}`,
-    `Audit End Date- ${audit.auditEndDate || audit.scheduledDate || ''}`,
+  // ROWS 4-10 — Info block: [label, value] pairs
+  const infoLines: [string, string][] = [
+    ['Audit Serial No. - ',            audit.serialNo || ''],
+    ['Audit Firm Name - ',             'Singla Vishal & Co.'],
+    ['Anchor Code - ',                 dist.code || ''],
+    ['Anchor Name/ Direct DB Name - ', dist.anchorName || ''],
+    ['Distributor name & City - ',     `${dist.name || ''}, ${dist.city || ''}`],
+    ['Audit Start Date - ',            audit.scheduledDate || ''],
+    ['Audit End Date- ',               audit.auditEndDate || audit.scheduledDate || ''],
   ];
-  // Build full address — address field may be empty in DB, use all available parts
+
+  // Build full address
   const addrParts: string[] = [];
   if (dist.name)    addrParts.push(dist.name);
   if (dist.address) addrParts.push(dist.address);
@@ -285,17 +286,33 @@ function buildSignSheet(
   if (dist.region)  addrParts.push(dist.region);
   const customerAddress = addrParts.join(', ') || (dist.name || 'N/A');
 
-  infoLines.forEach((line, i) => {
+  // Write address merged cell BEFORE the loop so it isn't overwritten
+  const addrStartRow = r + 1;
+  safeMerge(ws, addrStartRow, 7, addrStartRow + 2, 13);
+  const addrCell = ws.getCell(addrStartRow, 7);
+  addrCell.value = {
+    richText: [
+      { text: 'Customer Full Address :- ', font: { ...tnrFont({ bold: true, size: 10 }), underline: true } },
+      { text: customerAddress,              font: { ...tnrFont({ bold: false, size: 10 }), underline: false } },
+    ],
+  } as any;
+  addrCell.alignment = aln('left', 'top', true);
+  addrCell.border    = thinBorder;
+
+  infoLines.forEach(([label, value], i) => {
     nr(16); safeMerge(ws, r, 2, r, 6);
-    scT(r, 2, line, { size: 10, hAlign: 'left', vAlign: 'middle', wrap: false, border: thinBorder });
-    if (i === 0) { // Row 4 — Customer address spans G-M rows 4-6
-      safeMerge(ws, r, 7, r + 2, 13);
-      const addrCell = ws.getCell(r, 7);
-      addrCell.value     = 'Address - ' + customerAddress;
-      addrCell.font      = tnrFont({ bold: true, size: 10, underline: true });
-      addrCell.alignment = aln('left', 'top', true);
-      addrCell.border    = thinBorder;
-    } else if (i >= 1 && i <= 2) {
+    // Write as rich text: label bold, value normal weight
+    const cell = ws.getCell(r, 2);
+    cell.value = {
+      richText: [
+        { text: label, font: tnrFont({ bold: true,  size: 10 }) },
+        { text: value, font: tnrFont({ bold: false, size: 10 }) },
+      ],
+    } as any;
+    cell.alignment = aln('left', 'middle', false);
+    cell.border    = thinBorder;
+    // Cols G-M rows 1-3 belong to the address merged cell — never overwrite
+    if (i >= 3) {
       safeMerge(ws, r, 7, r, 13);
       scT(r, 7, '', { hAlign: 'left', border: thinBorder });
     }
@@ -817,9 +834,31 @@ export function useSignOffExport(params: {
     if (!params.distributor) return;
     setIsExporting(true);
     try {
+      // ── Fetch fresh distributor from DB to get address/city/state ───────────
+      // params.distributor may have empty address if distMap was loaded without these fields
+      const sb = supabase;
+      let freshDist: SignOffDistributor = params.distributor;
+      if (params.distributor.code) {
+        const { data: dbDist } = await sb
+          .from('distributors')
+          .select('id,code,name,anchorName,address,city,state,region')
+          .eq('code', params.distributor.code)
+          .single();
+        if (dbDist) {
+          freshDist = {
+            ...params.distributor,
+            name:       dbDist.name       || params.distributor.name       || '',
+            anchorName: dbDist.anchorName || params.distributor.anchorName || '',
+            address:    dbDist.address    || '',
+            city:       dbDist.city       || '',
+            state:      dbDist.state      || '',
+            region:     dbDist.region     || '',
+          };
+        }
+      }
+
       // ── Fetch itemMaster to get accurate gst + standardPack ───────────────
       // auditLineItems don't store gst/standardPack — we need itemMaster as source
-      const sb = supabase;  // supabase is imported at top of file
       const articleCodes = [...new Set(params.items.map(i => i.articleNumber))];
       let itemMasterMap: Record<string, { gst: number; standardPack: string; category: string }> = {};
       if (articleCodes.length > 0) {
@@ -852,16 +891,16 @@ export function useSignOffExport(params: {
 
       // Sheet order: Sign Format first (Reporting Status moved to separate Status Report)
       const ws2 = wb.addWorksheet('Sign Format.');
-      buildSignSheet(ws2, params.distributor, params.audit, enrichedItems);
+      buildSignSheet(ws2, freshDist, params.audit, enrichedItems);
 
       const ws3 = wb.addWorksheet('Article Level Format Revised');
-      buildALFSheet(ws3, params.distributor, params.audit, enrichedItems);
+      buildALFSheet(ws3, freshDist, params.audit, enrichedItems);
 
       const ws4 = wb.addWorksheet('Invoie details - Primary Damage');  // matches template typo
-      buildInvoiceDetailsSheet(ws4, params.distributor, params.audit, enrichedItems);
+      buildInvoiceDetailsSheet(ws4, freshDist, params.audit, enrichedItems);
 
       const ws5 = wb.addWorksheet('Attendance Sheet');
-      buildAttendanceSheet(ws5, params.distributor, params.audit);
+      buildAttendanceSheet(ws5, freshDist, params.audit);
 
 
       const buffer = await wb.xlsx.writeBuffer();
@@ -883,4 +922,4 @@ export function useSignOffExport(params: {
   };
 
   return { exportSignOff, isExporting };
-} 
+}
