@@ -551,9 +551,25 @@ export function ExecutionModule() {
 
   const deleteItem = async (item: AuditLineItem) => {
     if (!activeTicket) return;
+    // Optimistic update — remove from UI immediately
+    const updatedItems = items.filter(i => i.id !== item.id);
+    setItems(updatedItems);
+
+    // Update verifiedTotal on the ticket
+    const newVerifiedTotal = updatedItems.reduce((s, i) => s + (i.totalValue || 0), 0);
+    setActiveTicket({ ...activeTicket, verifiedTotal: newVerifiedTotal });
+
     try {
       await supabase.from('auditLineItems').delete().eq('id', item.id);
-    } catch (error) { console.error(error); }
+      await supabase.from('auditTickets')
+        .update({ verifiedTotal: newVerifiedTotal, updatedAt: new Date().toISOString() })
+        .eq('id', activeTicket.id);
+    } catch (error) {
+      console.error(error);
+      // Rollback on failure
+      setItems(items);
+      setActiveTicket({ ...activeTicket });
+    }
   };
 
   const handleInlineChange = (id: string, field: 'qtyNonSaleable' | 'qtyBBD' | 'qtyDamaged' | 'mfgDate' | 'expDate', value: any, e?: React.ChangeEvent<HTMLInputElement>) => {
@@ -1188,7 +1204,7 @@ export function ExecutionModule() {
       active:              d.active,
     };
   })() : undefined;
-  const { exportSignOff, isExporting } = useSignOffExport({
+  const { exportSignOff, isExporting, exportClaimPDF, isExportingPDF } = useSignOffExport({
     distributor: activeTicketDist,
     audit: {
       id:            activeTicket?.id ?? '',
@@ -1218,23 +1234,29 @@ export function ExecutionModule() {
           })()
         : '',
     },
-    items: items.map(i => ({
-      articleNumber:  i.articleNumber,
-      description:    i.description,
-      qtyDamaged:     i.qtyDamaged     || 0,
-      qtyNonSaleable: i.qtyNonSaleable || 0,
-      qtyBBD:         i.qtyBBD         || 0,
-      qtySampling:    0,   // Sampling/Liquidation/FOC — not currently tracked in DB, defaults to 0
-      unitValue:      i.unitValue       || 0,
-      mfgDate:        i.mfgDate    || '',
-      expDate:        i.expDate    || '',
-      productLife:    i.productLife || '',
-      reasonCode:     i.reasonCode  || '',
-      remarks:        i.remarks     || '',
-      gst:            (dumpItemMap[i.articleNumber] as any)?.gst          || 0,
-      standardPack:   (dumpItemMap[i.articleNumber] as any)?.standardPack || '',
-      category:       (dumpItemMap[i.articleNumber] as any)?.category      || i.category || '',
-    })),
+    items: items.map(i => {
+      const qty   = (i.qtyDamaged || 0) + (i.qtyNonSaleable || 0) + (i.qtyBBD || 0) || i.quantity || 0;
+      const total = qty * (i.unitValue || 0);
+      return {
+        articleNumber:  i.articleNumber,
+        description:    i.description,
+        quantity:       qty,
+        totalValue:     i.totalValue || total,
+        qtyDamaged:     i.qtyDamaged     || 0,
+        qtyNonSaleable: i.qtyNonSaleable || 0,
+        qtyBBD:         i.qtyBBD         || 0,
+        qtySampling:    0,
+        unitValue:      i.unitValue       || 0,
+        mfgDate:        i.mfgDate    || '',
+        expDate:        i.expDate    || '',
+        productLife:    i.productLife || '',
+        reasonCode:     i.reasonCode  || '',
+        remarks:        i.remarks     || '',
+        gst:            (dumpItemMap[i.articleNumber] as any)?.gst          || 0,
+        standardPack:   (dumpItemMap[i.articleNumber] as any)?.standardPack || '',
+        category:       (dumpItemMap[i.articleNumber] as any)?.category      || i.category || '',
+      };
+    }),
   });
 
   if (activeTicket) {
@@ -1315,6 +1337,24 @@ export function ExecutionModule() {
                 {isExporting
                   ? <><Loader2 size={15} className="animate-spin" /> Generating…</>
                   : <><FileSpreadsheet size={15} /> <span className="hidden sm:inline">Sign-Off Excel</span><span className="sm:hidden">Export</span></>
+                }
+              </button>
+
+              {/* Claim Letter PDF — both distributor + anchor letter heads */}
+              <button
+                onClick={exportClaimPDF}
+                disabled={!whatsappApproved || isExportingPDF || items.length === 0}
+                title={!whatsappApproved ? "Unlocked after Admin approves WhatsApp Evidence" : "Download Claim Letter PDF (Distributor + Anchor)"}
+                className={cn(
+                  "flex-1 sm:flex-none flex justify-center items-center gap-2 px-3 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all border",
+                  whatsappApproved && items.length > 0
+                    ? "bg-violet-50 text-violet-700 hover:bg-violet-100 border-violet-200"
+                    : "bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed"
+                )}
+              >
+                {isExportingPDF
+                  ? <><Loader2 size={15} className="animate-spin" /> Generating…</>
+                  : <><FileText size={15} /> <span className="hidden sm:inline">Claim Letter PDF</span><span className="sm:hidden">PDF</span></>
                 }
               </button>
 

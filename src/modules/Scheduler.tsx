@@ -61,6 +61,8 @@ export function SchedulerModule() {
 
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [createAseId, setCreateAseId] = useState('');
+  const [aseSearch, setAseSearch] = useState('');
+  const [distSearch, setDistSearch] = useState('');
   const [createData, setCreateData] = useState({ distributorId: '', proposedDate: '' });
   
   const [auditorSearch, setAuditorSearch] = useState('');
@@ -248,7 +250,7 @@ export function SchedulerModule() {
 
       setIsCreateModalOpen(false);
       setCreateData({ distributorId: '', proposedDate: '' });
-      setCreateAseId('');
+      setCreateAseId(''); setAseSearch(''); setDistSearch('');
       alert("Audit Scheduled Successfully!");
     } catch (error: any) { 
       console.error("Error creating audit ticket:", error);
@@ -967,19 +969,163 @@ export function SchedulerModule() {
                   {isAdminOrHO && (
                     <div>
                       <label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-400">Filter by ASE (Optional)</label>
-                      <select className="w-full mt-1 px-3 sm:px-4 py-2.5 sm:py-3 bg-zinc-50 border border-zinc-200 sm:border-none rounded-xl focus:ring-2 focus:ring-black transition-all cursor-pointer text-sm" value={createAseId} onChange={e => { setCreateAseId(e.target.value); setCreateData({...createData, distributorId: ''}); }}>
-                        <option value="">All ASEs...</option>
-                        {allUsers.filter(u => u.role === 'ase' && u.active).map(u => <option key={u.uid} value={u.uid}>{u.name} {u.region ? `(${u.region})` : ''}</option>)}
-                      </select>
+                      <div className="relative mt-1">
+                        {/* Search input */}
+                        <div className="relative">
+                          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 pointer-events-none" />
+                          <input
+                            type="text"
+                            placeholder="Search ASE by name or region..."
+                            className="w-full pl-8 pr-8 py-2.5 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black transition-all text-sm outline-none"
+                            value={createAseId
+                              ? (allUsers.find(u => u.uid === createAseId)?.name || '') + (allUsers.find(u => u.uid === createAseId)?.region ? ` (${allUsers.find(u => u.uid === createAseId)?.region})` : '')
+                              : aseSearch
+                            }
+                            onChange={e => {
+                              setAseSearch(e.target.value);
+                              if (createAseId) { setCreateAseId(''); setCreateData({...createData, distributorId: ''}); }
+                            }}
+                            onFocus={() => { if (createAseId) setAseSearch(''); }}
+                          />
+                          {/* Clear button */}
+                          {(createAseId || aseSearch) && (
+                            <button
+                              type="button"
+                              onClick={() => { setCreateAseId(''); setAseSearch(''); setCreateData({...createData, distributorId: ''}); }}
+                              className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-700"
+                            >
+                              <X size={13} />
+                            </button>
+                          )}
+                        </div>
+
+                        {/* Dropdown list — shown when typing and no ASE selected */}
+                        {!createAseId && aseSearch.trim() && (() => {
+                          const filtered = allUsers.filter(u =>
+                            u.role === 'ase' && u.active &&
+                            (`${u.name} ${u.region || ''}`.toLowerCase().includes(aseSearch.toLowerCase()))
+                          );
+                          return filtered.length > 0 ? (
+                            <div className="absolute z-50 w-full mt-1 bg-white border border-zinc-200 rounded-xl shadow-lg max-h-48 overflow-y-auto">
+                              {/* All ASEs option */}
+                              <button
+                                type="button"
+                                onClick={() => { setCreateAseId(''); setAseSearch(''); }}
+                                className="w-full text-left px-4 py-2.5 text-sm text-zinc-500 hover:bg-zinc-50 border-b border-zinc-100 font-medium"
+                              >
+                                All ASEs
+                              </button>
+                              {filtered.map(u => (
+                                <button
+                                  key={u.uid}
+                                  type="button"
+                                  onClick={() => { setCreateAseId(u.uid); setAseSearch(''); setDistSearch(''); setCreateData({...createData, distributorId: ''}); }}
+                                  className="w-full text-left px-4 py-2.5 text-sm hover:bg-zinc-50 flex items-center justify-between gap-2"
+                                >
+                                  <span className="font-bold text-zinc-900">{u.name}</span>
+                                  {u.region && <span className="text-[10px] text-zinc-400 bg-zinc-100 px-2 py-0.5 rounded-full shrink-0">{u.region}</span>}
+                                </button>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="absolute z-50 w-full mt-1 bg-white border border-zinc-200 rounded-xl shadow-lg px-4 py-3 text-sm text-zinc-400">
+                              No ASE found matching "{aseSearch}"
+                            </div>
+                          );
+                        })()}
+
+                        {/* Selected ASE badge */}
+                        {createAseId && (
+                          <p className="text-[10px] text-emerald-600 font-bold mt-1.5 flex items-center gap-1">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block" />
+                            Showing distributors for this ASE only
+                          </p>
+                        )}
+                      </div>
                     </div>
                   )}
 
                   <div>
                     <label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-400">Select Distributor *</label>
-                    <select required className="w-full mt-1 px-3 sm:px-4 py-2.5 sm:py-3 bg-zinc-50 border border-zinc-200 sm:border-none rounded-xl focus:ring-2 focus:ring-black transition-all cursor-pointer text-sm" value={createData.distributorId} onChange={e => setCreateData({...createData, distributorId: e.target.value})}>
-                      <option value="">Choose a distributor...</option>
-                      {distributors.filter(d => d.active && !forceScheduleBlockedIds.has(d.id) && (!createAseId || (d.aseIds && d.aseIds.includes(createAseId)))).map(d => <option key={d.id} value={d.id}>{d.name} ({d.code})</option>)}
-                    </select>
+                    <div className="relative mt-1">
+                      {/* Search input */}
+                      <div className="relative">
+                        <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 pointer-events-none" />
+                        <input
+                          type="text"
+                          placeholder="Search by name or code..."
+                          className="w-full pl-8 pr-8 py-2.5 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black transition-all text-sm outline-none"
+                          value={createData.distributorId
+                            ? (distributors.find(d => d.id === createData.distributorId)?.name || '') + ' (' + (distributors.find(d => d.id === createData.distributorId)?.code || '') + ')'
+                            : distSearch
+                          }
+                          onChange={e => {
+                            setDistSearch(e.target.value);
+                            if (createData.distributorId) setCreateData({...createData, distributorId: ''});
+                          }}
+                          onFocus={() => { if (createData.distributorId) setDistSearch(''); }}
+                        />
+                        {(createData.distributorId || distSearch) && (
+                          <button
+                            type="button"
+                            onClick={() => { setCreateData({...createData, distributorId: ''}); setDistSearch(''); }}
+                            className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-700"
+                          >
+                            <X size={13} />
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Dropdown */}
+                      {!createData.distributorId && distSearch.trim() && (() => {
+                        const filtered = distributors.filter(d =>
+                          d.active &&
+                          !forceScheduleBlockedIds.has(d.id) &&
+                          (!createAseId || (d.aseIds && d.aseIds.includes(createAseId))) &&
+                          (`${d.name} ${d.code} ${d.city || ''}`.toLowerCase().includes(distSearch.toLowerCase()))
+                        );
+                        return filtered.length > 0 ? (
+                          <div className="absolute z-50 w-full mt-1 bg-white border border-zinc-200 rounded-xl shadow-lg max-h-52 overflow-y-auto">
+                            {filtered.map(d => (
+                              <button
+                                key={d.id}
+                                type="button"
+                                onClick={() => { setCreateData({...createData, distributorId: d.id}); setDistSearch(''); }}
+                                className="w-full text-left px-4 py-2.5 text-sm hover:bg-zinc-50 flex items-center justify-between gap-2 border-b border-zinc-50 last:border-0"
+                              >
+                                <div className="min-w-0">
+                                  <p className="font-bold text-zinc-900 truncate">{d.name}</p>
+                                  <p className="text-[10px] text-zinc-400">{d.code}{d.city ? ` · ${d.city}` : ''}</p>
+                                </div>
+                                {d.city && <span className="text-[10px] text-zinc-400 bg-zinc-100 px-2 py-0.5 rounded-full shrink-0">{d.city}</span>}
+                              </button>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="absolute z-50 w-full mt-1 bg-white border border-zinc-200 rounded-xl shadow-lg px-4 py-3 text-sm text-zinc-400">
+                            No distributor found matching "{distSearch}"
+                          </div>
+                        );
+                      })()}
+
+                      {/* Selected badge */}
+                      {createData.distributorId && (
+                        <p className="text-[10px] text-emerald-600 font-bold mt-1.5 flex items-center gap-1">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block" />
+                          {distributors.find(d => d.id === createData.distributorId)?.city || 'Selected'}
+                        </p>
+                      )}
+
+                      {/* Hidden required input to enforce selection */}
+                      <input
+                        type="text"
+                        required
+                        value={createData.distributorId}
+                        onChange={() => {}}
+                        className="sr-only"
+                        tabIndex={-1}
+                      />
+                    </div>
                   </div>
                   
                   <div>

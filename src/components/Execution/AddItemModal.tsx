@@ -40,6 +40,7 @@ export function AddItemModal({ isOpen, onClose, activeTicket, distributor, avail
   const [expDate, setExpDate] = useState('');
   const [productLife, setProductLife] = useState('-');
   const [remarks, setRemarks] = useState('');
+  const [manualRate, setManualRate] = useState<number | ''>('');
 
   // --- MANUAL MODE: item master state ---
   const [masterSearch, setMasterSearch] = useState('');
@@ -79,7 +80,7 @@ export function AddItemModal({ isOpen, onClose, activeTicket, distributor, avail
     setTimeout(() => {
       setSearchQuery(''); setVisibleCount(50); setSelectedDumpItem(null); setIsManualMode(false);
       setQtyNonSaleable(''); setQtyBBD(''); setQtyDamaged('');
-      setMfgDate(''); setExpDate(''); setProductLife('-'); setRemarks('');
+      setMfgDate(''); setExpDate(''); setProductLife('-'); setRemarks(''); setManualRate('');
       setMasterSearch(''); setMasterList([]); setSelectedMasterItem(null);
     }, 200);
   };
@@ -144,7 +145,7 @@ export function AddItemModal({ isOpen, onClose, activeTicket, distributor, avail
     saveItemToDatabase(
       selectedMasterItem.itemCode,
       selectedMasterItem.itemName,
-      0, // rate is 0 since not in sales dump
+      Number(manualRate) || 0,
       Number(qtyNonSaleable)||0,
       Number(qtyBBD)||0,
       Number(qtyDamaged)||0,
@@ -406,7 +407,7 @@ export function AddItemModal({ isOpen, onClose, activeTicket, distributor, avail
               <form onSubmit={handleManualItemSubmit} className="p-6 space-y-5 overflow-y-auto bg-white custom-scrollbar flex-1">
                 <div className="flex justify-between items-center mb-2">
                   <h4 className="font-bold text-zinc-900">Enter Physical Count</h4>
-                  <button type="button" onClick={() => setSelectedMasterItem(null)} className="text-xs font-bold text-blue-600 hover:underline">Change Item</button>
+                  <button type="button" onClick={() => { setSelectedMasterItem(null); setManualRate(''); }} className="text-xs font-bold text-blue-600 hover:underline">Change Item</button>
                 </div>
 
                 {/* Selected master item card */}
@@ -415,8 +416,38 @@ export function AddItemModal({ isOpen, onClose, activeTicket, distributor, avail
                   <p className="text-sm text-zinc-700 mb-3 leading-snug">{selectedMasterItem.itemName}</p>
                   <div className="flex flex-wrap gap-3 text-xs font-bold text-zinc-500 uppercase tracking-wider">
                     {selectedMasterItem.category && <span className="bg-zinc-100 px-2 py-0.5 rounded">{selectedMasterItem.category}</span>}
-                    <span className="text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">Rate: ₹0 (not in dump)</span>
+                    <span className="text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">Not in sales dump</span>
                   </div>
+                </div>
+
+                {/* Rate field — required for master items since no rate in sales dump */}
+                <div>
+                  <label className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">
+                    Rate per Unit (₹) <span className="text-red-500">*</span>
+                  </label>
+                  <div className="relative mt-1">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm font-bold text-zinc-400">₹</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      required
+                      placeholder="0.00"
+                      className={cn(
+                        "w-full pl-7 pr-3 py-2 text-sm font-bold bg-white border text-zinc-900 rounded-xl focus:ring-2 focus:ring-black outline-none transition-all",
+                        !manualRate ? "border-amber-300 bg-amber-50/30" : "border-zinc-200"
+                      )}
+                      value={manualRate}
+                      onChange={e => setManualRate(e.target.value === '' ? '' : parseFloat(e.target.value))}
+                    />
+                  </div>
+                  {manualRate ? (
+                    <p className="text-[10px] text-emerald-600 font-bold mt-1">
+                      Total value = ₹{((Number(manualRate)||0) * ((Number(qtyDamaged)||0)+(Number(qtyNonSaleable)||0)+(Number(qtyBBD)||0))).toLocaleString('en-IN', {minimumFractionDigits: 2})}
+                    </p>
+                  ) : (
+                    <p className="text-[10px] text-amber-600 font-bold mt-1">Enter the rate per unit to calculate audited value</p>
+                  )}
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">

@@ -21,6 +21,8 @@
     "exceljs": "^4.4.0",
     "express": "^4.21.2",
     "firebase": "^12.11.0",
+    "jspdf": "^4.2.1",
+    "jspdf-autotable": "^5.0.8",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
     "papaparse": "^5.5.3",

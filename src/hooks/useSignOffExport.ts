@@ -921,5 +921,131 @@ export function useSignOffExport(params: {
     }
   };
 
-  return { exportSignOff, isExporting };
+  // ── Claim Letter PDF export ─────────────────────────────────────────────
+  const [isExportingPDF, setIsExportingPDF] = useState(false);
+
+  const exportClaimPDF = async () => {
+    if (!params.distributor) return;
+    setIsExportingPDF(true);
+    try {
+      // Fetch fresh distributor (same as exportSignOff)
+      const sb = supabase;
+      let freshDist: SignOffDistributor = params.distributor;
+      if (params.distributor.code) {
+        const { data: dbDist } = await sb
+          .from('distributors')
+          .select('id,code,name,anchorName,address,city,state,region')
+          .eq('code', params.distributor.code)
+          .single();
+        if (dbDist) {
+          freshDist = {
+            ...params.distributor,
+            name:       dbDist.name       || params.distributor.name       || '',
+            anchorName: dbDist.anchorName || params.distributor.anchorName || '',
+            address:    dbDist.address    || '',
+            city:       dbDist.city       || '',
+            state:      dbDist.state      || '',
+            region:     dbDist.region     || '',
+          };
+        }
+      }
+
+      const totalQty   = params.items.reduce((s, i) => s + (i.quantity || (i.qtyDamaged||0) + (i.qtyNonSaleable||0) + (i.qtyBBD||0) || 0), 0);
+      const totalValue = params.items.reduce((s, i) => s + (i.totalValue || (i.quantity||0) * (i.unitValue||0) || 0), 0);
+      const auditDate  = params.audit.scheduledDate || '';
+      const serialNo   = params.audit.serialNo || '';
+      const anchorName = freshDist.anchorName || freshDist.name || '';
+      const anchorCode = freshDist.code || '';
+      const distCity   = freshDist.city || '';
+      const distNameCity = distCity ? `${freshDist.name}, ${distCity}` : freshDist.name;
+      const fmtValue = (v: number) =>
+        '₹' + v.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+      const tableHTML = `
+        <table>
+          <thead><tr>
+            <th>Distributor Name &amp; City</th>
+            <th>Qty Verified (In Pcs)</th>
+            <th>Total Audited Value (Including GST)</th>
+          </tr></thead>
+          <tbody><tr>
+            <td><b>${distNameCity}</b></td>
+            <td><b>${totalQty.toLocaleString('en-IN')}</b></td>
+            <td><b>${fmtValue(totalValue)}</b></td>
+          </tr></tbody>
+        </table>`;
+
+      const sig = `<div class="sig">
+        <p>For ______________</p>
+        <p>Authorized Signatory</p>
+        <p>Name with Seal &amp; sign</p>
+        <p>__________________</p>
+      </div>`;
+
+      const mkLetter = (letterhead: string, bodyHTML: string) => `
+        <div class="letter">
+          <p class="hl"><b>${letterhead}</b></p>
+          <p class="hl"><b>Audit Serial No. - ${serialNo}</b></p>
+          <p><b>Audit Date: -</b> ${auditDate}</p>
+          <br>
+          <p>To,</p>
+          <p>Reliance Consumer Product Limited,</p>
+          <p>Branch Commercial Manager.</p>
+          <br>
+          <p>Subject: - <u>Regarding raising of credit note Expiry Audit</u></p>
+          <br>
+          <p>Dear Sir,</p>
+          <br>
+          ${bodyHTML}
+          <p><b>Anchor code and Name -</b> ${anchorName} - ${anchorCode}</p>
+          <br>
+          ${tableHTML}
+          ${sig}
+        </div>`;
+
+      const body1 = `
+        <p>We, hereby confirm that leakage &amp; breakage audit has been completed at our premises by Auditors.</p><br>
+        <p>Request you to please raise credit note in our Anchor’s account as per below details: -</p><br>`;
+
+      const body2 = `
+        <p>We, hereby confirm that leakage &amp; breakage audit has been completed at our distributor as per below details. Request you to please raise credit note to our account accordingly.</p><br>
+        <p>Request you to please raise credit note in our Anchor’s account as per below details: -</p><br>`;
+
+      const extra2 = `<br><p>We hereby confirm that credit note amount shall be reimbursed to abovementioned Distributor.</p>`;
+
+      const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+<title>Claim Letter - ${serialNo}</title>
+<style>
+  @page { size: A4; margin: 20mm; }
+  * { font-family: Arial, sans-serif; font-size: 11pt; margin: 0; padding: 0; box-sizing: border-box; }
+  p { margin-bottom: 5pt; text-align: justify; }
+  .hl { background: yellow; display: block; padding: 2px 0; }
+  .letter { page-break-after: always; }
+  .letter:last-child { page-break-after: avoid; }
+  table { width: 100%; border-collapse: collapse; margin: 10pt 0; }
+  th, td { border: 1px solid #888; padding: 6pt; text-align: center; }
+  th { background: #c6e0b4; font-weight: bold; }
+  .sig { margin-top: 24pt; line-height: 2; }
+  br { display: block; margin: 5pt 0; content: ''; }
+</style></head><body>
+  ${mkLetter('On the Letter Head of the Distributor', body1)}
+  ${mkLetter('On the Letter Head of the Anchor', body2 + extra2)}
+</body></html>`;
+
+      const win = window.open('', '_blank', 'width=900,height=700');
+      if (!win) { alert('Please allow popups to generate the PDF.'); return; }
+      win.document.write(html);
+      win.document.close();
+      win.focus();
+      setTimeout(() => { win.print(); }, 500);
+
+    } catch (err: any) {
+      console.error('Claim PDF error:', err);
+      alert('PDF generation failed: ' + (err.message || err));
+    } finally {
+      setIsExportingPDF(false);
+    }
+  };
+
+  return { exportSignOff, isExporting, exportClaimPDF, isExportingPDF };
 }
