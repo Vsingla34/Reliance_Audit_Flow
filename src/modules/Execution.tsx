@@ -1730,7 +1730,7 @@ export function ExecutionModule() {
                                 <div className="flex items-center justify-end gap-0.5">
                                   <span className="text-[10px] text-slate-400">₹</span>
                                   <input
-                                    type="number" min="0" step="0.01"
+                                    type="number" min="0" step="0.0000000001"
                                     value={item.unitValue || ''}
                                     onChange={e => handleInlineChange(item.id, 'unitValue', e.target.value, e)}
                                     onBlur={() => saveInlineEdit(item.id)}
@@ -1739,7 +1739,7 @@ export function ExecutionModule() {
                                   />
                                 </div>
                               ) : (
-                                <span>₹{item.unitValue.toFixed(2)}</span>
+                                <span>₹{parseFloat(item.unitValue.toFixed(10))}</span>
                               )}
                             </td>
                             <td className="px-4 py-3 sm:py-4 text-right font-black text-slate-900">₹{item.totalValue.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</td>
