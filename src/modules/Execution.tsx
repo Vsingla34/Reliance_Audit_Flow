@@ -898,13 +898,6 @@ export function ExecutionModule() {
           }
         }
 
-        // Rule 3: Total qty cannot exceed system qty
-        const sysQty = dumpItem?.expectedQty || 0;
-        if (sysQty > 0 && total > sysQty) {
-          errors.push(`${articleCode} (row ${rowNum}): qty ${total} exceeds system qty ${sysQty}`);
-          skipped++; return;
-        }
-
         // Rule 4: Exp date after audit date only allowed for pure primary damage
         const auditDateStr = activeTicket.scheduledDate?.split('T')[0] || '';
         if (auditDateStr && expDate && expDate > auditDateStr) {

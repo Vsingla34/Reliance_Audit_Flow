@@ -92,11 +92,6 @@ export function AddItemModal({ isOpen, onClose, activeTicket, distributor, avail
     const finalQty = qNonSaleable + qBBD + qDamaged;
     if (finalQty === 0) return alert("Total quantity cannot be zero.");
 
-    // Rule 3: Total qty cannot exceed system qty (0 means no system qty — skip check)
-    if (systemQty > 0 && finalQty > systemQty) {
-      return alert(`Total quantity (${finalQty}) cannot exceed system quantity (${systemQty}) for ${description}.`);
-    }
-
     // Rule 1: Exp date cannot be before Mfg date
     if (mfgDate && expDate && expDate < mfgDate) {
       return alert(`Expiry date (${expDate}) cannot be before Manufacturing date (${mfgDate}) for ${description}.`);
@@ -540,26 +535,13 @@ export function AddItemModal({ isOpen, onClose, activeTicket, distributor, avail
                 </div>
 
                 {/* System qty warning */}
-                {(() => {
-                  const sysQty = isManualMode ? 0 : (selectedDumpItem?.expectedQty || 0);
-                  const isOver = sysQty > 0 && totalQty > sysQty;
-                  return (
-                    <div className={cn("p-4 rounded-xl flex justify-between items-center border", isOver ? "bg-red-50 border-red-300" : "bg-zinc-100 border-zinc-200")}>
-                      <div>
-                        <span className={cn("text-sm font-bold uppercase tracking-wider", isOver ? "text-red-600" : "text-zinc-500")}>Total Count:</span>
-                        {sysQty > 0 && (
-                          <p className={cn("text-[10px] font-bold mt-0.5", isOver ? "text-red-500" : "text-zinc-400")}>
-                            System Qty: {sysQty.toLocaleString('en-IN')} {isOver ? "⚠ EXCEEDED" : ""}
-                          </p>
-                        )}
-                      </div>
-                      <div className="text-right">
-                        <p className={cn("text-2xl font-black leading-none", isOver ? "text-red-600" : "text-black")}>{totalQty}</p>
-                        <p className="text-[10px] font-bold text-zinc-400 mt-1 uppercase">Life: {productLife}</p>
-                      </div>
-                    </div>
-                  );
-                })()}
+                <div className="bg-zinc-100 p-4 rounded-xl flex justify-between items-center border border-zinc-200">
+                  <span className="text-sm font-bold text-zinc-500 uppercase tracking-wider">Total Count:</span>
+                  <div className="text-right">
+                    <p className="text-2xl font-black text-black leading-none">{totalQty}</p>
+                    <p className="text-[10px] font-bold text-zinc-400 mt-1 uppercase">Life: {productLife}</p>
+                  </div>
+                </div>
 
                 <div className="space-y-1.5">
                   <label className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">Remarks (Optional)</label>
