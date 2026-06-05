@@ -53,6 +53,7 @@ export function ExecutionModule() {
   const [tickets, setTickets] = useState<AuditTicket[]>([]);
   const [distributors, setDistributors] = useState<any[]>([]); 
   const [activeTicket, setActiveTicket] = useState<AuditTicket | null>(null);
+  const [ticketUsers, setTicketUsers] = useState<{ id: string; name: string; role: string; phone?: string }[]>([]);
   
   const [items, setItems] = useState<AuditLineItem[]>([]);
   const itemsRef = useRef<AuditLineItem[]>([]);
@@ -328,6 +329,20 @@ export function ExecutionModule() {
       if (activeDistCode) loadDumpData(activeDistCode);
       setItemSearchQuery('');
 
+      // Fetch ASE + auditor details for this ticket
+      const dist = distMap[activeTicket.distributorId];
+      const aseIds: string[]     = dist?.aseIds     || [];
+      const auditorIds: string[] = (activeTicket as any).auditorIds || [];
+      const allIds = [...new Set([...aseIds, ...auditorIds])].filter(Boolean);
+      if (allIds.length > 0) {
+        supabase.from('users').select('uid,name,role,phone').in('uid', allIds)
+          .then(({ data }) => {
+            if (data) setTicketUsers(data.map((u: any) => ({ id: u.uid, name: u.name, role: u.role, phone: u.phone })));
+          });
+      } else {
+        setTicketUsers([]);
+      }
+
       const channel = supabase
         .channel(`items-${activeTicket.id}`)
         .on(
@@ -572,7 +587,7 @@ export function ExecutionModule() {
     }
   };
 
-  const handleInlineChange = (id: string, field: 'qtyNonSaleable' | 'qtyBBD' | 'qtyDamaged' | 'mfgDate' | 'expDate', value: any, e?: React.ChangeEvent<HTMLInputElement>) => {
+  const handleInlineChange = (id: string, field: 'qtyNonSaleable' | 'qtyBBD' | 'qtyDamaged' | 'mfgDate' | 'expDate' | 'unitValue', value: any, e?: React.ChangeEvent<HTMLInputElement>) => {
     const oldItem = itemsRef.current.find(i => i.id === id);
     if (!oldItem) return;
 
@@ -604,6 +619,17 @@ export function ExecutionModule() {
             if (e && e.target) e.target.value = oldItem[field] || ''; 
             return;
         }
+    }
+    // Rule 1: exp cannot be before mfg
+    if (field === 'expDate' && value && updatedItem.mfgDate && value < updatedItem.mfgDate) {
+        alert(`Expiry date (${value}) cannot be before Manufacturing date (${updatedItem.mfgDate}).`);
+        if (e && e.target) e.target.value = oldItem.expDate || '';
+        return;
+    }
+    if (field === 'mfgDate' && value && updatedItem.expDate && updatedItem.expDate < value) {
+        alert(`Manufacturing date (${value}) cannot be after Expiry date (${updatedItem.expDate}).`);
+        if (e && e.target) e.target.value = oldItem.mfgDate || '';
+        return;
     }
 
     const currentExp = field === 'expDate' ? value : updatedItem.expDate;
@@ -664,6 +690,7 @@ export function ExecutionModule() {
         qtyBBD:            itemToSave.qtyBBD,
         qtyDamaged:        itemToSave.qtyDamaged,
         totalValue:        itemToSave.totalValue,
+        unitValue:         itemToSave.unitValue,
         mfgDate:           itemToSave.mfgDate,
         expDate:           itemToSave.expDate,
         productLife:       itemToSave.productLife,
@@ -839,29 +866,62 @@ export function ExecutionModule() {
 
         if (total === 0) { skipped++; return; } // nothing to insert
 
-        // Rate — from salesDump map first, then Excel column, then 0
+        // ── Lookup dump item FIRST (needed for sysQty validation) ────────────
         const dumpItem = dumpItemMap[articleCode];
-        const unitValue = dumpItem?.rate || Math.max(0, Number(getCellVal(rateCol)) || 0);
-        const totalValue = total * unitValue;
 
-        // Description — from dump map first, then Excel column
-        const description = dumpItem?.itemName
-          || String(getCellVal(descCol) || articleCode);
-
-        // Dates
+        // ── Parse dates FIRST (needed for all validations below) ──────────────
         const rawMfg = getCellVal(mfgCol);
         const rawExp = getCellVal(expCol);
         const parseDateVal = (v: any): string => {
           if (!v) return '';
           if (v instanceof Date) return v.toISOString().split('T')[0];
           const s = String(v).trim();
-          // Try common formats
           if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
           const d = new Date(s);
           return isNaN(d.getTime()) ? '' : d.toISOString().split('T')[0];
         };
         const mfgDate = parseDateVal(rawMfg);
         const expDate = parseDateVal(rawExp);
+
+        // Rule 1: Exp date cannot be before Mfg date
+        if (mfgDate && expDate && expDate < mfgDate) {
+          errors.push(`${articleCode} (row ${rowNum}): Exp date (${expDate}) before Mfg date (${mfgDate})`);
+          skipped++; return;
+        }
+
+        // Rule 2: Gap between Mfg and Exp must be more than 3 months (90 days)
+        if (mfgDate && expDate) {
+          const gapDays = Math.ceil((new Date(expDate).getTime() - new Date(mfgDate).getTime()) / 86400000);
+          if (gapDays <= 90) {
+            errors.push(`${articleCode} (row ${rowNum}): Gap between Mfg (${mfgDate}) and Exp (${expDate}) is only ${gapDays} days — must be more than 3 months`);
+            skipped++; return;
+          }
+        }
+
+        // Rule 3: Total qty cannot exceed system qty
+        const sysQty = dumpItem?.expectedQty || 0;
+        if (sysQty > 0 && total > sysQty) {
+          errors.push(`${articleCode} (row ${rowNum}): qty ${total} exceeds system qty ${sysQty}`);
+          skipped++; return;
+        }
+
+        // Rule 4: Exp date after audit date only allowed for pure primary damage
+        const auditDateStr = activeTicket.scheduledDate?.split('T')[0] || '';
+        if (auditDateStr && expDate && expDate > auditDateStr) {
+          const isPureDamage = qDmg > 0 && effectiveNs === 0 && qBbd === 0;
+          if (!isPureDamage) {
+            errors.push(`${articleCode} (row ${rowNum}): Exp (${expDate}) after audit date (${auditDateStr}) — only Primary Damage rows allowed`);
+            skipped++; return;
+          }
+        }
+
+        // Rate — from salesDump map first, then Excel column, then 0
+        const unitValue = dumpItem?.rate || Math.max(0, Number(getCellVal(rateCol)) || 0);
+        const totalValue = total * unitValue;
+
+        // Description — from dump map first, then Excel column
+        const description = dumpItem?.itemName
+          || String(getCellVal(descCol) || articleCode);
 
         // Product life
         let productLife = '';
@@ -1011,7 +1071,7 @@ export function ExecutionModule() {
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement('a');
     a.href     = url;
-    a.download = `AuditUpload_${distCode}_${activeTicket?.scheduledDate || 'draft'}.xlsx`;
+    a.download = `AuditUpload_${dist?.name || distCode}_${activeTicket?.scheduledDate || 'draft'}.xlsx`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -1373,6 +1433,33 @@ export function ExecutionModule() {
                 <div className="flex items-center gap-2 mt-1 text-xs sm:text-sm text-slate-500 flex-wrap"><span className="font-mono bg-slate-100 px-2 py-0.5 rounded-md text-slate-700">{dist?.code}</span><MapPin size={14} /> {dist?.city || 'No city'}, {dist?.state}</div>
               </div>
             </div>
+
+            {/* ASE + Auditor info panel */}
+            {ticketUsers.length > 0 && (
+              <div className="flex flex-col gap-2 bg-slate-50 border border-slate-200 rounded-2xl px-4 py-3 min-w-[180px] max-w-[260px]">
+                {(() => {
+                  const ases     = ticketUsers.filter(u => u.role === 'ase');
+                  const auditors = ticketUsers.filter(u => u.role === 'auditor');
+                  const renderUser = (u: typeof ticketUsers[0], label: string, color: string) => (
+                    <div key={u.id} className="flex flex-col">
+                      <span className={`text-[9px] font-black uppercase tracking-wider ${color} mb-0.5`}>{label}</span>
+                      <span className="text-sm font-bold text-slate-900 leading-tight">{u.name}</span>
+                      {u.phone
+                        ? <a href={`tel:${u.phone}`} className="text-[11px] font-bold text-blue-600 hover:underline mt-0.5">{u.phone}</a>
+                        : <span className="text-[10px] text-slate-400 mt-0.5">No phone</span>
+                      }
+                    </div>
+                  );
+                  return (
+                    <>
+                      {ases.map(u => renderUser(u, 'ASE', 'text-violet-500'))}
+                      {ases.length > 0 && auditors.length > 0 && <div className="border-t border-slate-200 my-0.5" />}
+                      {auditors.map(u => renderUser(u, 'Auditor', 'text-emerald-600'))}
+                    </>
+                  );
+                })()}
+              </div>
+            )}
             
             <div className="flex flex-col items-start md:items-end gap-2 w-full md:w-auto bg-slate-50 md:bg-transparent p-4 md:p-0 rounded-2xl md:rounded-none border md:border-none border-slate-100">
               <div className="text-left md:text-right w-full">
@@ -1645,7 +1732,23 @@ export function ExecutionModule() {
                               )}
                             </td>
 
-                            <td className="px-4 py-3 sm:py-4 text-right text-slate-500 text-[10px] sm:text-xs font-medium">₹{item.unitValue.toFixed(2)}</td>
+                            <td className="px-4 py-3 sm:py-4 text-right text-slate-500 text-[10px] sm:text-xs font-medium">
+                              {isAdminOrSuperadmin ? (
+                                <div className="flex items-center justify-end gap-0.5">
+                                  <span className="text-[10px] text-slate-400">₹</span>
+                                  <input
+                                    type="number" min="0" step="0.01"
+                                    value={item.unitValue || ''}
+                                    onChange={e => handleInlineChange(item.id, 'unitValue', e.target.value, e)}
+                                    onBlur={() => saveInlineEdit(item.id)}
+                                    className="w-16 text-center bg-white border border-slate-200 text-xs font-bold rounded-lg px-1 py-1.5 focus:ring-2 focus:ring-emerald-500 outline-none text-emerald-700 shadow-sm"
+                                    placeholder="0.00"
+                                  />
+                                </div>
+                              ) : (
+                                <span>₹{item.unitValue.toFixed(2)}</span>
+                              )}
+                            </td>
                             <td className="px-4 py-3 sm:py-4 text-right font-black text-slate-900">₹{item.totalValue.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</td>
 
                             {/* Remarks — editable for auditor and superadmin only */}

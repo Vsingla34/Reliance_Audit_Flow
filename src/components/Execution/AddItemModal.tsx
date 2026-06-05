@@ -88,9 +88,36 @@ export function AddItemModal({ isOpen, onClose, activeTicket, distributor, avail
   const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => { setSearchQuery(e.target.value); setVisibleCount(50); };
 
   // Core save logic
-  const saveItemToDatabase = async (articleNumber: string, description: string, unitValue: number, qNonSaleable: number, qBBD: number, qDamaged: number, reason: string, category: string) => {
+  const saveItemToDatabase = async (articleNumber: string, description: string, unitValue: number, qNonSaleable: number, qBBD: number, qDamaged: number, reason: string, category: string, systemQty = 0) => {
     const finalQty = qNonSaleable + qBBD + qDamaged;
     if (finalQty === 0) return alert("Total quantity cannot be zero.");
+
+    // Rule 3: Total qty cannot exceed system qty (0 means no system qty — skip check)
+    if (systemQty > 0 && finalQty > systemQty) {
+      return alert(`Total quantity (${finalQty}) cannot exceed system quantity (${systemQty}) for ${description}.`);
+    }
+
+    // Rule 1: Exp date cannot be before Mfg date
+    if (mfgDate && expDate && expDate < mfgDate) {
+      return alert(`Expiry date (${expDate}) cannot be before Manufacturing date (${mfgDate}) for ${description}.`);
+    }
+
+    // Rule: Gap between Mfg and Exp must be more than 3 months (90 days)
+    if (mfgDate && expDate) {
+      const gapDays = Math.ceil((new Date(expDate).getTime() - new Date(mfgDate).getTime()) / 86400000);
+      if (gapDays <= 90) {
+        return alert(`Gap between Mfg date and Exp date is only ${gapDays} days. It must be more than 3 months (90 days).`);
+      }
+    }
+
+    // Rule 4: Exp date cannot be after audit date EXCEPT for Primary Damage only items
+    const auditDate = activeTicket.scheduledDate?.split('T')[0] || '';
+    if (auditDate && expDate && expDate > auditDate) {
+      // Exception: primary damage items CAN have exp date after audit date
+      if (qBBD > 0 || qNonSaleable > 0) {
+        return alert(`Expiry date (${expDate}) is after the audit date (${auditDate}) for ${description}. Only Primary Damage items can have expiry beyond the audit date.`);
+      }
+    }
 
     const totalValue = finalQty * unitValue;
     const newVerifiedTotal = (activeTicket.verifiedTotal || 0) + totalValue;
@@ -135,7 +162,12 @@ export function AddItemModal({ isOpen, onClose, activeTicket, distributor, avail
 
   const handleDumpItemSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (selectedDumpItem) saveItemToDatabase(selectedDumpItem.itemCode, selectedDumpItem.itemName, selectedDumpItem.rate, Number(qtyNonSaleable)||0, Number(qtyBBD)||0, Number(qtyDamaged)||0, 'Verified / OK', selectedDumpItem.category);
+    if (selectedDumpItem) saveItemToDatabase(
+      selectedDumpItem.itemCode, selectedDumpItem.itemName, selectedDumpItem.rate,
+      Number(qtyNonSaleable)||0, Number(qtyBBD)||0, Number(qtyDamaged)||0,
+      'Verified / OK', selectedDumpItem.category,
+      selectedDumpItem.expectedQty || 0   // system qty cap
+    );
   };
 
   // Manual mode submit — now uses selected item master item
@@ -465,11 +497,30 @@ export function AddItemModal({ isOpen, onClose, activeTicket, distributor, avail
                     <label className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">
                       Exp Date <span className="text-red-500">*</span>
                     </label>
-                    <input
-                      type="date" required
-                      className={cn("w-full mt-1 px-3 py-2 text-sm font-bold bg-white border text-zinc-900 rounded-xl focus:ring-2 focus:ring-black outline-none transition-all", !expDate ? "border-red-300 bg-red-50/30" : "border-zinc-200")}
-                      value={expDate} onChange={e => setExpDate(e.target.value)}
-                    />
+                    {(() => {
+                      const auditDate = activeTicket.scheduledDate?.split('T')[0] || '';
+                      const isAfterAudit = auditDate && expDate && expDate > auditDate;
+                      const isBeforeMfg  = mfgDate && expDate && expDate < mfgDate;
+                      const gapDays = mfgDate && expDate ? Math.ceil((new Date(expDate).getTime() - new Date(mfgDate).getTime()) / 86400000) : null;
+                      const isTooClose   = gapDays !== null && gapDays <= 90;
+                      const onlyDamaged  = (Number(qtyDamaged)||0) > 0 && (Number(qtyBBD)||0) === 0 && (Number(qtyNonSaleable)||0) === 0;
+                      const hasError = isBeforeMfg || isTooClose || (isAfterAudit && !onlyDamaged);
+                      return (
+                        <>
+                          <input
+                            type="date" required
+                            min={mfgDate || undefined}
+                            className={cn("w-full mt-1 px-3 py-2 text-sm font-bold bg-white border text-zinc-900 rounded-xl focus:ring-2 focus:ring-black outline-none transition-all",
+                              !expDate ? "border-red-300 bg-red-50/30" : hasError ? "border-red-400 bg-red-50" : "border-zinc-200")}
+                            value={expDate} onChange={e => setExpDate(e.target.value)}
+                          />
+                          {isBeforeMfg && <p className="text-[10px] text-red-600 font-bold mt-1">⚠ Exp date cannot be before Mfg date</p>}
+                          {!isBeforeMfg && isTooClose && <p className="text-[10px] text-red-600 font-bold mt-1">⚠ Gap is only {gapDays} days — must be more than 3 months (90 days)</p>}
+                          {isAfterAudit && !isBeforeMfg && !isTooClose && !onlyDamaged && <p className="text-[10px] text-red-600 font-bold mt-1">⚠ Exp date after audit date ({auditDate}). Only Primary Damage items are allowed.</p>}
+                          {isAfterAudit && !isBeforeMfg && !isTooClose && onlyDamaged && <p className="text-[10px] text-amber-600 font-bold mt-1">⚠ Exp after audit date — allowed only because this is Primary Damage only.</p>}
+                        </>
+                      );
+                    })()}
                   </div>
                 </div>
                 
@@ -488,13 +539,27 @@ export function AddItemModal({ isOpen, onClose, activeTicket, distributor, avail
                   </div>
                 </div>
 
-                <div className="bg-zinc-100 p-4 rounded-xl flex justify-between items-center border border-zinc-200">
-                  <span className="text-sm font-bold text-zinc-500 uppercase tracking-wider">Total Count:</span>
-                  <div className="text-right">
-                    <p className="text-2xl font-black text-black leading-none">{totalQty}</p>
-                    <p className="text-[10px] font-bold text-zinc-400 mt-1 uppercase">Life: {productLife}</p>
-                  </div>
-                </div>
+                {/* System qty warning */}
+                {(() => {
+                  const sysQty = isManualMode ? 0 : (selectedDumpItem?.expectedQty || 0);
+                  const isOver = sysQty > 0 && totalQty > sysQty;
+                  return (
+                    <div className={cn("p-4 rounded-xl flex justify-between items-center border", isOver ? "bg-red-50 border-red-300" : "bg-zinc-100 border-zinc-200")}>
+                      <div>
+                        <span className={cn("text-sm font-bold uppercase tracking-wider", isOver ? "text-red-600" : "text-zinc-500")}>Total Count:</span>
+                        {sysQty > 0 && (
+                          <p className={cn("text-[10px] font-bold mt-0.5", isOver ? "text-red-500" : "text-zinc-400")}>
+                            System Qty: {sysQty.toLocaleString('en-IN')} {isOver ? "⚠ EXCEEDED" : ""}
+                          </p>
+                        )}
+                      </div>
+                      <div className="text-right">
+                        <p className={cn("text-2xl font-black leading-none", isOver ? "text-red-600" : "text-black")}>{totalQty}</p>
+                        <p className="text-[10px] font-bold text-zinc-400 mt-1 uppercase">Life: {productLife}</p>
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 <div className="space-y-1.5">
                   <label className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">Remarks (Optional)</label>
