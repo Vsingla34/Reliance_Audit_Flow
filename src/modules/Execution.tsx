@@ -290,7 +290,43 @@ export function ExecutionModule() {
 
   const fetchItems = async (ticketId: string) => {
     const { data } = await supabase.from('auditLineItems').select('*').eq('ticketId', ticketId).order('articleNumber', { ascending: true });
-    if (data) setItems(data as AuditLineItem[]);
+    if (!data) return;
+
+    // Auto-fix rows where totalValue=0 but qty>0 and unitValue>0 (stale data from old uploads)
+    const needsFix = (data as AuditLineItem[]).filter(
+      i => (i.totalValue === 0 || !i.totalValue) && (i.quantity > 0 || (i.qtyDamaged||0) + (i.qtyNonSaleable||0) + (i.qtyBBD||0) > 0) && (i.unitValue > 0)
+    );
+
+    if (needsFix.length > 0) {
+      const fixed = (data as AuditLineItem[]).map(i => {
+        const qty = i.quantity || (i.qtyDamaged||0) + (i.qtyNonSaleable||0) + (i.qtyBBD||0);
+        const tv  = qty * (i.unitValue || 0);
+        if ((i.totalValue === 0 || !i.totalValue) && qty > 0 && i.unitValue > 0) {
+          return { ...i, quantity: qty, totalValue: tv };
+        }
+        return i;
+      });
+      setItems(fixed);
+
+      // Persist fixes to DB in parallel
+      await Promise.all(
+        needsFix.map(i => {
+          const qty = i.quantity || (i.qtyDamaged||0) + (i.qtyNonSaleable||0) + (i.qtyBBD||0);
+          const tv  = qty * (i.unitValue || 0);
+          return supabase.from('auditLineItems')
+            .update({ quantity: qty, totalValue: tv, updatedAt: new Date().toISOString() })
+            .eq('id', i.id);
+        })
+      );
+
+      // Also fix verifiedTotal on ticket
+      const trueTotal = fixed.reduce((s, i) => s + (i.totalValue || 0), 0);
+      await supabase.from('auditTickets')
+        .update({ verifiedTotal: trueTotal, updatedAt: new Date().toISOString() })
+        .eq('id', ticketId);
+    } else {
+      setItems(data as AuditLineItem[]);
+    }
   };
 
   const loadDumpData = async (distCode: string) => {
@@ -566,19 +602,32 @@ export function ExecutionModule() {
 
   const deleteItem = async (item: AuditLineItem) => {
     if (!activeTicket) return;
-    // Optimistic update — remove from UI immediately
+    // Optimistic UI — remove instantly
     const updatedItems = items.filter(i => i.id !== item.id);
     setItems(updatedItems);
 
-    // Update verifiedTotal on the ticket
-    const newVerifiedTotal = updatedItems.reduce((s, i) => s + (i.totalValue || 0), 0);
-    setActiveTicket({ ...activeTicket, verifiedTotal: newVerifiedTotal });
+    // Optimistic total from local state
+    const optimisticTotal = updatedItems.reduce((s, i) => s + (i.totalValue || 0), 0);
+    setActiveTicket({ ...activeTicket, verifiedTotal: optimisticTotal });
 
     try {
       await supabase.from('auditLineItems').delete().eq('id', item.id);
+
+      // Re-fetch true sum from DB to ensure no stale value remains
+      const { data: remaining } = await supabase
+        .from('auditLineItems')
+        .select('totalValue')
+        .eq('ticketId', activeTicket.id);
+
+      const trueTotal = (remaining || []).reduce((s: number, r: any) => s + (r.totalValue || 0), 0);
+
       await supabase.from('auditTickets')
-        .update({ verifiedTotal: newVerifiedTotal, updatedAt: new Date().toISOString() })
+        .update({ verifiedTotal: trueTotal, updatedAt: new Date().toISOString() })
         .eq('id', activeTicket.id);
+
+      // Sync UI with true DB total
+      setActiveTicket(prev => prev ? { ...prev, verifiedTotal: trueTotal } : prev);
+
     } catch (error) {
       console.error(error);
       // Rollback on failure
@@ -594,8 +643,8 @@ export function ExecutionModule() {
     const updatedItem = { ...oldItem, [field]: value };
 
     if (['qtyNonSaleable', 'qtyBBD', 'qtyDamaged'].includes(field)) {
-       updatedItem.quantity = (Number(updatedItem.qtyNonSaleable) || 0) + (Number(updatedItem.qtyBBD) || 0) + (Number(updatedItem.qtyDamaged) || 0);
-       updatedItem.totalValue = updatedItem.quantity * updatedItem.unitValue;
+       updatedItem.quantity   = (Number(updatedItem.qtyNonSaleable) || 0) + (Number(updatedItem.qtyBBD) || 0) + (Number(updatedItem.qtyDamaged) || 0);
+       updatedItem.totalValue = updatedItem.quantity * (updatedItem.unitValue || 0);
     }
 
     if (field === 'mfgDate' || field === 'expDate') {
@@ -964,11 +1013,16 @@ export function ExecutionModule() {
         if (error) throw new Error(`DB insert error: ${error.message}`);
       }
 
-      // ── Update verifiedTotal on the ticket ────────────────────────────────
-      const addedValue = inserts.reduce((s: number, r: any) => s + r.totalValue, 0);
-      const newVerifiedTotal = (activeTicket.verifiedTotal || 0) + addedValue;
+      // Re-fetch true total from DB so verifiedTotal is always accurate
+      const { data: allItems } = await supabase
+        .from('auditLineItems')
+        .select('totalValue')
+        .eq('ticketId', activeTicket.id);
+
+      const trueTotal = (allItems || []).reduce((s: number, r: any) => s + (r.totalValue || 0), 0);
+
       await supabase.from('auditTickets')
-        .update({ verifiedTotal: newVerifiedTotal, updatedAt: new Date().toISOString() })
+        .update({ verifiedTotal: trueTotal, updatedAt: new Date().toISOString() })
         .eq('id', activeTicket.id);
 
       setBulkUploadResult({ inserted, skipped, errors });
@@ -1028,7 +1082,7 @@ export function ExecutionModule() {
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet('Upload');
 
-    // Simple plain headers — row 1
+    // Column definitions
     ws.columns = [
       { header: 'SoldToParty',   key: 'SoldToParty',   width: 16 },
       { header: 'ArticleNo',     key: 'ArticleNo',      width: 18 },
@@ -1041,12 +1095,26 @@ export function ExecutionModule() {
       { header: 'ExpDate',       key: 'ExpDate',        width: 14 },
     ];
 
-    // Bold header row
-    ws.getRow(1).font = { bold: true };
+    // Cols 1-4 = locked (SoldToParty, ArticleNo, Description, SystemQty)
+    // Cols 5-9 = editable (PrimaryDamage, NonSaleable, BBD, MfgDate, ExpDate)
+    const LOCKED_COLS   = new Set([1, 2, 3, 4]);
+    const EDITABLE_COLS = new Set([5, 6, 7, 8, 9]);
 
-    // Data rows
+    // ── Header row (row 1) ─────────────────────────────────────────────────
+    ws.getRow(1).eachCell((cell, colNum) => {
+      cell.font      = { bold: true };
+      cell.protection = { locked: true };
+      // Light green tint on editable header cols so user knows what to fill
+      if (EDITABLE_COLS.has(colNum)) {
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2EFDA' } };
+      } else {
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD6DCE4' } };
+      }
+    });
+
+    // ── Data rows ───────────────────────────────────────────────────────────
     dumpRows.forEach(item => {
-      ws.addRow({
+      const row = ws.addRow({
         SoldToParty:   distCode,
         ArticleNo:     item.itemCode,
         Description:   item.itemName,
@@ -1057,6 +1125,99 @@ export function ExecutionModule() {
         MfgDate:       '',
         ExpDate:       '',
       });
+
+      const rowNum = row.number;
+      const mfgCell = `H${rowNum}`;  // MfgDate col 8
+      const expCell = `I${rowNum}`;  // ExpDate  col 9
+      const dmgCell = `E${rowNum}`;  // PrimaryDamage col 5
+      const nsCell  = `F${rowNum}`;  // NonSaleable col 6
+      const bbdCell = `G${rowNum}`;  // BBD col 7
+
+      row.eachCell({ includeEmpty: true }, (cell, colNum) => {
+        if (LOCKED_COLS.has(colNum)) {
+          cell.protection = { locked: true };
+          cell.fill       = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF2F2F2' } };
+          cell.font       = { color: { argb: 'FF555555' } };
+        } else {
+          cell.protection = { locked: false };
+          cell.fill       = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFFFF' } };
+        }
+      });
+
+      // ── Data Validation rules ─────────────────────────────────────────────
+
+      // Qty columns: must be whole numbers >= 0
+      for (const cellAddr of [dmgCell, nsCell, bbdCell]) {
+        ws.getCell(cellAddr).dataValidation = {
+          type:             'whole',
+          operator:         'greaterThanOrEqual',
+          formulae:         [0],
+          showErrorMessage: true,
+          errorStyle:       'stop',
+          errorTitle:       'Invalid Quantity',
+          error:            'Quantity must be a whole number 0 or greater.',
+          showInputMessage: true,
+          promptTitle:      cellAddr.startsWith('E') ? 'Primary Damage' : cellAddr.startsWith('F') ? 'Non-Saleable' : 'BBD / Expired',
+          prompt:           cellAddr.startsWith('G')
+            ? 'BBD qty. Exp date must be on or before audit date.'
+            : 'Enter verified quantity.',
+        };
+      }
+
+      // MfgDate: must be a valid date, must be before ExpDate
+      // Excel formula: AND(ISNUMBER(H2), H2 < I2) — enforced via custom formula
+      ws.getCell(mfgCell).dataValidation = {
+        type:             'date',
+        operator:         'lessThan',
+        formulae:         [new Date(activeTicket!.scheduledDate || new Date().toISOString())],
+        showErrorMessage: true,
+        errorStyle:       'stop',
+        errorTitle:       'Invalid Mfg Date',
+        error:            'Manufacturing date must be before the audit date.',
+        showInputMessage: true,
+        promptTitle:      'Manufacturing Date',
+        prompt:           'Enter date in DD-MM-YYYY format. e.g. 15-03-2025',
+      };
+      ws.getCell(mfgCell).numFmt = 'DD-MM-YYYY';
+
+      // ExpDate for BBD: must be <= audit date
+      // ExpDate for Primary Damage / Non-Saleable: no upper limit, but must be > MfgDate + 60 days
+      // We apply the strictest shared rule via formula validation:
+      // =AND(I2>H2+60, IF(G2>0, I2<=auditDate, TRUE))
+      const auditDateSerial = activeTicket?.scheduledDate
+        ? (() => {
+            const d = new Date(activeTicket.scheduledDate);
+            // Excel date serial: days since 1900-01-01 (with 1900 leap year bug)
+            return Math.floor((d.getTime() - new Date('1899-12-30').getTime()) / 86400000);
+          })()
+        : 47000;
+
+      ws.getCell(expCell).dataValidation = {
+        type:             'custom',
+        formulae:         [`=AND(${expCell}>${mfgCell}+60,IF(${bbdCell}>0,${expCell}<=${auditDateSerial},TRUE))`],
+        showErrorMessage: true,
+        errorStyle:       'stop',
+        errorTitle:       'Invalid Expiry Date',
+        error:            `Expiry date must be:\n• More than 60 days after Mfg date\n• On or before audit date if BBD qty > 0\n• (Primary Damage & Non-Saleable may have future dates)`,
+        showInputMessage: true,
+        promptTitle:      'Expiry Date',
+        prompt:           'Must be 60+ days after Mfg date. BBD items: must be ≤ audit date. Primary Damage & Non-Saleable: future dates allowed. Format: DD-MM-YYYY e.g. 15-03-2026',
+      };
+      ws.getCell(expCell).numFmt = 'DD-MM-YYYY';
+    });
+
+    // ── Protect the sheet — locked cells = read-only, unlocked = editable ──
+    // No password so admin can unprotect if needed, but casual editing is blocked
+    ws.protect('', {
+      selectLockedCells:   true,   // can click locked cells
+      selectUnlockedCells: true,   // can click + edit unlocked cells
+      formatCells:         false,
+      formatColumns:       false,
+      formatRows:          false,
+      insertRows:          false,
+      deleteRows:          false,
+      sort:                false,
+      autoFilter:          false,
     });
 
     const buf  = await wb.xlsx.writeBuffer();
@@ -2057,7 +2218,7 @@ export function ExecutionModule() {
           </button>
         </div>
 
-        
+        {/* Download Status Report — all assignments in one Excel sheet */}
         {isAdminOrSuperadmin && (
           <button
             onClick={downloadStatusReport}
@@ -2078,7 +2239,7 @@ export function ExecutionModule() {
         )}
       </div>
 
-
+      {/* ── Search bar ──────────────────────────────────────────────────── */}
       <div className="relative group">
         <Search
           size={17}
