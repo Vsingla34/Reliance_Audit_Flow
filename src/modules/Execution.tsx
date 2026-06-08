@@ -292,40 +292,37 @@ export function ExecutionModule() {
     const { data } = await supabase.from('auditLineItems').select('*').eq('ticketId', ticketId).order('articleNumber', { ascending: true });
     if (!data) return;
 
-    // Auto-fix rows where totalValue=0 but qty>0 and unitValue>0 (stale data from old uploads)
-    const needsFix = (data as AuditLineItem[]).filter(
-      i => (i.totalValue === 0 || !i.totalValue) && (i.quantity > 0 || (i.qtyDamaged||0) + (i.qtyNonSaleable||0) + (i.qtyBBD||0) > 0) && (i.unitValue > 0)
-    );
+    // Always recompute totalValue from qty × unitValue — DB value may be stale/wrong
+    const corrected = (data as AuditLineItem[]).map(i => {
+      const qty      = (Number(i.qtyNonSaleable) || 0) + (Number(i.qtyBBD) || 0) + (Number(i.qtyDamaged) || 0) || (Number(i.quantity) || 0);
+      const rate     = Number(i.unitValue) || 0;
+      const computed = qty * rate;
+      return { ...i, quantity: qty, totalValue: computed };
+    });
 
-    if (needsFix.length > 0) {
-      const fixed = (data as AuditLineItem[]).map(i => {
-        const qty = i.quantity || (i.qtyDamaged||0) + (i.qtyNonSaleable||0) + (i.qtyBBD||0);
-        const tv  = qty * (i.unitValue || 0);
-        if ((i.totalValue === 0 || !i.totalValue) && qty > 0 && i.unitValue > 0) {
-          return { ...i, quantity: qty, totalValue: tv };
-        }
-        return i;
-      });
-      setItems(fixed);
+    setItems(corrected);
 
-      // Persist fixes to DB in parallel
+    // Persist any rows whose stored totalValue doesn't match the correct computation
+    const stale = corrected.filter((i, idx) => {
+      const orig = (data as AuditLineItem[])[idx];
+      return Math.abs((orig.totalValue || 0) - i.totalValue) > 0.001;
+    });
+
+    if (stale.length > 0) {
       await Promise.all(
-        needsFix.map(i => {
-          const qty = i.quantity || (i.qtyDamaged||0) + (i.qtyNonSaleable||0) + (i.qtyBBD||0);
-          const tv  = qty * (i.unitValue || 0);
-          return supabase.from('auditLineItems')
-            .update({ quantity: qty, totalValue: tv, updatedAt: new Date().toISOString() })
-            .eq('id', i.id);
-        })
+        stale.map(i =>
+          supabase.from('auditLineItems')
+            .update({ quantity: i.quantity, totalValue: i.totalValue, updatedAt: new Date().toISOString() })
+            .eq('id', i.id)
+        )
       );
 
-      // Also fix verifiedTotal on ticket
-      const trueTotal = fixed.reduce((s, i) => s + (i.totalValue || 0), 0);
+      // Fix verifiedTotal on ticket to match true sum
+      const trueTotal = corrected.reduce((s, i) => s + i.totalValue, 0);
       await supabase.from('auditTickets')
         .update({ verifiedTotal: trueTotal, updatedAt: new Date().toISOString() })
         .eq('id', ticketId);
-    } else {
-      setItems(data as AuditLineItem[]);
+      setActiveTicket(prev => prev ? { ...prev, verifiedTotal: trueTotal } : prev);
     }
   };
 
@@ -647,6 +644,16 @@ export function ExecutionModule() {
        updatedItem.totalValue = updatedItem.quantity * (updatedItem.unitValue || 0);
     }
 
+    if (field === 'unitValue') {
+       const newRate = Number(value) || 0;
+       updatedItem.unitValue  = newRate;
+       // Always recompute qty from individual components to avoid stale quantity field
+       const trueQty = (Number(updatedItem.qtyNonSaleable) || 0) + (Number(updatedItem.qtyBBD) || 0) + (Number(updatedItem.qtyDamaged) || 0)
+                    || (Number(updatedItem.quantity) || 0);
+       updatedItem.quantity   = trueQty;
+       updatedItem.totalValue = trueQty * newRate;
+    }
+
     if (field === 'mfgDate' || field === 'expDate') {
        if (updatedItem.mfgDate && updatedItem.expDate) {
          const m = new Date(updatedItem.mfgDate);
@@ -727,19 +734,36 @@ export function ExecutionModule() {
     const itemToSave = latestEditsRef.current[id] || itemsRef.current.find(i => i.id === id);
     if (!itemToSave) return;
 
+    // Always recompute qty and totalValue from source fields before saving
+    // This prevents stale values going to DB when only rate was changed
+    const trueQty = (Number(itemToSave.qtyNonSaleable) || 0)
+                  + (Number(itemToSave.qtyBBD)          || 0)
+                  + (Number(itemToSave.qtyDamaged)       || 0)
+                  || (Number(itemToSave.quantity)         || 0);
+    const trueRate  = Number(itemToSave.unitValue) || 0;
+    const trueValue = trueQty * trueRate;
+
+    // Patch itemToSave with corrected values
+    itemToSave.quantity   = trueQty;
+    itemToSave.totalValue = trueValue;
+
     const newVerifiedTotal = itemsRef.current.reduce(
-      (sum, item) => sum + (item.id === id ? itemToSave.totalValue : item.totalValue), 0
+      (sum, item) => sum + (item.id === id ? trueValue : (item.totalValue || 0)), 0
     );
+
+    // Also update local state immediately so UI reflects correct value
+    setItems(prev => prev.map(i => i.id === id ? { ...i, quantity: trueQty, totalValue: trueValue } : i));
+    if (activeTicket) setActiveTicket(prev => prev ? { ...prev, verifiedTotal: newVerifiedTotal } : prev);
 
     try {
       // Schedule via queue — merges burst edits, defers until 600ms after last change
       await saveQueue.schedule(id, { 
-        quantity:          itemToSave.quantity, 
+        quantity:          trueQty, 
         qtyNonSaleable:    itemToSave.qtyNonSaleable,
         qtyBBD:            itemToSave.qtyBBD,
         qtyDamaged:        itemToSave.qtyDamaged,
-        totalValue:        itemToSave.totalValue,
-        unitValue:         itemToSave.unitValue,
+        totalValue:        trueValue,
+        unitValue:         trueRate,
         mfgDate:           itemToSave.mfgDate,
         expDate:           itemToSave.expDate,
         productLife:       itemToSave.productLife,
