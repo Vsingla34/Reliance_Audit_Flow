@@ -97,20 +97,20 @@ export function AddItemModal({ isOpen, onClose, activeTicket, distributor, avail
       return alert(`Expiry date (${expDate}) cannot be before Manufacturing date (${mfgDate}) for ${description}.`);
     }
 
-    // Rule: Gap between Mfg and Exp must be more than 3 months (90 days)
+    // Rule: Gap between Mfg and Exp must be more than 60 days
     if (mfgDate && expDate) {
       const gapDays = Math.ceil((new Date(expDate).getTime() - new Date(mfgDate).getTime()) / 86400000);
-      if (gapDays <= 90) {
-        return alert(`Gap between Mfg date and Exp date is only ${gapDays} days. It must be more than 3 months (90 days).`);
+      if (gapDays <= 60) {
+        return alert(`Gap between Mfg date and Exp date is only ${gapDays} days. It must be more than 60 days.`);
       }
     }
 
-    // Rule 4: Exp date cannot be after audit date EXCEPT for Primary Damage only items
+    // Rule 4: Exp date cannot be after audit date EXCEPT for Primary Damage & Non-Saleable
+    // BBD items MUST have exp date on or before audit date
     const auditDate = activeTicket.scheduledDate?.split('T')[0] || '';
     if (auditDate && expDate && expDate > auditDate) {
-      // Exception: primary damage items CAN have exp date after audit date
-      if (qBBD > 0 || qNonSaleable > 0) {
-        return alert(`Expiry date (${expDate}) is after the audit date (${auditDate}) for ${description}. Only Primary Damage items can have expiry beyond the audit date.`);
+      if (qBBD > 0) {
+        return alert(`Expiry date (${expDate}) is after the audit date (${auditDate}) for ${description}. BBD/Expired items must have expiry on or before the audit date.`);
       }
     }
 
@@ -497,9 +497,10 @@ export function AddItemModal({ isOpen, onClose, activeTicket, distributor, avail
                       const isAfterAudit = auditDate && expDate && expDate > auditDate;
                       const isBeforeMfg  = mfgDate && expDate && expDate < mfgDate;
                       const gapDays = mfgDate && expDate ? Math.ceil((new Date(expDate).getTime() - new Date(mfgDate).getTime()) / 86400000) : null;
-                      const isTooClose   = gapDays !== null && gapDays <= 90;
-                      const onlyDamaged  = (Number(qtyDamaged)||0) > 0 && (Number(qtyBBD)||0) === 0 && (Number(qtyNonSaleable)||0) === 0;
-                      const hasError = isBeforeMfg || isTooClose || (isAfterAudit && !onlyDamaged);
+                      const isTooClose   = gapDays !== null && gapDays <= 60;
+                      // Future exp allowed for Primary Damage + Non-Saleable; BBD must be <= audit date
+                      const hasBBD       = (Number(qtyBBD)||0) > 0;
+                      const hasError = isBeforeMfg || isTooClose || (isAfterAudit && hasBBD);
                       return (
                         <>
                           <input
@@ -510,9 +511,9 @@ export function AddItemModal({ isOpen, onClose, activeTicket, distributor, avail
                             value={expDate} onChange={e => setExpDate(e.target.value)}
                           />
                           {isBeforeMfg && <p className="text-[10px] text-red-600 font-bold mt-1">⚠ Exp date cannot be before Mfg date</p>}
-                          {!isBeforeMfg && isTooClose && <p className="text-[10px] text-red-600 font-bold mt-1">⚠ Gap is only {gapDays} days — must be more than 3 months (90 days)</p>}
-                          {isAfterAudit && !isBeforeMfg && !isTooClose && !onlyDamaged && <p className="text-[10px] text-red-600 font-bold mt-1">⚠ Exp date after audit date ({auditDate}). Only Primary Damage items are allowed.</p>}
-                          {isAfterAudit && !isBeforeMfg && !isTooClose && onlyDamaged && <p className="text-[10px] text-amber-600 font-bold mt-1">⚠ Exp after audit date — allowed only because this is Primary Damage only.</p>}
+                          {!isBeforeMfg && isTooClose && <p className="text-[10px] text-red-600 font-bold mt-1">⚠ Gap is only {gapDays} days — must be more than 60 days</p>}
+                          {isAfterAudit && !isBeforeMfg && !isTooClose && hasBBD && <p className="text-[10px] text-red-600 font-bold mt-1">⚠ BBD items must have exp date on or before audit date ({auditDate}).</p>}
+                          {isAfterAudit && !isBeforeMfg && !isTooClose && !hasBBD && <p className="text-[10px] text-amber-600 font-bold mt-1">✓ Exp after audit date — allowed for Primary Damage &amp; Non-Saleable items.</p>}
                         </>
                       );
                     })()}

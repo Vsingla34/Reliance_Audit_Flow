@@ -889,21 +889,21 @@ export function ExecutionModule() {
           skipped++; return;
         }
 
-        // Rule 2: Gap between Mfg and Exp must be more than 3 months (90 days)
+        // Rule 2: Gap between Mfg and Exp must be more than 60 days
         if (mfgDate && expDate) {
           const gapDays = Math.ceil((new Date(expDate).getTime() - new Date(mfgDate).getTime()) / 86400000);
-          if (gapDays <= 90) {
-            errors.push(`${articleCode} (row ${rowNum}): Gap between Mfg (${mfgDate}) and Exp (${expDate}) is only ${gapDays} days — must be more than 3 months`);
+          if (gapDays <= 60) {
+            errors.push(`${articleCode} (row ${rowNum}): Gap between Mfg (${mfgDate}) and Exp (${expDate}) is only ${gapDays} days — must be more than 60 days`);
             skipped++; return;
           }
         }
 
-        // Rule 4: Exp date after audit date only allowed for pure primary damage
+        // Rule 4: BBD items MUST have exp date on or before audit date
+        // Primary Damage + Non-Saleable CAN have future exp dates
         const auditDateStr = activeTicket.scheduledDate?.split('T')[0] || '';
         if (auditDateStr && expDate && expDate > auditDateStr) {
-          const isPureDamage = qDmg > 0 && effectiveNs === 0 && qBbd === 0;
-          if (!isPureDamage) {
-            errors.push(`${articleCode} (row ${rowNum}): Exp (${expDate}) after audit date (${auditDateStr}) — only Primary Damage rows allowed`);
+          if (qBbd > 0) {
+            errors.push(`${articleCode} (row ${rowNum}): BBD items exp (${expDate}) must be on or before audit date (${auditDateStr})`);
             skipped++; return;
           }
         }
@@ -2057,7 +2057,7 @@ export function ExecutionModule() {
           </button>
         </div>
 
-        {/* Download Status Report — all assignments in one Excel sheet */}
+        
         {isAdminOrSuperadmin && (
           <button
             onClick={downloadStatusReport}
@@ -2078,7 +2078,7 @@ export function ExecutionModule() {
         )}
       </div>
 
-      {/* ── Search bar ──────────────────────────────────────────────────── */}
+
       <div className="relative group">
         <Search
           size={17}
