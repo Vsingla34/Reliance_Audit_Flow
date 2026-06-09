@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
 import { supabase, logActivity, notifyLinkedUsers } from '../supabase';
 import { Distributor, SignOff, AuditTicket as BaseTicket, AuditLineItem as BaseItem } from '../types';
-import { ClipboardCheck, Plus, Store, MapPin, CheckCircle2, ArrowLeft, AlertCircle, MessageSquare, PackageSearch, Lock, Trash2, Send, RotateCcw, CalendarClock, FileText, Upload, Loader2, User as UserIcon, X, Droplets, Search, Download, FileSpreadsheet, FileUp, CheckCheck } from 'lucide-react';
+import { ClipboardCheck, Plus, Store, MapPin, CheckCircle2, ArrowLeft, AlertCircle, MessageSquare, PackageSearch, Lock, Trash2, Send, RotateCcw, CalendarClock, FileText, Upload, Loader2, User as UserIcon, X, Droplets, Search, Download, FileSpreadsheet, FileUp, CheckCheck, Camera } from 'lucide-react';
 import { useSignOffExport } from '../hooks/useSignOffExport';
 import { cn, useAuth } from '../App';
 import { motion, AnimatePresence } from 'motion/react';
@@ -71,6 +71,8 @@ export function ExecutionModule() {
   const [listSearch, setListSearch] = useState('');
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [drainageDateInput, setDrainageDateInput] = useState('');
+  const [isDrainageSelfieUploading, setIsDrainageSelfieUploading] = useState(false);
+  const drainageSelfieRef = useRef<HTMLInputElement>(null);
   
   const [isUploadingSignoff, setIsUploadingSignoff] = useState(false);
   const signoffFileRef = useRef<HTMLInputElement>(null);
@@ -290,40 +292,7 @@ export function ExecutionModule() {
 
   const fetchItems = async (ticketId: string) => {
     const { data } = await supabase.from('auditLineItems').select('*').eq('ticketId', ticketId).order('articleNumber', { ascending: true });
-    if (!data) return;
-
-    // Always recompute totalValue from qty × unitValue — DB value may be stale/wrong
-    const corrected = (data as AuditLineItem[]).map(i => {
-      const qty      = (Number(i.qtyNonSaleable) || 0) + (Number(i.qtyBBD) || 0) + (Number(i.qtyDamaged) || 0) || (Number(i.quantity) || 0);
-      const rate     = Number(i.unitValue) || 0;
-      const computed = qty * rate;
-      return { ...i, quantity: qty, totalValue: computed };
-    });
-
-    setItems(corrected);
-
-    // Persist any rows whose stored totalValue doesn't match the correct computation
-    const stale = corrected.filter((i, idx) => {
-      const orig = (data as AuditLineItem[])[idx];
-      return Math.abs((orig.totalValue || 0) - i.totalValue) > 0.001;
-    });
-
-    if (stale.length > 0) {
-      await Promise.all(
-        stale.map(i =>
-          supabase.from('auditLineItems')
-            .update({ quantity: i.quantity, totalValue: i.totalValue, updatedAt: new Date().toISOString() })
-            .eq('id', i.id)
-        )
-      );
-
-      // Fix verifiedTotal on ticket to match true sum
-      const trueTotal = corrected.reduce((s, i) => s + i.totalValue, 0);
-      await supabase.from('auditTickets')
-        .update({ verifiedTotal: trueTotal, updatedAt: new Date().toISOString() })
-        .eq('id', ticketId);
-      setActiveTicket(prev => prev ? { ...prev, verifiedTotal: trueTotal } : prev);
-    }
+    if (data) setItems(data as AuditLineItem[]);
   };
 
   const loadDumpData = async (distCode: string) => {
@@ -1231,18 +1200,28 @@ export function ExecutionModule() {
     });
 
     // ── Protect the sheet — locked cells = read-only, unlocked = editable ──
-    // No password so admin can unprotect if needed, but casual editing is blocked
     ws.protect('', {
-      selectLockedCells:   true,   // can click locked cells
-      selectUnlockedCells: true,   // can click + edit unlocked cells
+      selectLockedCells:   true,
+      selectUnlockedCells: true,
       formatCells:         false,
       formatColumns:       false,
       formatRows:          false,
-      insertRows:          false,
+      insertRows:          true,   // allow adding new rows
       deleteRows:          false,
       sort:                false,
       autoFilter:          false,
     });
+
+    // ── Add 20 blank editable rows at the bottom for manual new items ────────
+    for (let i = 0; i < 20; i++) {
+      const blankRow = ws.addRow(['', '', '', '', 0, 0, 0, '', '']);
+      blankRow.eachCell({ includeEmpty: true }, (cell, colNum) => {
+        cell.protection = { locked: false };
+        cell.fill       = { type: 'pattern', pattern: 'solid', fgColor: { argb: colNum >= 5 ? 'FFFFF9F0' : 'FFFFFFFF' } };
+        if (colNum >= 5 && colNum <= 7) cell.numFmt = '#,##0';
+        if (colNum >= 8) cell.numFmt = 'DD-MM-YYYY';
+      });
+    }
 
     const buf  = await wb.xlsx.writeBuffer();
     const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
@@ -1376,6 +1355,16 @@ export function ExecutionModule() {
     
     const newStatus = allSigned ? 'drainage_pending' : activeTicket.status;
 
+    // Auto-set qtyDrained = quantity for all items when entering drainage phase
+    if (allSigned) {
+      await Promise.all(items.map(i =>
+        supabase.from('auditLineItems')
+          .update({ qtyDrained: i.quantity, updatedAt: new Date().toISOString() })
+          .eq('id', i.id)
+      ));
+      setItems(prev => prev.map(i => ({ ...i, qtyDrained: i.quantity })));
+    }
+
     await supabase.from('auditTickets').update({ signOffs, status: newStatus, updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
     
     const dist = distMap[activeTicket.distributorId];
@@ -1389,13 +1378,42 @@ export function ExecutionModule() {
     }
   };
 
+  const handleDrainageSelfieUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !activeTicket || !user || !profile) return;
+    if (drainageSelfieRef.current) drainageSelfieRef.current.value = '';
+    setIsDrainageSelfieUploading(true);
+    try {
+      const ext  = file.name.split('.').pop();
+      const path = `drainage/${activeTicket.id}/selfie-${Date.now()}.${ext}`;
+      const { error: upErr } = await supabase.storage.from('audit-media').upload(path, file, { upsert: true });
+      if (upErr) throw upErr;
+      const { data: { publicUrl } } = supabase.storage.from('audit-media').getPublicUrl(path);
+      const newSignOffs = { ...(activeTicket.signOffs || {}), drainageSelfieUrl: publicUrl, drainageSelfieBy: profile.name };
+      await supabase.from('auditTickets').update({ signOffs: newSignOffs, updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
+      setActiveTicket({ ...activeTicket, signOffs: newSignOffs });
+      logActivity(user, profile, 'Drainage Selfie Uploaded', `Drainage selfie by ${profile.name}`);
+    } catch (err: any) {
+      alert('Upload failed: ' + (err.message || err));
+    } finally {
+      setIsDrainageSelfieUploading(false);
+    }
+  };
+
   const submitDrainage = async () => {
     if (!activeTicket) return;
-    await supabase.from('auditTickets').update({ status: 'closed', updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
-    
     const dist = distMap[activeTicket.distributorId];
-    logActivity(user, profile, "Audit Closed", `Drainage phase completed and audit officially closed for ${dist?.name}`);
 
+    // Auto-set qtyDrained = quantity for all items
+    await Promise.all(items.map(i =>
+      supabase.from('auditLineItems')
+        .update({ qtyDrained: i.quantity, updatedAt: new Date().toISOString() })
+        .eq('id', i.id)
+    ));
+    setItems(prev => prev.map(i => ({ ...i, qtyDrained: i.quantity })));
+
+    await supabase.from('auditTickets').update({ status: 'closed', updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
+    logActivity(user, profile, "Audit Closed", `Drainage phase completed and audit officially closed for ${dist?.name}`);
     setActiveTicket(null); alert("Drainage completed! The audit is now fully Closed.");
   };
 
@@ -1690,11 +1708,35 @@ export function ExecutionModule() {
                 <h4 className="font-bold text-cyan-900 text-sm sm:text-base">Drainage Phase Active</h4>
                 {isAdminOrSuperadmin ? (
                   <>
-                    <p className="text-xs sm:text-sm text-cyan-800 mt-1 mb-3 sm:mb-4">Original counts are frozen. The <strong>Drained Qty</strong> column is unlocked. Confirm the scheduled drainage date below to finalize.</p>
+                    <p className="text-xs sm:text-sm text-cyan-800 mt-1 mb-3 sm:mb-4">Original counts are frozen. The drainage quantity is automatically set to the total audited quantity. Confirm the scheduled drainage date and upload a drainage selfie below.</p>
                     <div className="flex flex-col sm:flex-row gap-2 sm:gap-3 max-w-sm">
                       <input type="date" className="w-full sm:flex-1 px-4 py-3 sm:py-2 rounded-xl border border-cyan-200 outline-none focus:ring-2 focus:ring-cyan-500 text-sm font-bold bg-white shadow-sm" value={drainageDateInput || activeTicket.signOffs?.drainageDate || ''} onChange={(e) => setDrainageDateInput(e.target.value)} />
                       <button onClick={setDrainageDate} disabled={!drainageDateInput} className="w-full sm:w-auto px-6 py-3 sm:py-2 bg-cyan-600 text-white font-bold rounded-xl hover:bg-cyan-700 transition-colors disabled:opacity-50 shadow-sm">Save Date</button>
                     </div>
+
+                    {/* Drainage Selfie Upload */}
+                    <div className="mt-4 p-4 bg-white border border-cyan-200 rounded-xl">
+                      <p className="text-xs font-bold text-cyan-900 mb-2 flex items-center gap-1.5">
+                        <Camera size={14} /> Drainage Selfie
+                      </p>
+                      {activeTicket.signOffs?.drainageSelfieUrl ? (
+                        <div className="flex items-center gap-3">
+                          <a href={activeTicket.signOffs.drainageSelfieUrl} target="_blank" rel="noreferrer">
+                            <img src={activeTicket.signOffs.drainageSelfieUrl} alt="Drainage selfie" className="w-16 h-16 object-cover rounded-xl border border-cyan-200 shadow-sm hover:opacity-80 transition-opacity" />
+                          </a>
+                          <div>
+                            <p className="text-xs font-bold text-slate-700">Uploaded by {activeTicket.signOffs.drainageSelfieBy || 'Admin'}</p>
+                            <button onClick={() => drainageSelfieRef.current?.click()} className="text-[10px] text-cyan-600 font-bold hover:underline mt-0.5">Re-upload</button>
+                          </div>
+                        </div>
+                      ) : (
+                        <button onClick={() => drainageSelfieRef.current?.click()} disabled={isDrainageSelfieUploading} className="flex items-center gap-2 px-4 py-2 bg-cyan-600 text-white text-xs font-bold rounded-xl hover:bg-cyan-700 transition-all disabled:opacity-60 active:scale-95">
+                          {isDrainageSelfieUploading ? <><Loader2 size={14} className="animate-spin" /> Uploading…</> : <><Camera size={14} /> Upload Drainage Selfie</>}
+                        </button>
+                      )}
+                      <input type="file" accept="image/*" capture="environment" className="hidden" ref={drainageSelfieRef} onChange={handleDrainageSelfieUpload} />
+                    </div>
+
                     {!isDrainageToday && activeTicket.signOffs?.drainageDate && (
                       <p className="mt-3 text-[11px] sm:text-xs font-bold text-rose-600 flex items-center gap-1.5"><AlertCircle size={14} /> Inputs are currently locked. The Drainage Date must be set to today ({todayStr}) to edit quantities.</p>
                     )}
@@ -1904,7 +1946,7 @@ export function ExecutionModule() {
 
                             <td className="px-3 py-3 sm:py-4 text-center bg-cyan-50/10 border-r border-cyan-50">
                               {canEditDrainage ? (
-                                <input type="number" min="0" max={item.quantity} value={item.qtyDrained ?? ''} onChange={(e) => handleDrainageChange(item.id, e.target.value)} onBlur={() => saveInlineDrainage(item.id)} className="w-14 text-center bg-white border border-slate-200 text-xs font-bold rounded-lg px-1 py-2 sm:py-1.5 focus:ring-2 focus:ring-cyan-500 outline-none text-cyan-800 shadow-sm" placeholder="0" />
+                                <span className="font-black text-cyan-700 text-sm">{item.quantity}</span>
                               ) : (
                                 <span className="font-bold text-cyan-700">{item.qtyDrained || 0}</span>
                               )}
