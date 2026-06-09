@@ -126,6 +126,30 @@ export function ReportsModule() {
         const rows: ReportRow[] = [];
         let sno = 0;
 
+        // ── Enrich items with itemMaster data (category, GST, standardPack) ──
+        // auditLineItems often has these as empty — itemMaster is the source of truth
+        const uniqueArticleCodes = [...new Set(allItems.map(i => i.articleNumber).filter(Boolean))];
+        const itemMasterMap: Record<string, { category: string; gst: number; standardPack: string }> = {};
+        if (uniqueArticleCodes.length > 0) {
+          // Fetch in batches of 500 to avoid URL length limits
+          const BATCH = 500;
+          for (let b = 0; b < uniqueArticleCodes.length; b += BATCH) {
+            const { data: masterRows } = await supabase
+              .from('itemMaster')
+              .select('itemCode,category,gst,standardPack')
+              .in('itemCode', uniqueArticleCodes.slice(b, b + BATCH));
+            if (masterRows) {
+              masterRows.forEach((m: any) => {
+                itemMasterMap[m.itemCode] = {
+                  category:     m.category     || '',
+                  gst:          Number(m.gst)  || 0,
+                  standardPack: m.standardPack || '',
+                };
+              });
+            }
+          }
+        }
+
         for (const item of allItems) {
           const ticket = tickets.find(t => t.id === item.ticketId);
           if (!ticket) continue;
@@ -134,7 +158,10 @@ export function ReportsModule() {
 
           sno++;
           const uv      = item.unitValue || 0;
-          const gstPct  = item.gst || 0;
+          const master  = itemMasterMap[item.articleNumber] || {};
+          const gstPct  = master.gst          ?? item.gst          ?? 0;
+          const category     = master.category     || item.category     || '';
+          const standardPack = master.standardPack || item.standardPack || '';
           const gstMul  = 1 + gstPct / 100;
 
           const qTot    = (item.qtyDamaged || 0) + (item.qtyNonSaleable || 0) + (item.qtyBBD || 0);
@@ -177,10 +204,10 @@ export function ReportsModule() {
             distributorName: (dist as any).name       || '',
             articleCode:     item.articleNumber        || '',
             brandPack:       item.description          || '',
-            category:        item.category             || '',
+            category:        category,
             rateInclGst:     uv,
             gstPct:          gstPct,
-            standardPack:    item.standardPack         || '',
+            standardPack:    standardPack,
             qtyDamaged:      item.qtyDamaged     || 0,
             qtySampling:     0,
             qtyNonSaleable:  item.qtyNonSaleable || 0,

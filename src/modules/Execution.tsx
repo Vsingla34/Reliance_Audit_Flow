@@ -71,6 +71,8 @@ export function ExecutionModule() {
   const [listSearch, setListSearch] = useState('');
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [drainageDateInput, setDrainageDateInput] = useState('');
+  const [drainageEndDateInput, setDrainageEndDateInput] = useState('');
+  const [isManagingDays, setIsManagingDays] = useState(false);
   const [isDrainageSelfieUploading, setIsDrainageSelfieUploading] = useState(false);
   const drainageSelfieRef = useRef<HTMLInputElement>(null);
   
@@ -860,6 +862,7 @@ export function ExecutionModule() {
       const expCol       = col(['ExpDate','ExpiryDate','EXPDate','BBDDate','Exp Date','Exp']);
       const descCol      = col(['Description','BrandPack','ItemName','Name']);
       const rateCol      = col(['Rate','UnitValue','Price']);
+      const remarksCol   = col(['Remarks','Remark','Comment','Note']);
 
       if (!articleCol) throw new Error(`Column "ArticleNo" not found. Header row detected at row ${headerRowNum}. Found columns: ${Object.keys(headers).join(', ')}`);
 
@@ -965,6 +968,8 @@ export function ExecutionModule() {
           if (diff > 0) productLife = `${diff} Days`;
         }
 
+        const rowRemarks = String(getCellVal(remarksCol) || '').trim();
+
         // Build one row per qty type (matches how AddItemModal splits rows)
         if (qDmg > 0) inserts.push({
           id: crypto.randomUUID(), ticketId: activeTicket.id,
@@ -972,6 +977,7 @@ export function ExecutionModule() {
           quantity: qDmg, qtyDamaged: qDmg, qtyNonSaleable: 0, qtyBBD: 0,
           unitValue, totalValue: qDmg * unitValue,
           reasonCode: 'Verified / OK', mfgDate, expDate, productLife,
+          remarks: rowRemarks || 'Sending Invoice',
           bbdApprovalStatus: 'none', qtyDrained: 0,
         });
         if (effectiveNs > 0) inserts.push({
@@ -980,6 +986,7 @@ export function ExecutionModule() {
           quantity: effectiveNs, qtyDamaged: 0, qtyNonSaleable: effectiveNs, qtyBBD: 0,
           unitValue, totalValue: effectiveNs * unitValue,
           reasonCode: 'Verified / OK', mfgDate, expDate, productLife,
+          remarks: rowRemarks || '',
           bbdApprovalStatus: 'none', qtyDrained: 0,
         });
         if (qBbd > 0) inserts.push({
@@ -988,6 +995,7 @@ export function ExecutionModule() {
           quantity: qBbd, qtyDamaged: 0, qtyNonSaleable: 0, qtyBBD: qBbd,
           unitValue, totalValue: qBbd * unitValue,
           reasonCode: 'Verified / OK', mfgDate, expDate, productLife,
+          remarks: rowRemarks || '',
           bbdApprovalStatus: qBbd > 0 && expDate && activeTicket.scheduledDate && expDate > activeTicket.scheduledDate ? 'pending' : 'none',
           qtyDrained: 0,
         });
@@ -1086,12 +1094,12 @@ export function ExecutionModule() {
       { header: 'BBD',           key: 'BBD',            width: 14 },
       { header: 'MfgDate',       key: 'MfgDate',        width: 14 },
       { header: 'ExpDate',       key: 'ExpDate',        width: 14 },
+      { header: 'Remarks',       key: 'Remarks',        width: 28 },
     ];
 
-    // Cols 1-4 = locked (SoldToParty, ArticleNo, Description, SystemQty)
-    // Cols 5-9 = editable (PrimaryDamage, NonSaleable, BBD, MfgDate, ExpDate)
+    // Cols 1-4 = locked, Cols 5-10 = editable (qty + dates + remarks)
     const LOCKED_COLS   = new Set([1, 2, 3, 4]);
-    const EDITABLE_COLS = new Set([5, 6, 7, 8, 9]);
+    const EDITABLE_COLS = new Set([5, 6, 7, 8, 9, 10]);
 
     // ── Header row (row 1) ─────────────────────────────────────────────────
     ws.getRow(1).eachCell((cell, colNum) => {
@@ -1117,6 +1125,7 @@ export function ExecutionModule() {
         BBD:           0,
         MfgDate:       '',
         ExpDate:       '',
+        Remarks:       '',
       });
 
       const rowNum = row.number;
@@ -1196,7 +1205,21 @@ export function ExecutionModule() {
         promptTitle:      'Expiry Date',
         prompt:           'Must be 60+ days after Mfg date. BBD items: must be ≤ audit date. Primary Damage & Non-Saleable: future dates allowed. Format: DD-MM-YYYY e.g. 15-03-2026',
       };
-      ws.getCell(expCell).numFmt = 'DD-MM-YYYY';
+      // Remarks dropdown — Primary Damage: "Sending Invoice", Non-Saleable: damage reasons
+      const remarkCell = `J${rowNum}`;
+      ws.getCell(remarkCell).dataValidation = {
+        type:             'list',
+        formulae:         ['"Sending Invoice,Damaged Bottles/Cans,Label Damage,Packaging Defects,Leakage"'],
+        showErrorMessage: true,
+        errorStyle:       'warning',
+        errorTitle:       'Invalid Remark',
+        error:            'Please select from the dropdown list.',
+        showInputMessage: true,
+        promptTitle:      'Remarks',
+        prompt:           'Primary Damage → "Sending Invoice". Non-Saleable → select damage reason.',
+      };
+      ws.getCell(remarkCell).protection = { locked: false };
+      ws.getCell(remarkCell).fill       = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF9F0' } };
     });
 
     // ── Protect the sheet — locked cells = read-only, unlocked = editable ──
@@ -1214,12 +1237,55 @@ export function ExecutionModule() {
 
     // ── Add 20 blank editable rows at the bottom for manual new items ────────
     for (let i = 0; i < 20; i++) {
-      const blankRow = ws.addRow(['', '', '', '', 0, 0, 0, '', '']);
+      const blankRow = ws.addRow(['', '', '', '', 0, 0, 0, '', '', '']);
       blankRow.eachCell({ includeEmpty: true }, (cell, colNum) => {
         cell.protection = { locked: false };
         cell.fill       = { type: 'pattern', pattern: 'solid', fgColor: { argb: colNum >= 5 ? 'FFFFF9F0' : 'FFFFFFFF' } };
         if (colNum >= 5 && colNum <= 7) cell.numFmt = '#,##0';
         if (colNum >= 8) cell.numFmt = 'DD-MM-YYYY';
+      });
+    }
+
+    // ── Attendance Sheet (matches sign-off format) ────────────────────────
+    const wsAtt = wb.addWorksheet('Attendance Sheet');
+    wsAtt.columns = [{ width: 5 }, { width: 25 }, { width: 20 }, { width: 20 }, { width: 20 }, { width: 20 }];
+
+    const attTitle = wsAtt.getRow(1);
+    wsAtt.mergeCells(1, 1, 1, 6);
+    attTitle.getCell(1).value     = 'Attendance Sheet';
+    attTitle.getCell(1).font      = { bold: true, size: 13 };
+    attTitle.getCell(1).alignment = { horizontal: 'center', vertical: 'middle' };
+    attTitle.getCell(1).fill      = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9E1F2' } };
+    attTitle.height               = 24;
+
+    // Distributor info
+    const attInfo = [
+      [`Distributor: ${dist?.name || ''}`, `Code: ${distCode}`],
+      [`City: ${dist?.city || ''}`,         `Audit Date: ${activeTicket?.scheduledDate || ''}`],
+    ];
+    attInfo.forEach(([left, right], i) => {
+      const row = wsAtt.getRow(i + 2);
+      row.getCell(1).value = left;  row.getCell(1).font = { bold: true };
+      row.getCell(4).value = right; row.getCell(4).font = { bold: true };
+    });
+
+    // Header row
+    wsAtt.getRow(5).values = ['S.No', 'Name', 'Designation', 'Signature', 'Date', 'Remarks'];
+    wsAtt.getRow(5).eachCell(cell => {
+      cell.font      = { bold: true };
+      cell.fill      = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2EFDA' } };
+      cell.border    = { top: { style: 'thin' }, bottom: { style: 'thin' }, left: { style: 'thin' }, right: { style: 'thin' } };
+      cell.alignment = { horizontal: 'center', vertical: 'middle' };
+    });
+    wsAtt.getRow(5).height = 20;
+
+    // 10 blank attendance rows
+    for (let i = 1; i <= 10; i++) {
+      const row = wsAtt.addRow([i, '', '', '', '', '']);
+      row.height = 22;
+      row.eachCell({ includeEmpty: true }, cell => {
+        cell.border    = { top: { style: 'thin' }, bottom: { style: 'thin' }, left: { style: 'thin' }, right: { style: 'thin' } };
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
       });
     }
 
@@ -1238,7 +1304,7 @@ export function ExecutionModule() {
   const setDrainageDate = async () => {
     if (!activeTicket || !drainageDateInput) return;
     
-    const newSignOffs = { ...(activeTicket.signOffs || {}), drainageDate: drainageDateInput };
+    const newSignOffs = { ...(activeTicket.signOffs || {}), drainageDate: drainageDateInput, ...(drainageEndDateInput ? { drainageEndDate: drainageEndDateInput } : {}) };
     await supabase.from('auditTickets').update({ signOffs: newSignOffs, updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
     setActiveTicket({ ...activeTicket, signOffs: newSignOffs });
     
@@ -1530,14 +1596,15 @@ export function ExecutionModule() {
     const canEditItems = isSuperAdmin
       ? activeTicket.status === 'in_progress' && !isClosedPhase
       : (isAuditor || isAdminOrSuperadmin) && canUploadFiles && activeTicket.status === 'in_progress' && !isClosedPhase;
-    const canEditDrainage = (isSuperAdmin || isAdminOrSuperadmin || isAuditor) && activeTicket.status === 'drainage_pending' && !isClosedPhase;
+    const canEditDrainage = (isSuperAdmin || isAdminOrSuperadmin || isAuditor) && activeTicket.status === 'drainage_pending';
 
     // ── Sign-off export unlock condition ──────────────────────────────────────
     // Schema: auditTickets.whatsappMediaApproved is a direct bool column
     // Fall back to signOffs JSONB for backward compat with older records
     const whatsappApproved =
+      activeTicket.signOffs?.whatsappMediaApproved === true ||
       (activeTicket as any).whatsappMediaApproved === true ||
-      activeTicket.signOffs?.whatsappMediaApproved === true;
+      activeTicket.signOffs?.whatsappApproved === true;
 
     const percentUsed = ((activeTicket.verifiedTotal || 0) / activeTicket.approvedValue) * 100;
     
@@ -1708,38 +1775,116 @@ export function ExecutionModule() {
                 <h4 className="font-bold text-cyan-900 text-sm sm:text-base">Drainage Phase Active</h4>
                 {isAdminOrSuperadmin ? (
                   <>
-                    <p className="text-xs sm:text-sm text-cyan-800 mt-1 mb-3 sm:mb-4">Original counts are frozen. The drainage quantity is automatically set to the total audited quantity. Confirm the scheduled drainage date and upload a drainage selfie below.</p>
-                    <div className="flex flex-col sm:flex-row gap-2 sm:gap-3 max-w-sm">
-                      <input type="date" className="w-full sm:flex-1 px-4 py-3 sm:py-2 rounded-xl border border-cyan-200 outline-none focus:ring-2 focus:ring-cyan-500 text-sm font-bold bg-white shadow-sm" value={drainageDateInput || activeTicket.signOffs?.drainageDate || ''} onChange={(e) => setDrainageDateInput(e.target.value)} />
-                      <button onClick={setDrainageDate} disabled={!drainageDateInput} className="w-full sm:w-auto px-6 py-3 sm:py-2 bg-cyan-600 text-white font-bold rounded-xl hover:bg-cyan-700 transition-colors disabled:opacity-50 shadow-sm">Save Date</button>
+                    <p className="text-xs sm:text-sm text-cyan-800 mt-1 mb-3 sm:mb-4">Original counts are frozen. The drainage quantity is automatically set to the total audited quantity. Set the drainage start and end dates below.</p>
+                    <div className="flex flex-col sm:flex-row gap-2 sm:gap-3 max-w-lg">
+                      <div className="flex-1">
+                        <p className="text-[10px] font-bold text-cyan-700 mb-1 uppercase tracking-wider">Start Date</p>
+                        <input type="date" className="w-full px-4 py-3 sm:py-2 rounded-xl border border-cyan-200 outline-none focus:ring-2 focus:ring-cyan-500 text-sm font-bold bg-white shadow-sm" value={drainageDateInput || activeTicket.signOffs?.drainageDate || ''} onChange={(e) => setDrainageDateInput(e.target.value)} />
+                      </div>
+                      <div className="flex-1">
+                        <p className="text-[10px] font-bold text-cyan-700 mb-1 uppercase tracking-wider">End Date</p>
+                        <input type="date" className="w-full px-4 py-3 sm:py-2 rounded-xl border border-cyan-200 outline-none focus:ring-2 focus:ring-cyan-500 text-sm font-bold bg-white shadow-sm" value={drainageEndDateInput || activeTicket.signOffs?.drainageEndDate || ''} onChange={(e) => setDrainageEndDateInput(e.target.value)} />
+                      </div>
+                      <div className="flex items-end">
+                        <button onClick={setDrainageDate} disabled={!drainageDateInput} className="w-full sm:w-auto px-6 py-3 sm:py-2 bg-cyan-600 text-white font-bold rounded-xl hover:bg-cyan-700 transition-colors disabled:opacity-50 shadow-sm">Save</button>
+                      </div>
                     </div>
 
-                    {/* Drainage Selfie Upload */}
-                    <div className="mt-4 p-4 bg-white border border-cyan-200 rounded-xl">
-                      <p className="text-xs font-bold text-cyan-900 mb-2 flex items-center gap-1.5">
-                        <Camera size={14} /> Drainage Selfie
-                      </p>
-                      {activeTicket.signOffs?.drainageSelfieUrl ? (
-                        <div className="flex items-center gap-3">
-                          <a href={activeTicket.signOffs.drainageSelfieUrl} target="_blank" rel="noreferrer">
-                            <img src={activeTicket.signOffs.drainageSelfieUrl} alt="Drainage selfie" className="w-16 h-16 object-cover rounded-xl border border-cyan-200 shadow-sm hover:opacity-80 transition-opacity" />
-                          </a>
-                          <div>
-                            <p className="text-xs font-bold text-slate-700">Uploaded by {activeTicket.signOffs.drainageSelfieBy || 'Admin'}</p>
-                            <button onClick={() => drainageSelfieRef.current?.click()} className="text-[10px] text-cyan-600 font-bold hover:underline mt-0.5">Re-upload</button>
-                          </div>
+
+                    {/* Drainage Selfie Upload — one box per drainage day */}
+                    {(() => {
+                      const startDate = activeTicket.signOffs?.drainageDate;
+                      const endDate   = activeTicket.signOffs?.drainageEndDate || startDate;
+                      if (!startDate) return null;
+
+                      // Build list of all drainage days between start and end
+                      const drainageDays: string[] = [];
+                      const d = new Date(startDate);
+                      const end = new Date(endDate || startDate);
+                      while (d <= end) {
+                        drainageDays.push(d.toISOString().split('T')[0]);
+                        d.setDate(d.getDate() + 1);
+                      }
+
+                      const selfies: Record<string, { url: string; by: string }> =
+                        activeTicket.signOffs?.drainageSelfies || {};
+
+                      return (
+                        <div className="mt-4 space-y-3">
+                          <p className="text-xs font-bold text-cyan-900 flex items-center gap-1.5">
+                            <Camera size={14} /> Drainage Selfies ({drainageDays.length} day{drainageDays.length > 1 ? 's' : ''})
+                          </p>
+                          {drainageDays.map(day => {
+                            const selfie = selfies[day];
+                            const inputId = `drainage-selfie-${day}`;
+                            return (
+                              <div key={day} className="p-3 bg-white border border-cyan-200 rounded-xl flex items-center justify-between gap-3">
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <div className="text-[10px] font-black text-cyan-700 bg-cyan-50 px-2 py-1 rounded-lg shrink-0">{day}</div>
+                                  {selfie ? (
+                                    <div className="flex items-center gap-2">
+                                      <a href={selfie.url} target="_blank" rel="noreferrer">
+                                        <img src={selfie.url} alt={`Selfie ${day}`} className="w-10 h-10 object-cover rounded-lg border border-cyan-200 shadow-sm hover:opacity-80 transition-opacity" />
+                                      </a>
+                                      <p className="text-[10px] text-slate-500">by {selfie.by}</p>
+                                    </div>
+                                  ) : (
+                                    <p className="text-[10px] text-slate-400 italic">Not uploaded</p>
+                                  )}
+                                </div>
+                                <div>
+                                  <input
+                                    type="file" accept="image/*" capture="environment"
+                                    className="hidden" id={inputId}
+                                    onChange={async e => {
+                                      const file = e.target.files?.[0];
+                                      if (!file || !activeTicket || !user || !profile) return;
+                                      e.target.value = '';
+                                      setIsDrainageSelfieUploading(true);
+                                      try {
+                                        const ext  = file.name.split('.').pop();
+                                        const path = `drainage/${activeTicket.id}/selfie-${day}-${Date.now()}.${ext}`;
+                                        const { error: upErr } = await supabase.storage.from('audit-media').upload(path, file, { upsert: true });
+                                        if (upErr) throw upErr;
+                                        const { data: { publicUrl } } = supabase.storage.from('audit-media').getPublicUrl(path);
+                                        const newSelfies = { ...selfies, [day]: { url: publicUrl, by: profile.name } };
+                                        const newSignOffs = { ...(activeTicket.signOffs || {}), drainageSelfies: newSelfies };
+                                        await supabase.from('auditTickets').update({ signOffs: newSignOffs, updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
+                                        setActiveTicket({ ...activeTicket, signOffs: newSignOffs });
+                                      } catch (err: any) {
+                                        alert('Upload failed: ' + (err.message || err));
+                                      } finally {
+                                        setIsDrainageSelfieUploading(false);
+                                      }
+                                    }}
+                                  />
+                                  <label
+                                    htmlFor={inputId}
+                                    className={cn(
+                                      "flex items-center gap-1 px-3 py-1.5 text-[10px] font-bold rounded-lg cursor-pointer transition-all active:scale-95",
+                                      isDrainageSelfieUploading
+                                        ? "bg-slate-100 text-slate-400 cursor-not-allowed"
+                                        : selfie
+                                          ? "bg-white border border-cyan-300 text-cyan-700 hover:bg-cyan-50"
+                                          : "bg-cyan-600 text-white hover:bg-cyan-700"
+                                    )}
+                                  >
+                                    {isDrainageSelfieUploading
+                                      ? <Loader2 size={11} className="animate-spin" />
+                                      : <><Camera size={11} /> {selfie ? 'Re-upload' : 'Upload'}</>
+                                    }
+                                  </label>
+                                </div>
+                              </div>
+                            );
+                          })}
                         </div>
-                      ) : (
-                        <button onClick={() => drainageSelfieRef.current?.click()} disabled={isDrainageSelfieUploading} className="flex items-center gap-2 px-4 py-2 bg-cyan-600 text-white text-xs font-bold rounded-xl hover:bg-cyan-700 transition-all disabled:opacity-60 active:scale-95">
-                          {isDrainageSelfieUploading ? <><Loader2 size={14} className="animate-spin" /> Uploading…</> : <><Camera size={14} /> Upload Drainage Selfie</>}
-                        </button>
-                      )}
-                      <input type="file" accept="image/*" capture="environment" className="hidden" ref={drainageSelfieRef} onChange={handleDrainageSelfieUpload} />
-                    </div>
+                      );
+                    })()}
+                    {/* Keep old single-ref for backward compat */}
+                    <input type="file" accept="image/*" capture="environment" className="hidden" ref={drainageSelfieRef} onChange={handleDrainageSelfieUpload} />
 
-                    {!isDrainageToday && activeTicket.signOffs?.drainageDate && (
-                      <p className="mt-3 text-[11px] sm:text-xs font-bold text-rose-600 flex items-center gap-1.5"><AlertCircle size={14} /> Inputs are currently locked. The Drainage Date must be set to today ({todayStr}) to edit quantities.</p>
-                    )}
+
                   </>
                 ) : (
                   <>
@@ -1754,7 +1899,37 @@ export function ExecutionModule() {
           )}
 
           {!isSubmittedPhase && activeTicket.status !== 'auditor_submitted' && activeTicket.status !== 'drainage_pending' && (isAuditor || isAdminOrSuperadmin) && (
-            <CheckInBlock activeTicket={activeTicket} setActiveTicket={setActiveTicket} user={user} profile={profile} isAdminOrSuperadmin={isAdminOrSuperadmin} isActionableDate={isActionableDate} />
+            <div>
+              {/* Admin: Add / Remove day buttons */}
+              {isAdminOrSuperadmin && (
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Check-In Days: {(activeTicket as any).auditDays || 1}</span>
+                  <button
+                    onClick={async () => {
+                      const newDays = ((activeTicket as any).auditDays || 1) + 1;
+                      await supabase.from('auditTickets').update({ auditDays: newDays, updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
+                      setActiveTicket({ ...activeTicket, auditDays: newDays } as any);
+                    }}
+                    className="flex items-center gap-1 px-3 py-1 bg-indigo-600 text-white text-xs font-bold rounded-lg hover:bg-indigo-700 transition-all active:scale-95"
+                  >
+                    <Plus size={12} /> Add Day
+                  </button>
+                  {((activeTicket as any).auditDays || 1) > 1 && (
+                    <button
+                      onClick={async () => {
+                        const newDays = Math.max(1, ((activeTicket as any).auditDays || 1) - 1);
+                        await supabase.from('auditTickets').update({ auditDays: newDays, updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
+                        setActiveTicket({ ...activeTicket, auditDays: newDays } as any);
+                      }}
+                      className="flex items-center gap-1 px-3 py-1 bg-rose-100 text-rose-700 text-xs font-bold rounded-lg hover:bg-rose-200 transition-all active:scale-95"
+                    >
+                      <X size={12} /> Remove Day
+                    </button>
+                  )}
+                </div>
+              )}
+              <CheckInBlock activeTicket={activeTicket} setActiveTicket={setActiveTicket} user={user} profile={profile} isAdminOrSuperadmin={isAdminOrSuperadmin} isActionableDate={isActionableDate} />
+            </div>
           )}
 
           <div className="space-y-6 sm:space-y-8 w-full min-w-0">
@@ -1953,7 +2128,7 @@ export function ExecutionModule() {
                             </td>
 
                             <td className="px-4 py-3 sm:py-4 text-right text-slate-500 text-[10px] sm:text-xs font-medium">
-                              {isAdminOrSuperadmin ? (
+                              {isAdminOrSuperadmin && !isDrainagePhase ? (
                                 <div className="flex items-center justify-end gap-0.5">
                                   <span className="text-[10px] text-slate-400">₹</span>
                                   <input
@@ -1971,25 +2146,40 @@ export function ExecutionModule() {
                             </td>
                             <td className="px-4 py-3 sm:py-4 text-right font-black text-slate-900">₹{item.totalValue.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</td>
 
-                            {/* Remarks — editable for auditor and superadmin only */}
-                            <td className="px-3 py-3 sm:py-4 text-left min-w-[140px]">
-                              {(canEditItems || isSuperAdmin) && !isClosedPhase ? (
-                                <input
-                                  type="text"
-                                  placeholder="Add remark..."
-                                  value={item.remarks || ''}
-                                  onChange={e => {
-                                    const val = e.target.value;
-                                    setItems(prev => prev.map(i => i.id === item.id ? { ...i, remarks: val } : i));
-                                    latestEditsRef.current[item.id] = { ...(latestEditsRef.current[item.id] || item), remarks: val };
-                                  }}
-                                  onBlur={() => {
-                                    const toSave = latestEditsRef.current[item.id] || item;
-                                    saveQueue.schedule(item.id, { remarks: toSave.remarks || '' });
-                                  }}
-                                  className="w-full min-w-[120px] px-2 py-1.5 text-xs font-medium bg-white border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-400 outline-none text-slate-700 placeholder:text-slate-300"
-                                />
-                              ) : (
+                            {/* Remarks — required dropdown for Primary Damage / Non-Saleable */}
+                            <td className="px-3 py-3 sm:py-4 text-left min-w-[160px]">
+                              {(canEditItems || isSuperAdmin) && !isClosedPhase ? (() => {
+                                const hasDmg = (item.qtyDamaged || 0) > 0;
+                                const hasNs  = (item.qtyNonSaleable || 0) > 0;
+                                const needsRemark = hasDmg || hasNs;
+                                const dmgOptions = ['Sending Invoice'];
+                                const nsOptions  = ['Damaged Bottles/Cans', 'Label Damage', 'Packaging Defects', 'Leakage'];
+                                const options = hasDmg ? dmgOptions : nsOptions;
+                                const missingRemark = needsRemark && !item.remarks;
+                                return (
+                                  <div className="flex flex-col gap-1">
+                                    <select
+                                      value={item.remarks || ''}
+                                      onChange={e => {
+                                        const val = e.target.value;
+                                        setItems(prev => prev.map(i => i.id === item.id ? { ...i, remarks: val } : i));
+                                        latestEditsRef.current[item.id] = { ...(latestEditsRef.current[item.id] || item), remarks: val };
+                                        saveQueue.schedule(item.id, { remarks: val });
+                                      }}
+                                      className={cn(
+                                        "w-full min-w-[140px] px-2 py-1.5 text-xs font-medium bg-white border rounded-lg focus:ring-2 focus:ring-indigo-400 outline-none text-slate-700",
+                                        missingRemark ? "border-red-400 bg-red-50" : "border-slate-200"
+                                      )}
+                                    >
+                                      <option value="">{needsRemark ? "Select remark *" : "— optional —"}</option>
+                                      {(needsRemark ? options : [...dmgOptions, ...nsOptions]).map(opt => (
+                                        <option key={opt} value={opt}>{opt}</option>
+                                      ))}
+                                    </select>
+                                    {missingRemark && <p className="text-[9px] text-red-500 font-bold">Required for this item</p>}
+                                  </div>
+                                );
+                              })() : (
                                 <span className="text-xs text-slate-600 font-medium">{item.remarks || <span className="text-slate-300 italic">—</span>}</span>
                               )}
                             </td>
@@ -2192,8 +2382,8 @@ export function ExecutionModule() {
               <div className="pt-6 sm:pt-8 flex justify-end border-t border-slate-200 w-full">
                 <button 
                   onClick={submitDrainage} 
-                  disabled={!activeTicket.signOffs?.drainageDate || !isDrainageToday}
-                  title={!activeTicket.signOffs?.drainageDate ? "Please wait for an Admin to set a Drainage Date first" : !isDrainageToday ? "Drainage can only be completed on the exact scheduled date" : ""}
+                  disabled={!activeTicket.signOffs?.drainageDate}
+                  title={!activeTicket.signOffs?.drainageDate ? "Please set a Drainage Date first" : "Complete Drainage"}
                   className="w-full sm:w-auto flex justify-center items-center gap-2 px-6 sm:px-8 py-3.5 sm:py-4 bg-cyan-600 text-white rounded-xl sm:rounded-2xl font-bold hover:bg-cyan-700 transition-all shadow-xl shadow-cyan-600/20 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed text-sm sm:text-base"
                 >
                   <CheckCircle2 size={18} /> Complete Drainage & Close Audit
@@ -2225,7 +2415,7 @@ export function ExecutionModule() {
   const activeTickets = tickets.filter(t => ['scheduled', 'in_progress', 'auditor_submitted'].includes(t.status));
   const signoffTickets = tickets.filter(t => t.status === 'submitted');
   const drainageTickets = tickets.filter(t => t.status === 'drainage_pending');
-  const completedTickets = tickets.filter(t => t.status === 'closed' && t.updatedAt?.startsWith(todayStr));
+  const completedTickets = tickets.filter(t => t.status === 'closed' || t.status === 'completed');
 
   let baseDisplayTickets: AuditTicket[] = [];
   if (activeTab === 'active') baseDisplayTickets = activeTickets;
