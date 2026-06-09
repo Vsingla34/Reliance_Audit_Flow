@@ -534,27 +534,27 @@ export function DistributorsModule() {
   };
 
   return (
-    <div className="space-y-8 pb-12">
-      <div className="flex flex-col xl:flex-row justify-between gap-6">
-        <div className="flex flex-col md:flex-row gap-4 flex-1">
-          <div className="relative flex-1 max-w-md group">
+    <div className="w-full max-w-full min-w-0 space-y-6 pb-12 overflow-hidden">
+      <div className="flex w-full min-w-0 flex-col gap-4 2xl:flex-row 2xl:items-start 2xl:justify-between">
+        <div className="flex w-full min-w-0 flex-col gap-3 lg:flex-row lg:flex-wrap 2xl:flex-nowrap 2xl:flex-1">
+          <div className="relative w-full min-w-[220px] lg:flex-1 lg:basis-[260px] 2xl:max-w-md group">
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-400 group-focus-within:text-black transition-colors" size={18} />
-            <input type="text" placeholder="Search distributors..." className="w-full pl-12 pr-4 py-4 bg-white border border-zinc-200 rounded-2xl focus:focus:border-black transition-all shadow-sm outline-none" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
+            <input type="text" placeholder="Search distributors..." className="w-full pl-12 pr-4 py-4 bg-white border border-zinc-200 rounded-2xl focus:border-black transition-all shadow-sm outline-none" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
           </div>
 
           {profile?.role !== 'ase' && (
-            <div className="flex items-center gap-4">
+            <div className="flex w-full flex-wrap items-center gap-3 lg:w-auto lg:flex-nowrap">
               {['superadmin', 'admin', 'ho', 'dm', 'sm'].includes(profile?.role || '') && (
                 <div className="relative group">
                   <Filter className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-400 pointer-events-none" size={16} />
-                  <select className="w-full md:w-auto min-w-[160px] pl-12 pr-4 py-4 bg-white border border-zinc-200 rounded-2xl focus:ring-2 focus:ring-black outline-none shadow-sm cursor-pointer appearance-none font-medium" value={filterAsm} onChange={(e) => setFilterAsm(e.target.value)}>
+                  <select className="w-full min-w-[220px] lg:w-[260px] 2xl:w-[240px] pl-12 pr-4 py-4 bg-white border border-zinc-200 rounded-2xl focus:ring-2 focus:ring-black outline-none shadow-sm cursor-pointer appearance-none font-medium" value={filterAsm} onChange={(e) => setFilterAsm(e.target.value)}>
                     <option value="all">All ASMs</option>{asms.map(a => <option key={a.uid} value={a.uid}>{a.name}</option>)}
                   </select>
                 </div>
               )}
               <div className="relative group">
                 <Filter className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-400 pointer-events-none" size={16} />
-                <select className="w-full md:w-auto min-w-[160px] pl-12 pr-4 py-4 bg-white border border-zinc-200 rounded-2xl focus:ring-2 focus:ring-black outline-none shadow-sm cursor-pointer appearance-none font-medium" value={filterAse} onChange={(e) => setFilterAse(e.target.value)}>
+                <select className="w-full min-w-[220px] lg:w-[260px] 2xl:w-[240px] pl-12 pr-4 py-4 bg-white border border-zinc-200 rounded-2xl focus:ring-2 focus:ring-black outline-none shadow-sm cursor-pointer appearance-none font-medium" value={filterAse} onChange={(e) => setFilterAse(e.target.value)}>
                   <option value="all">All ASEs</option>{ases.map(a => <option key={a.uid} value={a.uid}>{a.name}</option>)}
                 </select>
               </div>
@@ -563,7 +563,7 @@ export function DistributorsModule() {
         </div>
         
         {canManage && (
-          <div className="flex flex-wrap md:flex-nowrap gap-4">
+          <div className="flex w-full flex-wrap items-center justify-start gap-3 2xl:w-auto 2xl:flex-nowrap 2xl:justify-end 2xl:shrink-0">
             <AnimatePresence>
               {selectedIds.size > 0 && (
                 <motion.button initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }} onClick={() => setIsEmailModalOpen(true)} className="flex items-center justify-center gap-2 px-6 py-4 bg-blue-600 text-white rounded-2xl font-bold hover:bg-blue-700 transition-all shadow-xl shadow-blue-600/20 active:scale-95 whitespace-nowrap">
@@ -581,13 +581,13 @@ export function DistributorsModule() {
         )}
       </div>
 
-      <div className="bg-white rounded-[2.5rem] border border-zinc-200 shadow-sm overflow-hidden flex flex-col">
-        <div className="overflow-x-auto flex-1">
-          <table className="w-full">
+      <div className="w-full max-w-full min-w-0 bg-white rounded-[2rem] border border-zinc-200 shadow-sm overflow-hidden flex flex-col">
+        <div className="w-full max-w-full overflow-x-auto flex-1">
+          <table className="w-full min-w-[980px] table-fixed">
             <thead>
               <tr className="text-left bg-zinc-50/50 border-b border-zinc-100">
                 {canManage && (
-                  <th className="px-6 py-5 w-10">
+                  <th className="px-4 py-5 w-12">
                     <input 
                       type="checkbox" 
                       className="w-5 h-5 rounded border-zinc-300 text-black focus:ring-black cursor-pointer"
@@ -596,18 +596,18 @@ export function DistributorsModule() {
                     />
                   </th>
                 )}
-                <th className="px-8 py-5 text-xs font-bold text-zinc-400 uppercase tracking-wider">Distributor</th>
-                <th className="px-8 py-5 text-xs font-bold text-zinc-400 uppercase tracking-wider">Region / Location</th>
-                <th className="px-8 py-5 text-xs font-bold text-zinc-400 uppercase tracking-wider">Hierarchy (ASEs)</th>
-                <th className="px-8 py-5 text-xs font-bold text-zinc-400 uppercase tracking-wider">Approved Limit</th>
-                {canManage && <th className="px-8 py-5 text-xs font-bold text-zinc-400 uppercase tracking-wider text-right">Actions</th>}
+                <th className="px-5 py-5 text-xs font-bold text-zinc-400 uppercase tracking-wider w-[34%]">Distributor</th>
+                <th className="px-5 py-5 text-xs font-bold text-zinc-400 uppercase tracking-wider w-[20%]">Region / Location</th>
+                <th className="px-5 py-5 text-xs font-bold text-zinc-400 uppercase tracking-wider w-[18%]">Hierarchy (ASEs)</th>
+                <th className="px-5 py-5 text-xs font-bold text-zinc-400 uppercase tracking-wider w-[16%]">Approved Limit</th>
+                {canManage && <th className="px-5 py-5 text-xs font-bold text-zinc-400 uppercase tracking-wider text-right w-[12%]">Actions</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-100">
               {paginatedDistributors.map((dist) => (
                 <tr key={dist.id} className={cn("hover:bg-zinc-50/50 transition-colors group", selectedIds.has(dist.id) && "bg-blue-50/30")}>
                   {canManage && (
-                    <td className="px-6 py-5">
+                    <td className="px-4 py-5">
                       <input 
                         type="checkbox" 
                         className="w-5 h-5 rounded border-zinc-300 text-black focus:ring-black cursor-pointer"
@@ -616,14 +616,14 @@ export function DistributorsModule() {
                       />
                     </td>
                   )}
-                  <td className="px-8 py-5">
-                    <div className="flex items-center gap-4">
+                  <td className="px-5 py-5 align-middle">
+                    <div className="flex items-center gap-4 min-w-0">
                       <div className={cn("w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 transition-colors", selectedIds.has(dist.id) ? "bg-blue-100 text-blue-600" : "bg-zinc-100 text-zinc-500")}>
                         <Store size={20} />
                       </div>
-                      <div>
+                      <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2 mb-1">
-                          <p className="font-bold text-zinc-900">{dist.name}</p>
+                          <p className="font-bold text-zinc-900 break-words leading-snug">{dist.name}</p>
                           {!dist.active && <span className="px-2 py-0.5 rounded-lg bg-red-100 text-red-600 text-[10px] font-bold uppercase tracking-wider">Inactive</span>}
                         </div>
                         <div className="flex flex-wrap items-center gap-2">
@@ -634,16 +634,16 @@ export function DistributorsModule() {
                       </div>
                     </div>
                   </td>
-                  <td className="px-8 py-5">
+                  <td className="px-5 py-5 align-middle">
                     <div className="flex flex-col gap-1">
                       {dist.region && <span className="text-xs font-bold text-zinc-900">{dist.region}</span>}
                       <div className="flex items-center gap-1.5 text-sm text-zinc-500" title={dist.address || ''}>
                         <MapPin size={12} className="shrink-0" />
-                        <span className="truncate max-w-[150px]">{dist.city || 'No City'}{dist.state ? `, ${dist.state}` : ''}</span>
+                        <span className="truncate max-w-[180px]">{dist.city || 'No City'}{dist.state ? `, ${dist.state}` : ''}</span>
                       </div>
                     </div>
                   </td>
-                  <td className="px-8 py-5">
+                  <td className="px-5 py-5 align-middle">
                     <div className="flex items-center gap-2 bg-zinc-50 px-3 py-1.5 rounded-xl inline-flex border border-zinc-100">
                       <Network size={14} className="text-zinc-400 shrink-0" />
                       <span className="text-sm font-medium text-zinc-700 truncate max-w-[150px]">
@@ -653,14 +653,14 @@ export function DistributorsModule() {
                       </span>
                     </div>
                   </td>
-                  <td className="px-8 py-5">
+                  <td className="px-5 py-5 align-middle">
                     <div className="flex items-center gap-1 font-bold text-zinc-900 bg-emerald-50 text-emerald-700 px-3 py-1.5 rounded-xl inline-flex border border-emerald-100/50">
                       <IndianRupee size={14} /><span>{dist.approvedValue.toLocaleString('en-IN')}</span>
                     </div>
                   </td>
                   
                   {canManage && (
-                    <td className="px-8 py-5 text-right">
+                    <td className="px-5 py-5 text-right align-middle">
                       <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                         <button onClick={() => openEditModal(dist)} className="p-2 text-zinc-400 hover:text-black hover:bg-zinc-100 rounded-xl transition-all" title="Edit Distributor"><Edit2 size={16} /></button>
                         <button onClick={() => deleteDist(dist.id)} className="p-2 text-zinc-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all" title="Delete Distributor"><Trash2 size={16} /></button>
