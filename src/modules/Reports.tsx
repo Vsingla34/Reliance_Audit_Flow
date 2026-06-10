@@ -47,9 +47,11 @@ interface ReportRow {
   issueDetail:    string;
   auditorRemarks: string;
   // Extra context
-  scheduledDate:  string;
-  auditStatus:    string;
-  approvedValue:  number;
+  scheduledDate:    string;
+  auditStatus:      string;
+  approvedValue:    number;
+  drainageStartDate: string;
+  drainageEndDate:   string;
 }
 
 export function ReportsModule() {
@@ -225,7 +227,9 @@ export function ReportsModule() {
             mfgQuarter:      mfgQ,
             issueDetail:     item.reasonCode || '',
             auditorRemarks:  item.remarks    || '',
-            scheduledDate:   ticket.scheduledDate || '',
+            scheduledDate:      ticket.scheduledDate || '',
+            drainageStartDate: ticket.signOffs?.drainageDate    || '',
+            drainageEndDate:   ticket.signOffs?.drainageEndDate || '',
             auditStatus:     ticket.status   || '',
             approvedValue:   ticket.approvedValue || 0,
           });

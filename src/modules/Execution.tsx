@@ -187,8 +187,8 @@ export function ExecutionModule() {
           ticket.approvedValue ? (ticket.approvedValue / 10000000) : 0,
           ticket.scheduledDate ? new Date(ticket.scheduledDate) : '',
           endDate ? new Date(endDate) : '',
-          (ticket as any).signOffs?.drainageDate ? new Date((ticket as any).signOffs.drainageDate) : '',
-          '',
+          (ticket as any).signOffs?.drainageDate    ? new Date((ticket as any).signOffs.drainageDate)    : '',
+          (ticket as any).signOffs?.drainageEndDate  ? new Date((ticket as any).signOffs.drainageEndDate) : '',
           '',
           ticket.scheduledDate ? new Date(ticket.scheduledDate) : '',
           'Direct',
@@ -1526,7 +1526,7 @@ export function ExecutionModule() {
       active:              d.active,
     };
   })() : undefined;
-  const { exportSignOff, isExporting, exportClaimPDF, isExportingPDF } = useSignOffExport({
+  const { exportSignOff, isExporting, exportClaimPDF, isExportingPDF, exportALFPDF, isExportingALF } = useSignOffExport({
     distributor: activeTicketDist,
     audit: {
       id:            activeTicket?.id ?? '',
@@ -1540,7 +1540,8 @@ export function ExecutionModule() {
         d.setDate(d.getDate() + days - 1);
         return d.toISOString().split('T')[0];
       })(),
-      drainageDate:  activeTicket?.signOffs?.drainageDate ?? null,
+      drainageDate:    activeTicket?.signOffs?.drainageDate    ?? null,
+      drainageEndDate: activeTicket?.signOffs?.drainageEndDate ?? null,
       approvedValue: activeTicket?.approvedValue ?? 0,
       verifiedTotal: activeTicket?.verifiedTotal ?? 0,
       // Pull auditor name from the assigned auditors list
@@ -1598,13 +1599,9 @@ export function ExecutionModule() {
       : (isAuditor || isAdminOrSuperadmin) && canUploadFiles && activeTicket.status === 'in_progress' && !isClosedPhase;
     const canEditDrainage = (isSuperAdmin || isAdminOrSuperadmin || isAuditor) && activeTicket.status === 'drainage_pending';
 
-    // ── Sign-off export unlock condition ──────────────────────────────────────
-    // Schema: auditTickets.whatsappMediaApproved is a direct bool column
-    // Fall back to signOffs JSONB for backward compat with older records
-    const whatsappApproved =
-      activeTicket.signOffs?.whatsappMediaApproved === true ||
-      (activeTicket as any).whatsappMediaApproved === true ||
-      activeTicket.signOffs?.whatsappApproved === true;
+    // WhatsApp evidence must be approved before export is enabled
+    // Only read from signOffs JSONB — the direct column fallback was causing false positives
+    const whatsappApproved = activeTicket.signOffs?.whatsappMediaApproved === true;
 
     const percentUsed = ((activeTicket.verifiedTotal || 0) / activeTicket.approvedValue) * 100;
     
@@ -1678,6 +1675,24 @@ export function ExecutionModule() {
                 {isExportingPDF
                   ? <><Loader2 size={15} className="animate-spin" /> Generating…</>
                   : <><FileText size={15} /> <span className="hidden sm:inline">Claim Letter PDF</span><span className="sm:hidden">PDF</span></>
+                }
+              </button>
+
+              {/* ALF PDF — Article Level Format as PDF */}
+              <button
+                onClick={exportALFPDF}
+                disabled={!whatsappApproved || isExportingALF || items.length === 0}
+                title={!whatsappApproved ? "Unlocked after Admin approves WhatsApp Evidence" : "Download Article Level Format as PDF"}
+                className={cn(
+                  "flex-1 sm:flex-none flex justify-center items-center gap-2 px-3 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all border",
+                  whatsappApproved && items.length > 0
+                    ? "bg-amber-50 text-amber-700 hover:bg-amber-100 border-amber-200"
+                    : "bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed"
+                )}
+              >
+                {isExportingALF
+                  ? <><Loader2 size={15} className="animate-spin" /> Generating…</>
+                  : <><FileText size={15} /> <span className="hidden sm:inline">ALF PDF</span><span className="sm:hidden">ALF</span></>
                 }
               </button>
 
@@ -2380,10 +2395,19 @@ export function ExecutionModule() {
 
             {(isAuditor || isAdminOrSuperadmin) && activeTicket.status === 'drainage_pending' && (
               <div className="pt-6 sm:pt-8 flex justify-end border-t border-slate-200 w-full">
+                {!activeTicket.signOffs?.drainageMediaApproved && (
+                  <p className="text-xs font-bold text-amber-600 flex items-center gap-1.5 mr-auto">
+                    <AlertCircle size={14} /> Drainage Evidence must be marked received before closing.
+                  </p>
+                )}
                 <button 
                   onClick={submitDrainage} 
-                  disabled={!activeTicket.signOffs?.drainageDate}
-                  title={!activeTicket.signOffs?.drainageDate ? "Please set a Drainage Date first" : "Complete Drainage"}
+                  disabled={!activeTicket.signOffs?.drainageDate || !activeTicket.signOffs?.drainageMediaApproved}
+                  title={
+                    !activeTicket.signOffs?.drainageDate ? "Please set a Drainage Date first" :
+                    !activeTicket.signOffs?.drainageMediaApproved ? "Drainage Evidence must be marked received first" :
+                    "Complete Drainage & Close Audit"
+                  }
                   className="w-full sm:w-auto flex justify-center items-center gap-2 px-6 sm:px-8 py-3.5 sm:py-4 bg-cyan-600 text-white rounded-xl sm:rounded-2xl font-bold hover:bg-cyan-700 transition-all shadow-xl shadow-cyan-600/20 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed text-sm sm:text-base"
                 >
                   <CheckCircle2 size={18} /> Complete Drainage & Close Audit
