@@ -214,24 +214,7 @@ function buildSignSheet(ws: ExcelJS.Worksheet, dist: SignOffDistributor, audit: 
   ];
   for (const [col,val,fmt] of totals) scT(r,col,val,{hAlign:'center',vAlign:'middle',wrap:false,border:thinBorder,numFmt:fmt});
 
-  // Remarks table
-  const itemsWithRemarks = items.filter(i => i.remarks && i.remarks.trim());
-  if (itemsWithRemarks.length > 0) {
-    nr(6); nr(16);
-    safeMerge(ws,r,2,r,13);
-    scT(r,2,'Item-wise Remarks',{bold:true,size:9,fill:C.LIGHT_BLUE,hAlign:'left',vAlign:'middle',wrap:false,border:thinBorder});
-    nr(14);
-    const remHdrs: Array<[number,number,string]> = [[2,3,'Article Code'],[4,7,'Brand Pack / Description'],[8,9,'Qty'],[10,13,'Remark']];
-    for (const [c1,c2,text] of remHdrs) { safeMerge(ws,r,c1,r,c2); scT(r,c1,text,{bold:true,size:8,fill:C.LIGHT_BLUE,hAlign:'center',vAlign:'middle',wrap:false,border:thinBorder}); }
-    for (const item of itemsWithRemarks) {
-      nr(14);
-      const qty = (item.qtyDamaged||0)+(item.qtyNonSaleable||0)+(item.qtyBBD||0);
-      safeMerge(ws,r,2,r,3);  scT(r,2,item.articleNumber||'',{size:8,hAlign:'left',border:thinBorder});
-      safeMerge(ws,r,4,r,7);  scT(r,4,item.description||'',{size:8,hAlign:'left',border:thinBorder});
-      safeMerge(ws,r,8,r,9);  scT(r,8,qty,{size:8,hAlign:'center',border:thinBorder});
-      safeMerge(ws,r,10,r,13); scT(r,10,item.remarks||'',{size:8,hAlign:'left',border:thinBorder});
-    }
-  }
+  // (Item-wise remarks table removed — Sign Format shows only the summary row)
 
   nr(6); nr(6);
 
