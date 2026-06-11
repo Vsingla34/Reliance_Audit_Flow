@@ -648,17 +648,8 @@ export function ExecutionModule() {
             return;
         }
     }
-    // Rule 1: exp cannot be before mfg
-    if (field === 'expDate' && value && updatedItem.mfgDate && value < updatedItem.mfgDate) {
-        alert(`Expiry date (${value}) cannot be before Manufacturing date (${updatedItem.mfgDate}).`);
-        if (e && e.target) e.target.value = oldItem.expDate || '';
-        return;
-    }
-    if (field === 'mfgDate' && value && updatedItem.expDate && updatedItem.expDate < value) {
-        alert(`Manufacturing date (${value}) cannot be after Expiry date (${updatedItem.expDate}).`);
-        if (e && e.target) e.target.value = oldItem.mfgDate || '';
-        return;
-    }
+    // NOTE: exp/mfg date cross-validation moved to saveInlineEdit (onBlur)
+    // so it doesn't fire mid-keystroke and revert a partially-typed date.
 
     const currentExp = field === 'expDate' ? value : updatedItem.expDate;
     if (currentExp && activeTicket?.scheduledDate) {
@@ -705,6 +696,12 @@ export function ExecutionModule() {
     
     const itemToSave = latestEditsRef.current[id] || itemsRef.current.find(i => i.id === id);
     if (!itemToSave) return;
+
+    // ── Date validation on blur (after user finishes typing) ──────────────
+    if (itemToSave.expDate && itemToSave.mfgDate && itemToSave.expDate < itemToSave.mfgDate) {
+        alert(`Expiry date (${itemToSave.expDate}) cannot be before Manufacturing date (${itemToSave.mfgDate}). Please correct it.`);
+        return; // don't save — let user fix the date, value stays as typed
+    }
 
     // Always recompute qty and totalValue from source fields before saving
     // This prevents stale values going to DB when only rate was changed
@@ -1206,6 +1203,7 @@ export function ExecutionModule() {
         promptTitle:      'Expiry Date',
         prompt:           'Must be 60+ days after Mfg date. BBD items: must be ≤ audit date. Primary Damage & Non-Saleable: future dates allowed. Format: DD-MM-YYYY e.g. 15-03-2026',
       };
+      ws.getCell(expCell).numFmt = 'DD-MM-YYYY';
       // Remarks dropdown — Primary Damage: "Sending Invoice", Non-Saleable: damage reasons
       const remarkCell = `J${rowNum}`;
       ws.getCell(remarkCell).dataValidation = {
@@ -1304,7 +1302,8 @@ export function ExecutionModule() {
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement('a');
     a.href     = url;
-    a.download = `AuditUpload_${dist?.name || distCode}_${activeTicket?.scheduledDate || 'draft'}.xlsx`;
+    const safeDistName = (dist?.name || distCode || 'Audit').replace(/[\\/:*?"<>|]/g, '-');
+    a.download = `AuditUpload_${safeDistName}_${activeTicket?.scheduledDate || 'draft'}.xlsx`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);

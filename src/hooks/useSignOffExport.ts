@@ -557,7 +557,8 @@ export function useSignOffExport(params: {
       const blob = new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
       const url  = URL.createObjectURL(blob);
       const a    = document.createElement('a');
-      a.href = url; a.download = `AuditReport_${params.distributor.code}_${params.audit.scheduledDate??'draft'}.xlsx`;
+      const safeName = (freshDist.name || params.distributor.code || 'Audit').replace(/[\\/:*?"<>|]/g, '-');
+      a.href = url; a.download = `AuditReport_${safeName}_${params.audit.scheduledDate??'draft'}.xlsx`;
       document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
     } catch(err){ console.error(err); alert('Failed to generate Excel. Please try again.'); }
     finally { setIsExporting(false); }
