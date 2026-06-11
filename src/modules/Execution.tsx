@@ -182,8 +182,8 @@ export function ExecutionModule() {
           verifiedVal,
           '',
           diff,
-          statusLabel[ticket.status] || ticket.status,
           '',
+          statusLabel[ticket.status] || ticket.status,
           ticket.approvedValue ? (ticket.approvedValue / 10000000) : 0,
           ticket.scheduledDate ? new Date(ticket.scheduledDate) : '',
           endDate ? new Date(endDate) : '',
@@ -271,6 +271,12 @@ export function ExecutionModule() {
         (payload: any) => {
           const updated = payload.new as AuditTicket;
           setTickets(prev => prev.map(t => t.id === updated.id ? { ...t, ...updated } : t));
+          // Also patch activeTicket if it's the same ticket and this update is newer than what we have
+          setActiveTicket(prev => {
+            if (!prev || prev.id !== updated.id) return prev;
+            if (prev.updatedAt && updated.updatedAt && new Date(updated.updatedAt).getTime() <= new Date(prev.updatedAt).getTime()) return prev;
+            return { ...prev, ...updated };
+          });
         })
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'auditTickets' },
         (payload: any) => {
@@ -394,14 +400,9 @@ export function ExecutionModule() {
     }
   }, [activeTicket?.id, activeDistCode]);
 
-  useEffect(() => {
-    if (activeTicket) {
-      const updated = tickets.find(t => t.id === activeTicket.id);
-      if (updated && JSON.stringify(updated) !== JSON.stringify(activeTicket)) {
-        setActiveTicket(updated);
-      }
-    }
-  }, [tickets, activeTicket]);
+  // NOTE: removed the tickets<->activeTicket auto-sync effect — it was reverting
+  // local optimistic updates (selfie uploads, inline edits) before they could
+  // be persisted/observed. activeTicket is now updated directly by each handler.
 
   const forceUpdateStatus = async (newStatus: string) => {
     if (!activeTicket || !user || !profile) return;
@@ -1246,48 +1247,57 @@ export function ExecutionModule() {
       });
     }
 
-    // ── Attendance Sheet (matches sign-off format) ────────────────────────
+    // ── Attendance Sheet (matches Sign-off "Mandays details" format + Check-in/out) ──
     const wsAtt = wb.addWorksheet('Attendance Sheet');
-    wsAtt.columns = [{ width: 5 }, { width: 25 }, { width: 20 }, { width: 20 }, { width: 20 }, { width: 20 }];
+    wsAtt.columns = [6,20,14,14,12,12,10,10,12].map(w => ({ width: w }));
 
-    const attTitle = wsAtt.getRow(1);
-    wsAtt.mergeCells(1, 1, 1, 6);
-    attTitle.getCell(1).value     = 'Attendance Sheet';
-    attTitle.getCell(1).font      = { bold: true, size: 13 };
-    attTitle.getCell(1).alignment = { horizontal: 'center', vertical: 'middle' };
-    attTitle.getCell(1).fill      = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9E1F2' } };
-    attTitle.height               = 24;
+    const thinB = { top: { style: 'thin' as const }, bottom: { style: 'thin' as const }, left: { style: 'thin' as const }, right: { style: 'thin' as const } };
+    const hdrFill = { type: 'pattern' as const, pattern: 'solid' as const, fgColor: { argb: 'FFD9E1F2' } };
 
-    // Distributor info
-    const attInfo = [
-      [`Distributor: ${dist?.name || ''}`, `Code: ${distCode}`],
-      [`City: ${dist?.city || ''}`,         `Audit Date: ${activeTicket?.scheduledDate || ''}`],
-    ];
-    attInfo.forEach(([left, right], i) => {
-      const row = wsAtt.getRow(i + 2);
-      row.getCell(1).value = left;  row.getCell(1).font = { bold: true };
-      row.getCell(4).value = right; row.getCell(4).font = { bold: true };
+    // Title row
+    wsAtt.getRow(1).getCell(1).value = 'Mandays details (Do mention date wise/Auditor Wise details)';
+    wsAtt.getRow(1).getCell(1).font  = { name: 'Arial', bold: true, size: 10 };
+
+    // Header row — same as sign-off + Check-in / Check-out
+    const attHeaders = ['Day', 'Name of Auditor', 'Auditor no.', 'Date of audit', 'Check-in Time', 'Check-out Time', 'In Time', 'Out Time', 'Total Mandays', 'Counting/Drainage'];
+    wsAtt.columns = [6,20,14,14,12,12,10,10,12,14].map(w => ({ width: w }));
+    wsAtt.getRow(2).height = 25;
+    attHeaders.forEach((h, i) => {
+      const cell = wsAtt.getRow(2).getCell(i + 1);
+      cell.value     = h;
+      cell.font      = { name: 'Arial', bold: true, size: 9 };
+      cell.fill      = hdrFill;
+      cell.border    = thinB;
+      cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
     });
 
-    // Header row
-    wsAtt.getRow(5).values = ['S.No', 'Name', 'Designation', 'Signature', 'Date', 'Remarks'];
-    wsAtt.getRow(5).eachCell(cell => {
-      cell.font      = { bold: true };
-      cell.fill      = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2EFDA' } };
-      cell.border    = { top: { style: 'thin' }, bottom: { style: 'thin' }, left: { style: 'thin' }, right: { style: 'thin' } };
-      cell.alignment = { horizontal: 'center', vertical: 'middle' };
-    });
-    wsAtt.getRow(5).height = 20;
-
-    // 10 blank attendance rows
-    for (let i = 1; i <= 10; i++) {
-      const row = wsAtt.addRow([i, '', '', '', '', '']);
-      row.height = 22;
-      row.eachCell({ includeEmpty: true }, cell => {
-        cell.border    = { top: { style: 'thin' }, bottom: { style: 'thin' }, left: { style: 'thin' }, right: { style: 'thin' } };
+    // Blank data row(s) — one per audit day
+    const totalDays = (activeTicket as any)?.auditDays || 1;
+    for (let d = 1; d <= totalDays; d++) {
+      const r = 2 + d;
+      wsAtt.getRow(r).height = 20;
+      const cell1 = wsAtt.getRow(r).getCell(1);
+      cell1.value = d;
+      cell1.font  = { name: 'Arial', size: 9 };
+      cell1.alignment = { horizontal: 'center', vertical: 'middle' };
+      cell1.border = thinB;
+      for (let c = 2; c <= attHeaders.length; c++) {
+        const cell = wsAtt.getRow(r).getCell(c);
+        cell.value = '';
+        cell.font  = { name: 'Arial', size: 9 };
+        cell.border = thinB;
         cell.alignment = { horizontal: 'center', vertical: 'middle' };
-      });
+      }
     }
+
+    // Footer labels
+    const footerStart = 2 + totalDays + 2;
+    wsAtt.getRow(footerStart).getCell(1).value     = `Distributor: ${dist?.name || ''}`;
+    wsAtt.getRow(footerStart).getCell(1).font      = { name: 'Arial', bold: true, size: 10 };
+    wsAtt.getRow(footerStart + 1).getCell(1).value = 'Sales Team:';
+    wsAtt.getRow(footerStart + 1).getCell(1).font  = { name: 'Arial', size: 10 };
+    wsAtt.getRow(footerStart + 2).getCell(1).value = 'Auditor:';
+    wsAtt.getRow(footerStart + 2).getCell(1).font  = { name: 'Arial', size: 10 };
 
     const buf  = await wb.xlsx.writeBuffer();
     const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });

@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { supabase, logActivity } from '../../supabase';
 import { AuditTicket } from '../../types';
-import { Camera, CheckCircle2, Clock, Loader2, User, CalendarDays, X, ShieldCheck } from 'lucide-react';
+import { Camera, CheckCircle2, Clock, Loader2, User, CalendarDays, X, ShieldCheck, Trash2 } from 'lucide-react';
 import { cn } from '../../App';
 
 interface CheckInBlockProps {
@@ -18,6 +18,8 @@ export function CheckInBlock({
 }: CheckInBlockProps) {
   const [isUploading, setIsUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
 
   const BUCKET = 'audit-media';
 
@@ -45,19 +47,34 @@ export function CheckInBlock({
 
   // ── Upload selfie ─────────────────────────────────────────────────────────
   const handleSelfieUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    console.log('[CheckIn] handleSelfieUpload fired', e.target.files);
     const file = e.target.files?.[0];
-    if (!file || !user || !profile) return;
+    if (!file) { console.log('[CheckIn] no file selected'); return; }
+    if (!user || !profile) {
+      console.log('[CheckIn] missing user/profile', { user, profile });
+      setUploadError('Not signed in — please refresh and try again.');
+      return;
+    }
+
+    // Show local preview immediately so the box never looks empty
+    const localPreview = URL.createObjectURL(file);
+    setPreviewUrl(localPreview);
+    setUploadError(null);
 
     setIsUploading(true);
     try {
       const ext = file.name.split('.').pop();
       const path = `checkins/${activeTicket.id}/day${currentDay}-${Date.now()}.${ext}`;
+      console.log('[CheckIn] uploading to', BUCKET, path, file.size, file.type);
       const { error: uploadErr } = await supabase.storage
         .from(BUCKET)
         .upload(path, file, { upsert: true });
-      if (uploadErr) throw uploadErr;
+      if (uploadErr) { console.error('[CheckIn] storage upload error', uploadErr); throw uploadErr; }
+      console.log('[CheckIn] storage upload OK');
 
       const { data: { publicUrl } } = supabase.storage.from(BUCKET).getPublicUrl(path);
+      console.log('[CheckIn] publicUrl', publicUrl);
+      if (!publicUrl) throw new Error('Could not get a public URL for the uploaded file. Check that the "audit-media" bucket is set to public in Supabase Storage.');
 
       const newLog = {
         day: currentDay,
@@ -71,22 +88,29 @@ export function CheckInBlock({
         timestamp: new Date().toISOString(),
       };
 
-      const updatedLogs = [...presenceLogs.filter((l: any) => l.date !== todayStr), newLog];
+      const updatedLogs = [...presenceLogs.filter((l: any) => l.day !== currentDay && l.date !== todayStr), newLog];
 
-      await supabase.from('auditTickets').update({
+      const { error: dbErr } = await supabase.from('auditTickets').update({
         presenceLogs: updatedLogs,
         updatedAt: new Date().toISOString(),
       }).eq('id', activeTicket.id);
+      if (dbErr) { console.error('[CheckIn] DB update error', dbErr); throw dbErr; }
+      console.log('[CheckIn] DB update OK, new presenceLogs', updatedLogs);
 
       setActiveTicket({ ...activeTicket, presenceLogs: updatedLogs });
 
       logActivity(user, profile, 'Check-In Selfie Uploaded',
         `Day ${currentDay} selfie uploaded for ${activeTicket.id}${isAdminOrSuperadmin ? ' (auto-approved)' : ''}`);
+      setPreviewUrl(null); // DB now has the real URL — drop local preview
     } catch (err: any) {
-      alert(`Upload failed: ${err.message || err}`);
+      console.error('Selfie upload failed:', err);
+      setUploadError(err?.message || String(err));
+      setPreviewUrl(null);
+      console.error('Upload failed:', err?.message || err);
     } finally {
       setIsUploading(false);
       if (fileRef.current) fileRef.current.value = '';
+      URL.revokeObjectURL(localPreview);
     }
   };
 
@@ -117,6 +141,23 @@ export function CheckInBlock({
       presenceLogs: updated, updatedAt: new Date().toISOString()
     }).eq('id', activeTicket.id);
     setActiveTicket({ ...activeTicket, presenceLogs: updated });
+  };
+
+  // Admin/superadmin: completely remove a selfie (any status) so the auditor can re-upload
+  const handleRemoveSelfie = async (log: any) => {
+    if (!isAdminOrSuperadmin) return;
+    if (!confirm(`Remove the Day ${log.day} selfie? The auditor will need to upload again.`)) return;
+    const updated = presenceLogs.map((l: any) =>
+      l.date === log.date
+        ? { ...l, selfieUrl: null, status: 'pending', approvedBy: null }
+        : l
+    );
+    await supabase.from('auditTickets').update({
+      presenceLogs: updated, updatedAt: new Date().toISOString()
+    }).eq('id', activeTicket.id);
+    setActiveTicket({ ...activeTicket, presenceLogs: updated });
+    logActivity(user, profile, 'Check-In Selfie Removed',
+      `Admin removed Day ${log.day} selfie for ${activeTicket.id}`);
   };
 
   // ── Who can upload ────────────────────────────────────────────────────────
@@ -151,7 +192,7 @@ export function CheckInBlock({
         const dayDate = new Date(startDate);
         dayDate.setDate(startDate.getDate() + i);
         const dayDateStr = dayDate.toISOString().split('T')[0];
-        const log = presenceLogs.find((l: any) => l.day === dayNum || l.date === dayDateStr);
+        const log = presenceLogs.find((l: any) => l.date === dayDateStr) || presenceLogs.find((l: any) => l.day === dayNum);
         const isToday = dayDateStr === todayStr;
         const isPast  = dayDate < today;
         const isFuture = dayDate > today;
@@ -204,14 +245,24 @@ export function CheckInBlock({
 
             {/* Day body */}
             <div className="px-4 py-3">
-              {log?.selfieUrl ? (
+              {previewUrl && dayNum === currentDay ? (
+                <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+                  <img src={previewUrl} alt="Preview" className="w-16 h-16 object-cover rounded-xl border border-indigo-200 shadow-sm shrink-0 block" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                      <Loader2 size={12} className="animate-spin text-indigo-500" /> Uploading…
+                    </p>
+                    {uploadError && <p className="text-[10px] text-rose-500 mt-1">{uploadError}</p>}
+                  </div>
+                </div>
+              ) : log?.selfieUrl ? (
                 <div className="flex flex-col sm:flex-row sm:items-center gap-3">
                   {/* Selfie thumbnail */}
-                  <a href={log.selfieUrl} target="_blank" rel="noreferrer">
+                  <a href={log.selfieUrl} target="_blank" rel="noreferrer" className="shrink-0">
                     <img
                       src={log.selfieUrl}
                       alt={`Day ${dayNum} selfie`}
-                      className="w-16 h-16 object-cover rounded-xl border border-slate-200 shadow-sm hover:opacity-80 transition-opacity"
+                      className="w-16 h-16 object-cover rounded-xl border border-slate-200 shadow-sm hover:opacity-80 transition-opacity block"
                     />
                   </a>
                   <div className="flex-1 min-w-0">
@@ -245,6 +296,17 @@ export function CheckInBlock({
                       </button>
                     </div>
                   )}
+
+                  {/* Admin: Remove Selfie — always available regardless of approval status */}
+                  {isAdminOrSuperadmin && (
+                    <button
+                      onClick={() => handleRemoveSelfie(log)}
+                      title="Remove selfie (auditor will need to re-upload)"
+                      className="shrink-0 p-1.5 text-rose-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all active:scale-95"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  )}
                 </div>
               ) : (
                 <div className="flex items-center justify-between gap-3">
@@ -268,6 +330,11 @@ export function CheckInBlock({
                           <span className="ml-1 text-emerald-600 font-bold">Will auto-approve.</span>
                         )}
                       </p>
+                      {uploadError && dayNum === currentDay && (
+                        <p className="text-[10px] text-rose-500 font-bold mt-1 max-w-md break-words">
+                          ⚠ Upload failed: {uploadError}
+                        </p>
+                      )}
                     </div>
                   </div>
 
@@ -277,7 +344,6 @@ export function CheckInBlock({
                       <input
                         type="file"
                         accept="image/*"
-                        capture="environment"
                         className="hidden"
                         ref={dayNum === currentDay ? fileRef : undefined}
                         id={`selfie-upload-day-${dayNum}`}

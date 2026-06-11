@@ -438,6 +438,61 @@ function buildALFSheet(ws: ExcelJS.Worksheet, dist: SignOffDistributor, audit: S
     setCell(ws,dataRow,col,val,{font:ariFont({bold:true,size:9}),fill:C.TOTAL_ROW,hAlign:'center',border:thinBorder,numFmt:fmt});
   }
   for (let c=27;c<=32;c++) setCell(ws,dataRow,c,'',{fill:C.TOTAL_ROW,border:thinBorder});
+
+  // ── SIGN-OFF DECLARATION SECTION ────────────────────────────────────────────
+  const whiteFill = solidFill(C.WHITE);
+  const noB: Partial<ExcelJS.Borders> = {};
+
+  const clearSignRow = (rowNum: number, h = 18) => {
+    ws.getRow(rowNum).height = h;
+    for (let c = 1; c <= 32; c++) {
+      const cell = ws.getRow(rowNum).getCell(c);
+      cell.fill = whiteFill;
+      cell.border = noB;
+      cell.font = ariFont({ size: 9 });
+      cell.alignment = { wrapText: false, vertical: 'middle', horizontal: 'left' };
+    }
+  };
+  const writeSign = (rowNum: number, col: number, text: string, bold = false) => {
+    const cell = ws.getRow(rowNum).getCell(col);
+    cell.value = text;
+    cell.font = ariFont({ bold, size: 9 });
+    cell.fill = whiteFill;
+    cell.border = noB;
+    cell.alignment = { wrapText: false, vertical: 'middle', horizontal: 'left' };
+  };
+
+  clearSignRow(dataRow + 1, 10);
+  clearSignRow(dataRow + 2, 10);
+
+  const declLines = [
+    '1. This is to certify that the quantity mentioned in report is final for all the issues related to quality / leakage / breakage / damage / BBD / Primary or transit damage till the date of Audit.',
+    "2. No Stock shall be taken into consideration before Oct'23 Manufacturing date.",
+    '3. Stock with above-mentioned quality & value has been verified and drained in front of us and no further claim shall be raised by for such cases in future.',
+    '4. We understood that, value mentioned in Audit report is indicative and final claim value shall be accessed by Reliance before processing the expiry claim.',
+  ];
+  for (let i = 0; i < declLines.length; i++) {
+    clearSignRow(dataRow + 3 + i, 16);
+    writeSign(dataRow + 3 + i, 3, declLines[i]);
+  }
+
+  clearSignRow(dataRow + 7, 10);
+
+  clearSignRow(dataRow + 8, 18);
+  writeSign(dataRow + 8, 3,  "Customer's Authorised person Name -", true);
+  writeSign(dataRow + 8, 15, '3rd Party Auditor', true);
+  writeSign(dataRow + 8, 28, 'Sales Team Name & contact no.', true);
+
+  clearSignRow(dataRow + 9, 16);
+  writeSign(dataRow + 9, 15, 'Singla Vishal & Co.');
+
+  clearSignRow(dataRow + 10, 16);
+  clearSignRow(dataRow + 11, 16);
+
+  clearSignRow(dataRow + 12, 18);
+  writeSign(dataRow + 12, 3,  'Seal & Sign -', true);
+  writeSign(dataRow + 12, 15, 'Auditor Sign', true);
+  writeSign(dataRow + 12, 28, 'Sign');
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -727,18 +782,19 @@ export function useSignOffExport(params: {
   .meta { font-size: 8pt; margin-bottom: 6pt; display: flex; gap: 24pt; flex-wrap: wrap; }
   .meta span { font-weight: bold; }
   table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+  tfoot { display: table-row-group; }  /* prevents repeating tfoot on every printed page */
   th { font-weight: bold; font-size: 6pt; padding: 2pt 1pt; text-align: center; border: 0.5pt solid #999; vertical-align: bottom; word-wrap: break-word; }
   td { padding: 2pt 1pt; border: 0.5pt solid #ccc; text-align: center; vertical-align: middle; overflow: hidden; font-size: 7pt; word-wrap: break-word; }
   td:nth-child(8), td:nth-child(10), td:nth-child(11) { text-align: left; }
   /* nowrap only on INR value + date columns — everything else can wrap */
   td:nth-child(n+21):nth-child(-n+28) { white-space: nowrap; }
   /* Column widths */
-  col.c1  { width: 0.5%; }   /* Sr No — shrunk */
-  col.c2  { width: 5.5%; }
-  col.c3  { width: 2.8%; }
-  col.c4  { width: 2.5%; }   /* State — shrunk */
-  col.c5  { width: 3.5%; }
-  col.c6  { width: 3.0%; }
+  col.c1  { width: 1.5%; }   /* Sr No — widened */
+  col.c2  { width: 6.5%; }   /* Serial No — narrowed */
+  col.c3  { width: 2.3%; }   /* Region -0.5 */
+  col.c4  { width: 2.0%; }   /* State -0.5 */
+  col.c5  { width: 3.0%; }   /* Audit Team -0.5 */
+  col.c6  { width: 2.5%; }   /* Anchor Code -0.5 */
   col.c7  { width: 4.0%; }
   col.c8  { width: 4.0%; }
   col.c9  { width: 3.0%; }
@@ -767,11 +823,10 @@ export function useSignOffExport(params: {
   col.c32 { width: 3.5%; }
   tr:nth-child(even) td { background: #f9f9f9; }
   .totals td { font-weight: bold; background: #E2EFDA !important; border-top: 1.5pt solid #333; }
-  .signatures { display: flex; justify-content: space-between; margin-top: 28pt; padding-top: 12pt; gap: 20pt; }
-  .sig-box { flex: 1; text-align: center; }
-  .sig-box .sig-line { border-top: 1pt solid #333; margin: 36pt 8pt 4pt 8pt; }
-  .sig-box .sig-label { font-size: 8pt; font-weight: bold; color: #333; }
-  .sig-box .sig-name  { font-size: 7pt; color: #666; margin-top: 2pt; }
+  .declaration { margin-top: 16pt; font-size: 8pt; line-height: 1.6; }
+  .declaration p { margin-bottom: 4pt; text-align: left; }
+  .signoff-table { width: 100%; border-collapse: collapse; margin-top: 24pt; }
+  .signoff-table .sign-cell { width: 33.33%; padding: 14pt 8pt; font-size: 9pt; border: none; text-align: left; vertical-align: top; }
 </style></head><body>
 <h2>Article Level Format Revised — ${freshDist.name} (${freshDist.code})</h2>
 <div class="meta">
@@ -804,23 +859,31 @@ export function useSignOffExport(params: {
   </tfoot>
 </table>
 
-<div class="signatures">
-  <div class="sig-box">
-    <div class="sig-line"></div>
-    <div class="sig-label">Auditor</div>
-    <div class="sig-name">Singla Vishal &amp; Co.</div>
-  </div>
-  <div class="sig-box">
-    <div class="sig-line"></div>
-    <div class="sig-label">ASE</div>
-    <div class="sig-name">Name &amp; EMP ID</div>
-  </div>
-  <div class="sig-box">
-    <div class="sig-line"></div>
-    <div class="sig-label">Distributor</div>
-    <div class="sig-name">${freshDist.name} (${freshDist.code})</div>
-  </div>
+<div class="declaration">
+  <p>1. This is to certify that the quantity mentioned in report is final for all the issues related to quality / leakage / breakage / damage / BBD / Primary or transit damage till the date of Audit.</p>
+  <p>2. No Stock shall be taken into consideration before Oct'23 Manufacturing date.</p>
+  <p>3. Stock with above-mentioned quality &amp; value has been verified and drained in front of us and no further claim shall be raised by for such cases in future.</p>
+  <p>4. We understood that, value mentioned in Audit report is indicative and final claim value shall be accessed by Reliance before processing the expiry claim.</p>
 </div>
+
+<table class="signoff-table">
+  <tr>
+    <td class="sign-cell"><b>Customer's Authorised person Name -</b></td>
+    <td class="sign-cell"><b>3rd Party Auditor</b></td>
+    <td class="sign-cell"><b>Sales Team Name &amp; contact no.</b></td>
+  </tr>
+  <tr>
+    <td class="sign-cell">&nbsp;</td>
+    <td class="sign-cell">Singla Vishal &amp; Co.</td>
+    <td class="sign-cell">&nbsp;</td>
+  </tr>
+  <tr><td class="sign-cell">&nbsp;</td><td class="sign-cell">&nbsp;</td><td class="sign-cell">&nbsp;</td></tr>
+  <tr>
+    <td class="sign-cell"><b>Seal &amp; Sign -</b></td>
+    <td class="sign-cell"><b>Auditor Sign</b></td>
+    <td class="sign-cell"><b>Sign</b></td>
+  </tr>
+</table>
 </body></html>`;
 
       const win = window.open('', '_blank', 'width=1200,height=800');
