@@ -853,12 +853,12 @@ export function useSignOffExport(params: {
 <table class="signoff-table">
   <tr>
     <td class="sign-cell"><b>Customer's Authorised person Name -</b></td>
-    <td class="sign-cell"><b>3rd Party Auditor</b></td>
+    <td class="sign-cell">&nbsp;</td>
     <td class="sign-cell"><b>Sales Team Name &amp; contact no.</b></td>
   </tr>
   <tr>
     <td class="sign-cell">&nbsp;</td>
-    <td class="sign-cell">Singla Vishal &amp; Co.</td>
+    <td class="sign-cell">&nbsp;</td>
     <td class="sign-cell">&nbsp;</td>
   </tr>
   <tr><td class="sign-cell">&nbsp;</td><td class="sign-cell">&nbsp;</td><td class="sign-cell">&nbsp;</td></tr>
@@ -886,4 +886,4 @@ export function useSignOffExport(params: {
 
 
   return { exportSignOff, isExporting, exportClaimPDF, isExportingPDF, exportALFPDF, isExportingALF };
-} 
+}

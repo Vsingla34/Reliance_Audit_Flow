@@ -70,6 +70,8 @@ export function ExecutionModule() {
   const bulkUploadRef = useRef<HTMLInputElement>(null);
   const [listSearch, setListSearch] = useState('');
   const [isChatOpen, setIsChatOpen] = useState(false);
+  const [isEmailModalOpen, setIsEmailModalOpen] = useState(false);
+  const [selectedEmailUserIds, setSelectedEmailUserIds] = useState<Set<string>>(new Set());
   const [drainageDateInput, setDrainageDateInput] = useState('');
   const [drainageEndDateInput, setDrainageEndDateInput] = useState('');
   const [isManagingDays, setIsManagingDays] = useState(false);
@@ -1624,7 +1626,29 @@ export function ExecutionModule() {
     const canSubmitToAse = activeTicket.signOffs?.whatsappMediaApproved === true && activeTicket.signOffs?.signoffDocumentApproved === true;
 
     // ── Variance email — auto-drafts to ASE/ASM/SM/DM/HO with distributor-specific variance ──
+    // ── Unicode "bold" — Gmail compose body is plain text, so fake bold via
+    // Unicode Mathematical Bold characters which render bold everywhere.
+    const toBoldUnicode = (str: string): string => {
+      const map: Record<string, string> = {};
+      const upper = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+      const lower = 'abcdefghijklmnopqrstuvwxyz';
+      const digits = '0123456789';
+      for (let i = 0; i < 26; i++) {
+        map[upper[i]] = String.fromCodePoint(0x1D400 + i);
+        map[lower[i]] = String.fromCodePoint(0x1D41A + i);
+      }
+      for (let i = 0; i < 10; i++) map[digits[i]] = String.fromCodePoint(0x1D7CE + i);
+      return str.split('').map(ch => map[ch] || ch).join('');
+    };
+
+    // Opens the recipient picker modal
     const handleVarianceEmail = () => {
+      setSelectedEmailUserIds(new Set(ticketUsers.filter(u => u.email).map(u => u.id)));
+      setIsEmailModalOpen(true);
+    };
+
+    // Sends to the selected recipients
+    const sendVarianceEmail = () => {
       const approved  = effectiveApprovedValue;
       const verified  = activeTicket.verifiedTotal || 0;
       const variancePct = approved > 0 ? ((verified - approved) / approved) * 100 : 0;
@@ -1634,29 +1658,45 @@ export function ExecutionModule() {
       const distCodeForMail = dist?.code || activeDistCode || '';
 
       const subject = `Variance Between Audited Value and Approved Value-'${serialNo}-${distName}'`;
+
+      const bVariance = toBoldUnicode(variancePctStr);
+      const bAudited  = toBoldUnicode('Audited Value');
+      const bApproved = toBoldUnicode(`Approved Value at ${distName} (Distributor Code`);
+      const bFirm     = toBoldUnicode('Singla Vishal & Co.');
+
       const body =
 `Dear Team,
 
-This is to inform you that a variance of ${variancePctStr} has been observed between the Audited Value and the Approved Value at ${distName} (Distributor Code: ${distCodeForMail}) during the audit process.
+This is to inform you that a variance of ${bVariance} has been observed between the ${bAudited} and the ${bApproved}: ${distCodeForMail}) during the audit process.
 
 Kindly review the variance and provide the necessary clarification and approval for further processing.
 
 We request your prompt attention to this matter.
 
 Regards,
-Singla Vishal & Co.`;
+${bFirm}`;
 
-      // Recipients: ASE, ASM, SM, DM, HO assigned to this distributor
-      const recipientRoles = ['ase', 'asm', 'sm', 'dm', 'ho'];
-      const toEmails = ticketUsers
-        .filter(u => recipientRoles.includes(u.role) && u.email)
-        .map(u => u.email)
-        .filter(Boolean) as string[];
+      const uniqueEmails = ticketUsers
+        .filter(u => selectedEmailUserIds.has(u.id) && u.email)
+        .map(u => u.email as string);
 
-      const uniqueEmails = [...new Set(toEmails)];
-      const mailto = `mailto:${uniqueEmails.join(',')}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-      window.open(mailto, '_blank');
+      const mailto   = `mailto:${uniqueEmails.join(',')}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+      const gmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(uniqueEmails.join(','))}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+
+      navigator.clipboard?.writeText(`To: ${uniqueEmails.join(', ')}\nSubject: ${subject}\n\n${body}`).catch(() => {});
+
+      const a = document.createElement('a');
+      a.href = mailto;
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+
+      setTimeout(() => { window.open(gmailUrl, '_blank'); }, 200);
+
+      setIsEmailModalOpen(false);
     };
+
 
 
     return (
@@ -1747,14 +1787,16 @@ Singla Vishal & Co.`;
                 }
               </button>
 
-              {/* Variance Email — auto-drafts mail to ASE/ASM/SM/DM/HO */}
-              <button
-                onClick={handleVarianceEmail}
-                title="Draft variance email to ASE / ASM / SM / DM / HO"
-                className="flex-1 sm:flex-none flex justify-center items-center gap-2 px-3 sm:px-4 py-2 bg-sky-50 text-sky-700 hover:bg-sky-100 rounded-xl text-xs sm:text-sm font-bold transition-all border border-sky-200"
-              >
-                <Mail size={15} /> <span className="hidden sm:inline">Email</span><span className="sm:hidden">Mail</span>
-              </button>
+              {/* Variance Email — admin/superadmin picks recipients for this distributor */}
+              {isAdminOrSuperadmin && (
+                <button
+                  onClick={handleVarianceEmail}
+                  title="Select recipients and draft variance email"
+                  className="flex-1 sm:flex-none flex justify-center items-center gap-2 px-3 sm:px-4 py-2 bg-sky-50 text-sky-700 hover:bg-sky-100 rounded-xl text-xs sm:text-sm font-bold transition-all border border-sky-200"
+                >
+                  <Mail size={15} /> <span className="hidden sm:inline">Email</span><span className="sm:hidden">Mail</span>
+                </button>
+              )}
 
               <button onClick={() => setIsChatOpen(true)} className="flex-1 sm:flex-none flex justify-center items-center gap-2 px-3 sm:px-4 py-2 bg-indigo-50 text-indigo-600 rounded-xl text-xs sm:text-sm font-bold hover:bg-indigo-100 transition-all border border-indigo-100"><MessageSquare size={16} /> Discussion {activeTicket.comments?.length ? `(${activeTicket.comments.length})` : ''}</button>
             </div>
@@ -2491,6 +2533,54 @@ Singla Vishal & Co.`;
         />
         <AnimatePresence>
           {isChatOpen && <ChatModal isOpen={isChatOpen} onClose={() => setIsChatOpen(false)} activeTicket={activeTicket} user={user} profile={profile} />}
+
+          {/* Variance Email — recipient picker modal */}
+          {isEmailModalOpen && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setIsEmailModalOpen(false)}>
+              <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[80vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+                <div className="p-5 border-b border-slate-100 flex items-center justify-between">
+                  <h3 className="font-bold text-slate-800 flex items-center gap-2"><Mail size={18} className="text-sky-600" /> Send Variance Email</h3>
+                  <button onClick={() => setIsEmailModalOpen(false)} className="text-slate-400 hover:text-slate-600"><X size={18} /></button>
+                </div>
+                <div className="p-5 space-y-2">
+                  <p className="text-xs text-slate-500 mb-2">Select recipients for {dist?.name || 'this distributor'}:</p>
+                  {ticketUsers.filter(u => u.email).length === 0 && (
+                    <p className="text-sm text-rose-500 font-medium">No users with email addresses found for this distributor.</p>
+                  )}
+                  {ticketUsers.filter(u => u.email).map(u => (
+                    <label key={u.id} className="flex items-center gap-3 p-2.5 rounded-xl hover:bg-slate-50 cursor-pointer border border-slate-100">
+                      <input
+                        type="checkbox"
+                        checked={selectedEmailUserIds.has(u.id)}
+                        onChange={(e) => {
+                          setSelectedEmailUserIds(prev => {
+                            const next = new Set(prev);
+                            if (e.target.checked) next.add(u.id); else next.delete(u.id);
+                            return next;
+                          });
+                        }}
+                        className="w-4 h-4 accent-sky-600"
+                      />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-bold text-slate-700">{u.name} <span className="text-[10px] uppercase font-bold text-sky-600 bg-sky-50 px-1.5 py-0.5 rounded ml-1">{u.role}</span></p>
+                        <p className="text-xs text-slate-400 truncate">{u.email}</p>
+                      </div>
+                    </label>
+                  ))}
+                </div>
+                <div className="p-5 border-t border-slate-100 flex justify-end gap-2">
+                  <button onClick={() => setIsEmailModalOpen(false)} className="px-4 py-2 text-sm font-bold text-slate-500 hover:bg-slate-100 rounded-xl transition-all">Cancel</button>
+                  <button
+                    onClick={sendVarianceEmail}
+                    disabled={selectedEmailUserIds.size === 0}
+                    className="px-5 py-2 bg-sky-600 text-white text-sm font-bold rounded-xl hover:bg-sky-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center gap-2"
+                  >
+                    <Send size={14} /> Draft Email ({selectedEmailUserIds.size})
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </AnimatePresence>
       </div>
     );
