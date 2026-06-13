@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
 import { supabase, logActivity, notifyLinkedUsers } from '../supabase';
 import { Distributor, SignOff, AuditTicket as BaseTicket, AuditLineItem as BaseItem } from '../types';
-import { ClipboardCheck, Plus, Store, MapPin, CheckCircle2, ArrowLeft, AlertCircle, MessageSquare, PackageSearch, Lock, Trash2, Send, RotateCcw, CalendarClock, FileText, Upload, Loader2, User as UserIcon, X, Droplets, Search, Download, FileSpreadsheet, FileUp, CheckCheck, Camera } from 'lucide-react';
+import { ClipboardCheck, Plus, Store, MapPin, CheckCircle2, ArrowLeft, AlertCircle, MessageSquare, PackageSearch, Lock, Trash2, Send, RotateCcw, CalendarClock, FileText, Upload, Loader2, User as UserIcon, X, Droplets, Search, Download, FileSpreadsheet, FileUp, CheckCheck, Camera, Mail } from 'lucide-react';
 import { useSignOffExport } from '../hooks/useSignOffExport';
 import { cn, useAuth } from '../App';
 import { motion, AnimatePresence } from 'motion/react';
@@ -53,7 +53,7 @@ export function ExecutionModule() {
   const [tickets, setTickets] = useState<AuditTicket[]>([]);
   const [distributors, setDistributors] = useState<any[]>([]); 
   const [activeTicket, setActiveTicket] = useState<AuditTicket | null>(null);
-  const [ticketUsers, setTicketUsers] = useState<{ id: string; name: string; role: string; phone?: string }[]>([]);
+  const [ticketUsers, setTicketUsers] = useState<{ id: string; name: string; role: string; phone?: string; email?: string }[]>([]);
   
   const [items, setItems] = useState<AuditLineItem[]>([]);
   const itemsRef = useRef<AuditLineItem[]>([]);
@@ -339,15 +339,19 @@ export function ExecutionModule() {
       if (activeDistCode) loadDumpData(activeDistCode);
       setItemSearchQuery('');
 
-      // Fetch ASE + auditor details for this ticket
+      // Fetch ASE + auditor + ASM/SM/DM/HO details for this ticket (for email button)
       const dist = distMap[activeTicket.distributorId];
       const aseIds: string[]     = dist?.aseIds     || [];
+      const asmIds: string[]     = dist?.asmIds     || [];
+      const smIds:  string[]     = dist?.smIds      || [];
+      const dmIds:  string[]     = dist?.dmIds      || [];
+      const hoIds:  string[]     = dist?.hoIds      || [];
       const auditorIds: string[] = (activeTicket as any).auditorIds || [];
-      const allIds = [...new Set([...aseIds, ...auditorIds])].filter(Boolean);
+      const allIds = [...new Set([...aseIds, ...asmIds, ...smIds, ...dmIds, ...hoIds, ...auditorIds])].filter(Boolean);
       if (allIds.length > 0) {
-        supabase.from('users').select('uid,name,role,phone').in('uid', allIds)
+        supabase.from('users').select('uid,name,role,phone,email').in('uid', allIds)
           .then(({ data }) => {
-            if (data) setTicketUsers(data.map((u: any) => ({ id: u.uid, name: u.name, role: u.role, phone: u.phone })));
+            if (data) setTicketUsers(data.map((u: any) => ({ id: u.uid, name: u.name, role: u.role, phone: u.phone, email: u.email })));
           });
       } else {
         setTicketUsers([]);
@@ -1551,7 +1555,7 @@ export function ExecutionModule() {
       })(),
       drainageDate:    activeTicket?.signOffs?.drainageDate    ?? null,
       drainageEndDate: activeTicket?.signOffs?.drainageEndDate ?? null,
-      approvedValue: activeTicket?.approvedValue ?? 0,
+      approvedValue: activeTicket?.approvedValue || distMap[activeTicket?.distributorId || '']?.approvedValue || 0,
       verifiedTotal: activeTicket?.verifiedTotal ?? 0,
       // Pull auditor name from the assigned auditors list
       auditorName: (() => {
@@ -1612,10 +1616,48 @@ export function ExecutionModule() {
     // Only read from signOffs JSONB — the direct column fallback was causing false positives
     const whatsappApproved = activeTicket.signOffs?.whatsappMediaApproved === true;
 
-    const percentUsed = ((activeTicket.verifiedTotal || 0) / activeTicket.approvedValue) * 100;
-    
+    // Fall back to the distributor's approvedValue if the ticket's own value is 0/missing
+    const effectiveApprovedValue = activeTicket.approvedValue || dist?.approvedValue || 0;
+    const percentUsed = effectiveApprovedValue > 0 ? ((activeTicket.verifiedTotal || 0) / effectiveApprovedValue) * 100 : 0;
+
     const auditDateString = activeTicket.scheduledDate?.split('T')[0] || '';
     const canSubmitToAse = activeTicket.signOffs?.whatsappMediaApproved === true && activeTicket.signOffs?.signoffDocumentApproved === true;
+
+    // ── Variance email — auto-drafts to ASE/ASM/SM/DM/HO with distributor-specific variance ──
+    const handleVarianceEmail = () => {
+      const approved  = effectiveApprovedValue;
+      const verified  = activeTicket.verifiedTotal || 0;
+      const variancePct = approved > 0 ? ((verified - approved) / approved) * 100 : 0;
+      const variancePctStr = variancePct.toFixed(2) + '%';
+      const serialNo = (activeTicket as any).serialNo || (activeTicket as any).assignment_serial_no || dist?.assignment_serial_no || '';
+      const distName = dist?.name || '';
+      const distCodeForMail = dist?.code || activeDistCode || '';
+
+      const subject = `Variance Between Audited Value and Approved Value-'${serialNo}-${distName}'`;
+      const body =
+`Dear Team,
+
+This is to inform you that a variance of ${variancePctStr} has been observed between the Audited Value and the Approved Value at ${distName} (Distributor Code: ${distCodeForMail}) during the audit process.
+
+Kindly review the variance and provide the necessary clarification and approval for further processing.
+
+We request your prompt attention to this matter.
+
+Regards,
+Singla Vishal & Co.`;
+
+      // Recipients: ASE, ASM, SM, DM, HO assigned to this distributor
+      const recipientRoles = ['ase', 'asm', 'sm', 'dm', 'ho'];
+      const toEmails = ticketUsers
+        .filter(u => recipientRoles.includes(u.role) && u.email)
+        .map(u => u.email)
+        .filter(Boolean) as string[];
+
+      const uniqueEmails = [...new Set(toEmails)];
+      const mailto = `mailto:${uniqueEmails.join(',')}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+      window.open(mailto, '_blank');
+    };
+
 
     return (
       <div className="space-y-4 sm:space-y-6 pb-12 w-full min-w-0">
@@ -1705,6 +1747,15 @@ export function ExecutionModule() {
                 }
               </button>
 
+              {/* Variance Email — auto-drafts mail to ASE/ASM/SM/DM/HO */}
+              <button
+                onClick={handleVarianceEmail}
+                title="Draft variance email to ASE / ASM / SM / DM / HO"
+                className="flex-1 sm:flex-none flex justify-center items-center gap-2 px-3 sm:px-4 py-2 bg-sky-50 text-sky-700 hover:bg-sky-100 rounded-xl text-xs sm:text-sm font-bold transition-all border border-sky-200"
+              >
+                <Mail size={15} /> <span className="hidden sm:inline">Email</span><span className="sm:hidden">Mail</span>
+              </button>
+
               <button onClick={() => setIsChatOpen(true)} className="flex-1 sm:flex-none flex justify-center items-center gap-2 px-3 sm:px-4 py-2 bg-indigo-50 text-indigo-600 rounded-xl text-xs sm:text-sm font-bold hover:bg-indigo-100 transition-all border border-indigo-100"><MessageSquare size={16} /> Discussion {activeTicket.comments?.length ? `(${activeTicket.comments.length})` : ''}</button>
             </div>
           </div>
@@ -1756,7 +1807,7 @@ export function ExecutionModule() {
               <div className="w-full max-w-full md:max-w-[200px] h-2 bg-slate-200 md:bg-slate-100 rounded-full overflow-hidden mt-1">
                 <div className={cn("h-full rounded-full transition-all", percentUsed > 100 ? "bg-rose-500" : percentUsed > 90 ? "bg-amber-500" : "bg-emerald-500")} style={{ width: `${Math.min(percentUsed, 100)}%` }} />
               </div>
-              <p className="text-[10px] sm:text-xs text-slate-500 font-medium">of ₹{activeTicket.approvedValue.toLocaleString()} limit</p>
+              <p className="text-[10px] sm:text-xs text-slate-500 font-medium">of ₹{effectiveApprovedValue.toLocaleString()} limit</p>
             </div>
           </div>
 
