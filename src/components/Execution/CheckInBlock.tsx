@@ -16,155 +16,132 @@ interface CheckInBlockProps {
 export function CheckInBlock({
   activeTicket, setActiveTicket, user, profile, isAdminOrSuperadmin, isActionableDate
 }: CheckInBlockProps) {
-  const [isUploading, setIsUploading] = useState(false);
-  const fileRef = useRef<HTMLInputElement>(null);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [uploadError, setUploadError] = useState<string | null>(null);
-
   const BUCKET = 'audit-media';
 
+  // Per-day upload state — keyed by dayNum so each day card is independent
+  const [uploadingDay,  setUploadingDay]  = useState<number | null>(null);
+  const [previewByDay,  setPreviewByDay]  = useState<Record<number, string>>({});
+  const [errorByDay,    setErrorByDay]    = useState<Record<number, string>>({});
+  const fileRefs = useRef<Record<number, HTMLInputElement | null>>({});
+
   const presenceLogs: any[] = activeTicket.presenceLogs || [];
+  const auditDays = (activeTicket as any).auditDays || 1;
 
-  // ── Determine what day we're on ───────────────────────────────────────────
+  // Today in IST/local timezone
   const todayDate = new Date();
-  const offset = todayDate.getTimezoneOffset();
-  const todayStr = new Date(todayDate.getTime() - offset * 60000)
-    .toISOString().split('T')[0];
-
-  const auditDays = activeTicket.auditDays || 1;
-
-  // Check if today already has a log
-  const todayLog = presenceLogs.find((l: any) => l.date === todayStr);
-
-  // Which day number is today (1-indexed)
-  const scheduledStart = activeTicket.scheduledDate?.split('T')[0] || todayStr;
-  const startDate = new Date(scheduledStart);
-  startDate.setHours(0, 0, 0, 0);
-  const today = new Date(todayStr);
+  const offset    = todayDate.getTimezoneOffset();
+  const todayStr  = new Date(todayDate.getTime() - offset * 60000).toISOString().split('T')[0];
+  const today     = new Date(todayStr);
   today.setHours(0, 0, 0, 0);
-  const dayOffset = Math.floor((today.getTime() - startDate.getTime()) / 86400000);
-  const currentDay = Math.min(Math.max(dayOffset + 1, 1), auditDays);
 
-  // ── Upload selfie ─────────────────────────────────────────────────────────
-  const handleSelfieUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    console.log('[CheckIn] handleSelfieUpload fired', e.target.files);
+  const scheduledStart = activeTicket.scheduledDate?.split('T')[0] || todayStr;
+  const startDate      = new Date(scheduledStart);
+  startDate.setHours(0, 0, 0, 0);
+
+  // ── Helpers — always use dayNum as primary key ────────────────────────────
+  // Get the log for a specific day number
+  const getLog = (dayNum: number, dayDateStr: string) =>
+    presenceLogs.find((l: any) => l.day === dayNum) ||
+    presenceLogs.find((l: any) => l.date === dayDateStr);
+
+  // Remove old entry for this dayNum and replace with newLog
+  const replaceLog = (dayNum: number, dayDateStr: string, newLog: any) => [
+    ...presenceLogs.filter((l: any) => l.day !== dayNum && l.date !== dayDateStr),
+    newLog,
+  ];
+
+  // Patch a single day's log in-place (for approve/reject/remove)
+  const patchLog = (dayNum: number, dayDateStr: string, patch: Partial<any>) =>
+    presenceLogs.map((l: any) =>
+      l.day === dayNum || l.date === dayDateStr ? { ...l, ...patch } : l
+    );
+
+  // ── Upload selfie for a specific day ─────────────────────────────────────
+  const handleSelfieUpload = async (e: React.ChangeEvent<HTMLInputElement>, dayNum: number, dayDateStr: string) => {
     const file = e.target.files?.[0];
-    if (!file) { console.log('[CheckIn] no file selected'); return; }
-    if (!user || !profile) {
-      console.log('[CheckIn] missing user/profile', { user, profile });
-      setUploadError('Not signed in — please refresh and try again.');
+    // Reset input so same file can be re-selected
+    if (fileRefs.current[dayNum]) fileRefs.current[dayNum]!.value = '';
+    if (!file || !user || !profile) {
+      if (!user || !profile) setErrorByDay(prev => ({ ...prev, [dayNum]: 'Not signed in — please refresh.' }));
       return;
     }
 
-    // Show local preview immediately so the box never looks empty
+    // Immediate local preview for this day only
     const localPreview = URL.createObjectURL(file);
-    setPreviewUrl(localPreview);
-    setUploadError(null);
+    setPreviewByDay(prev  => ({ ...prev,  [dayNum]: localPreview }));
+    setErrorByDay(prev    => ({ ...prev,  [dayNum]: '' }));
+    setUploadingDay(dayNum);
 
-    setIsUploading(true);
     try {
-      const ext = file.name.split('.').pop();
-      const path = `checkins/${activeTicket.id}/day${currentDay}-${Date.now()}.${ext}`;
-      console.log('[CheckIn] uploading to', BUCKET, path, file.size, file.type);
-      const { error: uploadErr } = await supabase.storage
-        .from(BUCKET)
-        .upload(path, file, { upsert: true });
-      if (uploadErr) { console.error('[CheckIn] storage upload error', uploadErr); throw uploadErr; }
-      console.log('[CheckIn] storage upload OK');
+      const ext  = file.name.split('.').pop();
+      const path = `checkins/${activeTicket.id}/day${dayNum}-${Date.now()}.${ext}`;
+      const { error: uploadErr } = await supabase.storage.from(BUCKET).upload(path, file, { upsert: true });
+      if (uploadErr) throw uploadErr;
 
       const { data: { publicUrl } } = supabase.storage.from(BUCKET).getPublicUrl(path);
-      console.log('[CheckIn] publicUrl', publicUrl);
-      if (!publicUrl) throw new Error('Could not get a public URL for the uploaded file. Check that the "audit-media" bucket is set to public in Supabase Storage.');
+      if (!publicUrl) throw new Error('Could not get public URL. Check bucket is set to public.');
 
       const newLog = {
-        day: currentDay,
-        date: todayStr,
-        selfieUrl: publicUrl,
-        uploadedBy: user.id,
+        day:          dayNum,
+        date:         dayDateStr,
+        selfieUrl:    publicUrl,
+        uploadedBy:   user.id,
         uploaderName: profile.name,
         uploaderRole: profile.role,
-        status: isAdminOrSuperadmin ? 'approved' : 'pending',
-        approvedBy: isAdminOrSuperadmin ? profile.name : null,
-        timestamp: new Date().toISOString(),
+        status:       isAdminOrSuperadmin ? 'approved' : 'pending',
+        approvedBy:   isAdminOrSuperadmin ? profile.name : null,
+        timestamp:    new Date().toISOString(),
       };
 
-      const updatedLogs = [...presenceLogs.filter((l: any) => l.day !== currentDay && l.date !== todayStr), newLog];
-
+      const updatedLogs = replaceLog(dayNum, dayDateStr, newLog);
       const { error: dbErr } = await supabase.from('auditTickets').update({
-        presenceLogs: updatedLogs,
-        updatedAt: new Date().toISOString(),
+        presenceLogs: updatedLogs, updatedAt: new Date().toISOString(),
       }).eq('id', activeTicket.id);
-      if (dbErr) { console.error('[CheckIn] DB update error', dbErr); throw dbErr; }
-      console.log('[CheckIn] DB update OK, new presenceLogs', updatedLogs);
+      if (dbErr) throw dbErr;
 
       setActiveTicket({ ...activeTicket, presenceLogs: updatedLogs });
-
+      setPreviewByDay(prev => { const n = { ...prev }; delete n[dayNum]; return n; });
       logActivity(user, profile, 'Check-In Selfie Uploaded',
-        `Day ${currentDay} selfie uploaded for ${activeTicket.id}${isAdminOrSuperadmin ? ' (auto-approved)' : ''}`);
-      setPreviewUrl(null); // DB now has the real URL — drop local preview
+        `Day ${dayNum} selfie uploaded for ${activeTicket.id}${isAdminOrSuperadmin ? ' (auto-approved)' : ''}`);
     } catch (err: any) {
-      console.error('Selfie upload failed:', err);
-      setUploadError(err?.message || String(err));
-      setPreviewUrl(null);
-      console.error('Upload failed:', err?.message || err);
+      setErrorByDay(prev => ({ ...prev, [dayNum]: err?.message || String(err) }));
+      setPreviewByDay(prev => { const n = { ...prev }; delete n[dayNum]; return n; });
     } finally {
-      setIsUploading(false);
-      if (fileRef.current) fileRef.current.value = '';
+      setUploadingDay(null);
       URL.revokeObjectURL(localPreview);
     }
   };
 
-  // ── Approve / reject (admin) ──────────────────────────────────────────────
+  // ── Approve ───────────────────────────────────────────────────────────────
   const handleApprove = async (log: any) => {
     if (!isAdminOrSuperadmin) return;
-    const updated = presenceLogs.map((l: any) =>
-      l.date === log.date
-        ? { ...l, status: 'approved', approvedBy: profile.name }
-        : l
-    );
-    await supabase.from('auditTickets').update({
-      presenceLogs: updated, updatedAt: new Date().toISOString()
-    }).eq('id', activeTicket.id);
+    const updated = patchLog(log.day, log.date, { status: 'approved', approvedBy: profile.name });
+    await supabase.from('auditTickets').update({ presenceLogs: updated, updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
     setActiveTicket({ ...activeTicket, presenceLogs: updated });
-    logActivity(user, profile, 'Check-In Approved',
-      `Admin approved Day ${log.day} selfie for ${activeTicket.id}`);
+    logActivity(user, profile, 'Check-In Approved', `Admin approved Day ${log.day} selfie for ${activeTicket.id}`);
   };
 
+  // ── Reject ────────────────────────────────────────────────────────────────
   const handleReject = async (log: any) => {
     if (!isAdminOrSuperadmin) return;
-    const updated = presenceLogs.map((l: any) =>
-      l.date === log.date
-        ? { ...l, status: 'rejected', approvedBy: null, selfieUrl: null }
-        : l
-    );
-    await supabase.from('auditTickets').update({
-      presenceLogs: updated, updatedAt: new Date().toISOString()
-    }).eq('id', activeTicket.id);
+    const updated = patchLog(log.day, log.date, { status: 'rejected', approvedBy: null, selfieUrl: null });
+    await supabase.from('auditTickets').update({ presenceLogs: updated, updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
     setActiveTicket({ ...activeTicket, presenceLogs: updated });
   };
 
-  // Admin/superadmin: completely remove a selfie (any status) so the auditor can re-upload
+  // ── Remove selfie (admin — any status) ───────────────────────────────────
   const handleRemoveSelfie = async (log: any) => {
     if (!isAdminOrSuperadmin) return;
     if (!confirm(`Remove the Day ${log.day} selfie? The auditor will need to upload again.`)) return;
-    const updated = presenceLogs.map((l: any) =>
-      l.date === log.date
-        ? { ...l, selfieUrl: null, status: 'pending', approvedBy: null }
-        : l
-    );
-    await supabase.from('auditTickets').update({
-      presenceLogs: updated, updatedAt: new Date().toISOString()
-    }).eq('id', activeTicket.id);
+    const updated = patchLog(log.day, log.date, { selfieUrl: null, status: 'pending', approvedBy: null });
+    await supabase.from('auditTickets').update({ presenceLogs: updated, updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
     setActiveTicket({ ...activeTicket, presenceLogs: updated });
-    logActivity(user, profile, 'Check-In Selfie Removed',
-      `Admin removed Day ${log.day} selfie for ${activeTicket.id}`);
+    logActivity(user, profile, 'Check-In Selfie Removed', `Admin removed Day ${log.day} selfie for ${activeTicket.id}`);
   };
 
-  // ── Who can upload ────────────────────────────────────────────────────────
-  // superadmin/admin/auditor/ase can all upload selfies
-  const canUploadSelfie = ['superadmin', 'admin', 'auditor', 'ase'].includes(profile?.role || '');
-  const showUploadButton = canUploadSelfie && !todayLog && isActionableDate;
-  const showAdminAutoApproveHint = isAdminOrSuperadmin && !todayLog && isActionableDate;
+  const canUploadSelfie    = ['superadmin', 'admin', 'auditor', 'ase'].includes(profile?.role || '');
+  const todayLog           = presenceLogs.find((l: any) => l.date === todayStr);
+  const showUploadButton   = canUploadSelfie && !todayLog && isActionableDate;
 
   return (
     <div className="mb-6 sm:mb-8 space-y-3 sm:space-y-4">
@@ -186,16 +163,18 @@ export function CheckInBlock({
         Days will automatically unlock as the audit progresses.
       </p>
 
-      {/* Day cards */}
+      {/* Day cards — one per audit day, each fully independent */}
       {Array.from({ length: auditDays }, (_, i) => {
-        const dayNum = i + 1;
-        const dayDate = new Date(startDate);
+        const dayNum    = i + 1;
+        const dayDate   = new Date(startDate);
         dayDate.setDate(startDate.getDate() + i);
         const dayDateStr = dayDate.toISOString().split('T')[0];
-        const log = presenceLogs.find((l: any) => l.date === dayDateStr) || presenceLogs.find((l: any) => l.day === dayNum);
-        const isToday = dayDateStr === todayStr;
-        const isPast  = dayDate < today;
-        const isFuture = dayDate > today;
+        const log        = getLog(dayNum, dayDateStr);
+        const isToday    = dayDateStr === todayStr;
+        const isFuture   = dayDate > today;
+        const dayPreview = previewByDay[dayNum];
+        const dayError   = errorByDay[dayNum];
+        const isThisDayUploading = uploadingDay === dayNum;
 
         return (
           <div key={dayNum} className={cn(
@@ -211,17 +190,11 @@ export function CheckInBlock({
             <div className="px-4 py-3 flex items-center justify-between border-b border-inherit">
               <div className="flex items-center gap-2">
                 <CalendarDays size={15} className={cn(
-                  log?.status === 'approved' ? 'text-emerald-600'
-                    : isToday ? 'text-indigo-600'
-                    : 'text-slate-400'
+                  log?.status === 'approved' ? 'text-emerald-600' : isToday ? 'text-indigo-600' : 'text-slate-400'
                 )} />
-                <span className="text-sm font-bold text-slate-800">
-                  Day {dayNum} Check-In
-                </span>
+                <span className="text-sm font-bold text-slate-800">Day {dayNum} Check-In</span>
                 {isToday && (
-                  <span className="text-[9px] font-black text-indigo-700 bg-indigo-100 px-1.5 py-0.5 rounded-full uppercase tracking-wider">
-                    Today
-                  </span>
+                  <span className="text-[9px] font-black text-indigo-700 bg-indigo-100 px-1.5 py-0.5 rounded-full uppercase tracking-wider">Today</span>
                 )}
               </div>
 
@@ -245,83 +218,73 @@ export function CheckInBlock({
 
             {/* Day body */}
             <div className="px-4 py-3">
-              {previewUrl && dayNum === currentDay ? (
-                <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-                  <img src={previewUrl} alt="Preview" className="w-16 h-16 object-cover rounded-xl border border-indigo-200 shadow-sm shrink-0 block" />
-                  <div className="flex-1 min-w-0">
+              {/* Local preview while uploading */}
+              {dayPreview ? (
+                <div className="flex items-center gap-3">
+                  <img src={dayPreview} alt="Preview" className="w-16 h-16 object-cover rounded-xl border border-indigo-200 shadow-sm shrink-0 block" />
+                  <div>
                     <p className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
-                      <Loader2 size={12} className="animate-spin text-indigo-500" /> Uploading…
+                      <Loader2 size={12} className="animate-spin text-indigo-500" /> Uploading Day {dayNum}…
                     </p>
-                    {uploadError && <p className="text-[10px] text-rose-500 mt-1">{uploadError}</p>}
+                    {dayError && <p className="text-[10px] text-rose-500 mt-1">{dayError}</p>}
                   </div>
                 </div>
               ) : log?.selfieUrl ? (
+                /* Selfie exists — show thumbnail + actions */
                 <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-                  {/* Selfie thumbnail */}
                   <a href={log.selfieUrl} target="_blank" rel="noreferrer" className="shrink-0">
-                    <img
-                      src={log.selfieUrl}
-                      alt={`Day ${dayNum} selfie`}
-                      className="w-16 h-16 object-cover rounded-xl border border-slate-200 shadow-sm hover:opacity-80 transition-opacity block"
-                    />
+                    <img src={log.selfieUrl} alt={`Day ${dayNum} selfie`}
+                      className="w-16 h-16 object-cover rounded-xl border border-slate-200 shadow-sm hover:opacity-80 transition-opacity block" />
                   </a>
                   <div className="flex-1 min-w-0">
-                    <p className="text-xs font-bold text-slate-700">
-                      Uploaded by {log.uploaderName}
-                      <span className="text-[10px] font-normal text-slate-400 ml-1">
-                        ({log.uploaderRole})
-                      </span>
+                    <p className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                      {log.status === 'approved' ? <CheckCircle2 size={12} className="text-emerald-500" /> : <Clock size={12} className="text-amber-500" />}
+                      {log.uploaderName || 'Uploaded'}
+                      {log.uploaderRole && <span className="text-[9px] text-slate-400 font-medium">({log.uploaderRole})</span>}
                     </p>
-                    <p className="text-[10px] text-slate-400 mt-0.5">
-                      {new Date(log.timestamp).toLocaleString('en-IN', {
-                        day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'
-                      })}
-                    </p>
+                    {log.timestamp && (
+                      <p className="text-[10px] text-slate-400 mt-0.5">
+                        {new Date(log.timestamp).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}, {new Date(log.timestamp).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
+                      </p>
+                    )}
+                    {dayError && <p className="text-[10px] text-rose-500 mt-1">{dayError}</p>}
                   </div>
 
-                  {/* Admin approve/reject */}
+                  {/* Admin: approve/reject (pending only) */}
                   {isAdminOrSuperadmin && log.status === 'pending' && (
                     <div className="flex gap-2 shrink-0">
-                      <button
-                        onClick={() => handleApprove(log)}
-                        className="px-3 py-1.5 bg-emerald-600 text-white text-xs font-bold rounded-lg hover:bg-emerald-700 transition-all active:scale-95 shadow-sm"
-                      >
+                      <button onClick={() => handleApprove(log)}
+                        className="px-3 py-1.5 bg-emerald-600 text-white text-xs font-bold rounded-lg hover:bg-emerald-700 transition-all active:scale-95 shadow-sm">
                         Approve
                       </button>
-                      <button
-                        onClick={() => handleReject(log)}
-                        className="px-3 py-1.5 bg-white border border-rose-200 text-rose-600 text-xs font-bold rounded-lg hover:bg-rose-50 transition-all active:scale-95"
-                      >
+                      <button onClick={() => handleReject(log)}
+                        className="px-3 py-1.5 bg-white border border-rose-200 text-rose-600 text-xs font-bold rounded-lg hover:bg-rose-50 transition-all active:scale-95">
                         Reject
                       </button>
                     </div>
                   )}
 
-                  {/* Admin: Remove Selfie — always available regardless of approval status */}
+                  {/* Admin: Remove selfie — always available */}
                   {isAdminOrSuperadmin && (
-                    <button
-                      onClick={() => handleRemoveSelfie(log)}
-                      title="Remove selfie (auditor will need to re-upload)"
-                      className="shrink-0 p-1.5 text-rose-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all active:scale-95"
-                    >
+                    <button onClick={() => handleRemoveSelfie(log)}
+                      title={`Remove Day ${dayNum} selfie`}
+                      className="shrink-0 p-1.5 text-rose-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all active:scale-95">
                       <Trash2 size={14} />
                     </button>
                   )}
                 </div>
               ) : (
+                /* No selfie — show upload button */
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex items-center gap-2.5 text-slate-500">
                     <div className={cn(
                       'w-9 h-9 rounded-xl flex items-center justify-center border shrink-0',
-                      isToday ? 'bg-indigo-50 border-indigo-200 text-indigo-500'
-                        : 'bg-slate-50 border-slate-200 text-slate-400'
+                      isToday ? 'bg-indigo-50 border-indigo-200 text-indigo-500' : 'bg-slate-50 border-slate-200 text-slate-400'
                     )}>
                       <Camera size={16} />
                     </div>
                     <div>
-                      <p className="text-xs font-bold text-slate-700">
-                        Check-In Selfie Required
-                      </p>
+                      <p className="text-xs font-bold text-slate-700">Check-In Selfie Required</p>
                       <p className="text-[10px] text-slate-400">
                         {isFuture
                           ? `Available on ${dayDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}`
@@ -330,41 +293,38 @@ export function CheckInBlock({
                           <span className="ml-1 text-emerald-600 font-bold">Will auto-approve.</span>
                         )}
                       </p>
-                      {uploadError && dayNum === currentDay && (
-                        <p className="text-[10px] text-rose-500 font-bold mt-1 max-w-md break-words">
-                          ⚠ Upload failed: {uploadError}
-                        </p>
+                      {dayError && (
+                        <p className="text-[10px] text-rose-500 font-bold mt-1 max-w-md break-words">⚠ Upload failed: {dayError}</p>
                       )}
                     </div>
                   </div>
 
-                  {/* Upload button — visible for admin/auditor on today or past days */}
+                  {/* Upload button — each day has its own, fires for that dayNum only */}
                   {canUploadSelfie && !isFuture && isActionableDate && (
-                    <>
-                      <input
-                        type="file"
-                        accept="image/*"
-                        className="hidden"
-                        ref={dayNum === currentDay ? fileRef : undefined}
-                        id={`selfie-upload-day-${dayNum}`}
-                        onChange={handleSelfieUpload}
-                      />
-                      <label
-                        htmlFor={`selfie-upload-day-${dayNum}`}
+                    <div className="shrink-0">
+                      <button
+                        onClick={() => fileRefs.current[dayNum]?.click()}
+                        disabled={isThisDayUploading}
                         className={cn(
-                          'flex items-center gap-1.5 px-4 py-2 text-xs font-bold rounded-xl cursor-pointer transition-all active:scale-95 shadow-sm shrink-0',
-                          isUploading
+                          'flex items-center gap-2 px-4 py-2.5 text-sm font-bold rounded-xl transition-all active:scale-95 shadow-sm',
+                          isThisDayUploading
                             ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
                             : 'bg-slate-900 text-white hover:bg-slate-700'
                         )}
                       >
-                        {isUploading ? (
-                          <><Loader2 size={14} className="animate-spin" /> Uploading…</>
-                        ) : (
-                          <><Camera size={14} /> Upload</>
-                        )}
-                      </label>
-                    </>
+                        {isThisDayUploading
+                          ? <><Loader2 size={14} className="animate-spin" /> Uploading…</>
+                          : <><Camera size={14} /> Upload</>}
+                      </button>
+                      {/* Hidden file input — one per day, with dayNum captured in closure */}
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        ref={el => { fileRefs.current[dayNum] = el; }}
+                        onChange={e => handleSelfieUpload(e, dayNum, dayDateStr)}
+                      />
+                    </div>
                   )}
                 </div>
               )}
