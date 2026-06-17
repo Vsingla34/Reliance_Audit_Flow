@@ -467,7 +467,6 @@ function buildALFSheet(ws: ExcelJS.Worksheet, dist: SignOffDistributor, audit: S
   writeSign(dataRow + 8, 28, 'Sales Team Name & contact no.', true);
 
   clearSignRow(dataRow + 9, 16);
-  writeSign(dataRow + 9, 15, 'Singla Vishal & Co.');
 
   clearSignRow(dataRow + 10, 16);
   clearSignRow(dataRow + 11, 16);

@@ -167,8 +167,9 @@ export function ExecutionModule() {
           d.setDate(d.getDate() + auditDays - 1);
           endDate = d.toISOString().split('T')[0];
         }
-        const verifiedVal = ticket.verifiedTotal || 0;
-        const diff = verifiedVal - (ticket.approvedValue || 0);
+        const verifiedVal   = ticket.verifiedTotal || 0;
+        const approvedVal   = ticket.approvedValue || dist.approvedValue || 0;
+        const diff = verifiedVal - approvedVal;
         const row = [
           dist.assignment_serial_no || '',
           'Phase V - Part 2',
@@ -180,13 +181,13 @@ export function ExecutionModule() {
           dist.code || '',
           dist.anchorName || '',
           dist.name || '',
-          ticket.approvedValue || 0,
+          approvedVal,
           verifiedVal,
           '',
           diff,
           '',
           statusLabel[ticket.status] || ticket.status,
-          ticket.approvedValue ? (ticket.approvedValue / 10000000) : 0,
+          approvedVal ? (approvedVal / 10000000) : 0,
           ticket.scheduledDate ? new Date(ticket.scheduledDate) : '',
           endDate ? new Date(endDate) : '',
           (ticket as any).signOffs?.drainageDate    ? new Date((ticket as any).signOffs.drainageDate)    : '',
@@ -1659,15 +1660,18 @@ export function ExecutionModule() {
 
       const subject = `Variance Between Audited Value and Approved Value-'${serialNo}-${distName}'`;
 
-      const bVariance = toBoldUnicode(variancePctStr);
-      const bAudited  = toBoldUnicode('Audited Value');
-      const bApproved = toBoldUnicode(`Approved Value at ${distName} (Distributor Code`);
-      const bFirm     = toBoldUnicode('Singla Vishal & Co.');
+      const bVariance    = toBoldUnicode(variancePctStr);
+      const bAuditedLbl  = toBoldUnicode('Audited Value');
+      const bAuditedVal  = toBoldUnicode('₹' + verified.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+      const bApprovedLbl = toBoldUnicode('Approved Value');
+      const bApprovedVal = toBoldUnicode('₹' + approved.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+      const bDistInfo    = toBoldUnicode(`at ${distName} (Distributor Code`);
+      const bFirm        = toBoldUnicode('Singla Vishal & Co.');
 
       const body =
 `Dear Team,
 
-This is to inform you that a variance of ${bVariance} has been observed between the ${bAudited} and the ${bApproved}: ${distCodeForMail}) during the audit process.
+This is to inform you that a variance of ${bVariance} has been observed between the ${bAuditedLbl} (${bAuditedVal}) and the ${bApprovedLbl} (${bApprovedVal}) ${bDistInfo}: ${distCodeForMail}) during the audit process.
 
 Kindly review the variance and provide the necessary clarification and approval for further processing.
 

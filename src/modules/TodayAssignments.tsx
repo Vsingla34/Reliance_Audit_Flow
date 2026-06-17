@@ -439,8 +439,8 @@ export function TodayAssignmentsModule() {
                           <IndianRupee size={13} className={tier.iconColor} />
                         </div>
                         <span className="text-sm font-bold text-slate-800">
-                          ₹{(ticket.approvedValue || 0).toLocaleString('en-IN')}
-                          <span className="text-xs font-normal text-slate-400 ml-1">approved</span>
+                          ₹{(ticket.verifiedTotal || 0).toLocaleString('en-IN')}
+                            <span className="text-xs font-normal text-slate-400 ml-1">audited</span>
                         </span>
                       </div>
 
@@ -727,13 +727,11 @@ export function TodayAssignmentsModule() {
                         <td className="px-5 py-3.5">
                           <div className="flex items-center gap-1 text-sm font-bold text-slate-700">
                             <IndianRupee size={13} className="text-slate-400" />
-                            {(dist?.approvedValue || 0).toLocaleString('en-IN')}
+                            {(ticket.verifiedTotal || 0).toLocaleString('en-IN')}
                           </div>
-                          {(ticket.verifiedTotal || 0) > 0 && (
-                            <p className="text-[10px] text-slate-400 mt-0.5">
-                              ₹{ticket.verifiedTotal!.toLocaleString('en-IN')} verified
-                            </p>
-                          )}
+                          <p className="text-[10px] text-slate-400 mt-0.5">
+                            of ₹{(ticket.approvedValue || dist?.approvedValue || 0).toLocaleString('en-IN')} limit
+                          </p>
                         </td>
 
                         {/* Status */}

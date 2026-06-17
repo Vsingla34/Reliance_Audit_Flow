@@ -231,7 +231,7 @@ export function ReportsModule() {
             drainageStartDate: ticket.signOffs?.drainageDate    || '',
             drainageEndDate:   ticket.signOffs?.drainageEndDate || '',
             auditStatus:     ticket.status   || '',
-            approvedValue:   ticket.approvedValue || 0,
+            approvedValue:   ticket.approvedValue || (distMap[ticket.distributorId]?.approvedValue) || 0,
           });
         }
 
