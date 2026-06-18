@@ -7,6 +7,14 @@
  *  Sheet 2: "Article Level Format Revised"  (32 cols, group headers)
  *  Sheet 3: "Invoie details - Primary Damage"
  *  Sheet 4: "Attendance Sheet"
+ *
+ * FIX: All value calculations now use item.totalValue (stored in DB) as the
+ * source of truth rather than recomputing qty * unitValue, which causes
+ * floating-point drift (e.g. ₹1,050,413.96 vs ₹1,050,414.11).
+ *
+ * The split by type (damaged/nonSaleable/BBD) uses proportional allocation
+ * from the stored totalValue so the per-type values always sum exactly to
+ * item.totalValue.
  */
 import { useState } from 'react';
 import ExcelJS from 'exceljs';
@@ -122,6 +130,41 @@ async function enrichWithItemMaster(items: SignOffItem[]): Promise<SignOffItem[]
   return items.map(i => ({ ...i, gst: map[i.articleNumber]?.gst ?? i.gst ?? 0, standardPack: map[i.articleNumber]?.standardPack ?? i.standardPack ?? '', category: map[i.articleNumber]?.category || i.category || '' }));
 }
 
+// ── VALUE HELPER ──────────────────────────────────────────────────────────────
+// FIX: Always derive per-type values from the stored totalValue proportionally.
+// This guarantees: vDmg + vNs + vBbd + vSamp === item.totalValue (no fp drift).
+//
+// Strategy:
+//   totalQty = qDmg + qNs + qBbd + qSamp
+//   vX = round( totalValue * qX / totalQty, 2 )
+//   vLast = totalValue - sum(other rounded values)   ← absorbs any rounding remainder
+function splitValues(item: SignOffItem): {
+  vDmg: number; vNs: number; vBbd: number; vSamp: number; vTot: number;
+} {
+  const qDmg  = item.qtyDamaged     || 0;
+  const qNs   = item.qtyNonSaleable || 0;
+  const qBbd  = item.qtyBBD         || 0;
+  const qSamp = item.qtySampling    || 0;
+  const qTot  = qDmg + qNs + qBbd + qSamp;
+
+  // Use stored totalValue as the canonical total — never recompute from unitValue
+  const vTot = item.totalValue != null
+    ? item.totalValue
+    : qTot * (item.unitValue || 0);
+
+  if (qTot === 0) return { vDmg: 0, vNs: 0, vBbd: 0, vSamp: 0, vTot };
+
+  // Proportional split with 2dp rounding
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+  const vDmg  = round2(vTot * qDmg  / qTot);
+  const vNs   = round2(vTot * qNs   / qTot);
+  const vBbd  = round2(vTot * qBbd  / qTot);
+  // Last type absorbs any rounding remainder so sum == vTot exactly
+  const vSamp = round2(vTot - vDmg - vNs - vBbd);
+
+  return { vDmg, vNs, vBbd, vSamp, vTot };
+}
+
 // ═════════════════════════════════════════════════════════════════════════════
 // SHEET 1 — Sign Format
 // ═════════════════════════════════════════════════════════════════════════════
@@ -133,21 +176,45 @@ function buildSignSheet(ws: ExcelJS.Worksheet, dist: SignOffDistributor, audit: 
     { width: 14 }, { width: 14 }, { width: 12 },
   ];
 
-  const agg = new Map<string, { dmg: number; ns: number; bbd: number; samp: number; uv: number }>();
+  // ── FIX: aggregate using splitValues() so per-type values derive from
+  //         stored totalValue — not recomputed from unitValue * qty ──────────
+  const agg = new Map<string, {
+    dmg: number; ns: number; bbd: number; samp: number;
+    vDmg: number; vNs: number; vBbd: number; vSamp: number; vTot: number;
+    uv: number;
+  }>();
+
   for (const item of items) {
-    if (!agg.has(item.articleNumber)) agg.set(item.articleNumber, { dmg: 0, ns: 0, bbd: 0, samp: 0, uv: 0 });
+    if (!agg.has(item.articleNumber)) {
+      agg.set(item.articleNumber, { dmg: 0, ns: 0, bbd: 0, samp: 0, vDmg: 0, vNs: 0, vBbd: 0, vSamp: 0, vTot: 0, uv: 0 });
+    }
     const a = agg.get(item.articleNumber)!;
-    a.dmg += item.qtyDamaged || 0; a.ns += item.qtyNonSaleable || 0;
-    a.bbd += item.qtyBBD || 0;     a.samp += item.qtySampling || 0;
+    const sv = splitValues(item);
+    a.dmg   += item.qtyDamaged     || 0;
+    a.ns    += item.qtyNonSaleable || 0;
+    a.bbd   += item.qtyBBD         || 0;
+    a.samp  += item.qtySampling    || 0;
+    a.vDmg  += sv.vDmg;
+    a.vNs   += sv.vNs;
+    a.vBbd  += sv.vBbd;
+    a.vSamp += sv.vSamp;
+    a.vTot  += sv.vTot;
     if ((item.unitValue || 0) > a.uv) a.uv = item.unitValue;
   }
+
   const rows = [...agg.values()];
-  const qDmg = rows.reduce((s,v)=>s+v.dmg,0), qSamp = rows.reduce((s,v)=>s+v.samp,0);
-  const qNs  = rows.reduce((s,v)=>s+v.ns, 0), qBbd  = rows.reduce((s,v)=>s+v.bbd, 0);
-  const qTot = qDmg+qSamp+qNs+qBbd;
-  const vDmg = rows.reduce((s,v)=>s+v.dmg*v.uv,0), vSamp = rows.reduce((s,v)=>s+v.samp*v.uv,0);
-  const vNs  = rows.reduce((s,v)=>s+v.ns*v.uv, 0), vBbd  = rows.reduce((s,v)=>s+v.bbd*v.uv, 0);
-  const vTot = vDmg+vSamp+vNs+vBbd;
+  const qDmg  = rows.reduce((s, v) => s + v.dmg,   0);
+  const qSamp = rows.reduce((s, v) => s + v.samp,  0);
+  const qNs   = rows.reduce((s, v) => s + v.ns,    0);
+  const qBbd  = rows.reduce((s, v) => s + v.bbd,   0);
+  const qTot  = qDmg + qSamp + qNs + qBbd;
+  const vDmg  = rows.reduce((s, v) => s + v.vDmg,  0);
+  const vSamp = rows.reduce((s, v) => s + v.vSamp, 0);
+  const vNs   = rows.reduce((s, v) => s + v.vNs,   0);
+  const vBbd  = rows.reduce((s, v) => s + v.vBbd,  0);
+  // FIX: grand total = sum of all stored totalValues (not recomputed)
+  const vTot  = rows.reduce((s, v) => s + v.vTot,  0);
+
   const approved    = audit.approvedValue || 0;
   const variancePct = approved > 0 ? (vTot - approved) / approved : 0;
   const INR = '[$₹-en-IN]#,##0.00'; const QTY = '#,##0'; const PCT = '0.00%';
@@ -214,8 +281,6 @@ function buildSignSheet(ws: ExcelJS.Worksheet, dist: SignOffDistributor, audit: 
   ];
   for (const [col,val,fmt] of totals) scT(r,col,val,{hAlign:'center',vAlign:'middle',wrap:false,border:thinBorder,numFmt:fmt});
 
-  // (Item-wise remarks table removed — Sign Format shows only the summary row)
-
   nr(6); nr(6);
 
   nr(80); safeMerge(ws,r,2,r,9);
@@ -233,61 +298,23 @@ function buildSignSheet(ws: ExcelJS.Worksheet, dist: SignOffDistributor, audit: 
 
 // ═════════════════════════════════════════════════════════════════════════════
 // SHEET 2 — Article Level Format Revised  (32 cols A-AF)
-// Group headers: Master Details | Quantity Detail | Value Details | MFD & Expiry Date | Auditor Findings
-// Red-line cols (no-wrap, narrow): all master + auditor cols
-// Yellow cols (narrower, totalled): all qty + value cols
 // ═════════════════════════════════════════════════════════════════════════════
 function buildALFSheet(ws: ExcelJS.Worksheet, dist: SignOffDistributor, audit: SignOffAudit, items: SignOffItem[]) {
   ws.pageSetup = { orientation: 'landscape', paperSize: 9, fitToPage: true, fitToWidth: 1, fitToHeight: 0, margins: { left: 0.25, right: 0.25, top: 0.25, bottom: 0.25, header: 0, footer: 0 } };
 
-  // Column widths — exactly matching reference Excel
   const colWidths = [
-    6,   // A  Sr No
-    16,  // B  Std Serial No
-    12,  // C  Region
-    12,  // D  State
-    16,  // E  Audit Team
-    14,  // F  Anchor Code
-    18,  // G  Anchor Name
-    18,  // H  Distributor name
-    14,  // I  Article Code
-    28,  // J  Brand Pack
-    14,  // K  Category
-    10,  // L  NPI
-    14,  // M  Rate incl GST
-    8,   // N  GST%
-    10,  // O  Standard Pack
-    10,  // P  PD (Pcs)
-    12,  // Q  Samp (Pcs)
-    18,  // R  NS (Pcs)
-    10,  // S  BBD (Pcs)
-    10,  // T  Total (Pcs)
-    14,  // U  PD (INR)
-    14,  // V  Samp (INR)
-    18,  // W  NS (INR)
-    12,  // X  BBD (INR)
-    14,  // Y  Total (INR)
-    14,  // Z  Total (Excl)
-    13,  // AA Mfg Date
-    13,  // AB Exp Date
-    8,   // AC Life
-    14,  // AD Mfg Qtr
-    24,  // AE Issue
-    18,  // AF Remarks
+    6, 16, 12, 12, 16, 14, 18, 18, 14, 28, 14, 10, 14, 8, 10,
+    10, 12, 18, 10, 10, 14, 14, 18, 12, 14, 14, 13, 13, 8, 14, 24, 18,
   ];
   ws.columns = colWidths.map(w => ({ width: w }));
-
-  // No freeze panes
   ws.views = [{}];
 
-  // ── ROW 1: blank spacer ──────────────────────────────────────────────────────
   ws.getRow(1).height = 10;
 
-  // ── ROW 2: Group headers ─────────────────────────────────────────────────────
   ws.getRow(2).height = 20;
   const groups: Array<[number,number,string,string]> = [
     [1,  15, 'Master Details',                C.MASTER_HDR],
-    [16, 20, 'Quanity Detail',                C.QTY_HDR],   // matches template spelling
+    [16, 20, 'Quanity Detail',                C.QTY_HDR],
     [21, 26, 'Value Details - Including GST', C.VAL_HDR],
     [27, 30, 'MFD & Expiry Date',             C.MFD_HDR],
     [31, 32, 'Auditor Findings',              C.AUD_HDR],
@@ -297,7 +324,6 @@ function buildALFSheet(ws: ExcelJS.Worksheet, dist: SignOffDistributor, audit: S
     setCell(ws,2,c1,text,{font:ariFont({bold:true,size:11}),fill:fc,hAlign:'center',vAlign:'middle',wrap:false,border:thinBorder});
   }
 
-  // ── ROW 3: Column headers — tall row, wrap text, NO rotation (matches reference) ──
   ws.getRow(3).height = 150;
   const colHeaders: Array<[number,string,string]> = [
     [1,  'Sr No',                                                                           C.MASTER_HDR],
@@ -338,11 +364,10 @@ function buildALFSheet(ws: ExcelJS.Worksheet, dist: SignOffDistributor, audit: S
     cell.value     = text;
     cell.font      = ariFont({bold:true, size:9});
     cell.fill      = solidFill(fc);
-    cell.alignment = { horizontal:'center', vertical:'middle', wrapText: true }; // NO rotation
+    cell.alignment = { horizontal:'center', vertical:'middle', wrapText: true };
     cell.border    = thinBorder;
   }
 
-  // ── DATA ROWS ──────────────────────────────────────────────────────────────
   const serialNo = audit.serialNo || audit.id || '';
   const INR = '[$₹-en-IN]#,##0.00'; const QTY = '#,##0';
 
@@ -355,39 +380,57 @@ function buildALFSheet(ws: ExcelJS.Worksheet, dist: SignOffDistributor, audit: S
     try { const m=new Date(mfg); const fy=m.getMonth()>=3?m.getFullYear():m.getFullYear()-1; const q=Math.floor(((m.getMonth()-3+12)%12)/3)+1; return `Q${q} FY${String(fy).slice(2)}-${String(fy+1).slice(2)}`; } catch { return ''; }
   };
 
-  // Aggregate by article
-  const agg = new Map<string, { item: SignOffItem; dmg: number; ns: number; bbd: number; samp: number }>();
+  // ── FIX: aggregate using splitValues() ───────────────────────────────────
+  const agg = new Map<string, {
+    item: SignOffItem;
+    dmg: number; ns: number; bbd: number; samp: number;
+    vDmg: number; vNs: number; vBbd: number; vSamp: number; vTot: number;
+  }>();
+
   for (const item of items) {
-    if (!agg.has(item.articleNumber)) agg.set(item.articleNumber, { item, dmg:0, ns:0, bbd:0, samp:0 });
+    if (!agg.has(item.articleNumber)) {
+      agg.set(item.articleNumber, {
+        item, dmg: 0, ns: 0, bbd: 0, samp: 0,
+        vDmg: 0, vNs: 0, vBbd: 0, vSamp: 0, vTot: 0,
+      });
+    }
     const a = agg.get(item.articleNumber)!;
-    a.dmg += item.qtyDamaged||0; a.ns += item.qtyNonSaleable||0;
-    a.bbd += item.qtyBBD||0;     a.samp += item.qtySampling||0;
-    if ((item.unitValue||0) > (a.item.unitValue||0)) a.item = {...a.item,...item};
-    else if (item.mfgDate&&!a.item.mfgDate) a.item = {...a.item,mfgDate:item.mfgDate,expDate:item.expDate};
+    const sv = splitValues(item);
+    a.dmg   += item.qtyDamaged     || 0;
+    a.ns    += item.qtyNonSaleable || 0;
+    a.bbd   += item.qtyBBD         || 0;
+    a.samp  += item.qtySampling    || 0;
+    a.vDmg  += sv.vDmg;
+    a.vNs   += sv.vNs;
+    a.vBbd  += sv.vBbd;
+    a.vSamp += sv.vSamp;
+    a.vTot  += sv.vTot;
+    if ((item.unitValue || 0) > (a.item.unitValue || 0)) a.item = { ...a.item, ...item };
+    else if (item.mfgDate && !a.item.mfgDate) a.item = { ...a.item, mfgDate: item.mfgDate, expDate: item.expDate };
   }
 
   let sno = 0;
-  let tDmgQ=0,tSampQ=0,tNsQ=0,tBbdQ=0,tTotQ=0;
-  let tDmgV=0,tSampV=0,tNsV=0,tBbdV=0,tIncV=0,tExcV=0;
+  let tDmgQ=0, tSampQ=0, tNsQ=0, tBbdQ=0, tTotQ=0;
+  let tDmgV=0, tSampV=0, tNsV=0, tBbdV=0, tIncV=0, tExcV=0;
   let dataRow = 4;
 
-  for (const [code,{item,dmg,ns,bbd,samp}] of agg) {
+  for (const [, { item, dmg, ns, bbd, samp, vDmg, vNs, vBbd, vSamp, vTot }] of agg) {
     sno++;
-    const qTot = dmg+samp+ns+bbd;
-    const uv   = item.unitValue||0;
-    const gst  = Number(item.gst)||0;
-    const vDmg=dmg*uv, vSamp=samp*uv, vNs=ns*uv, vBbd=bbd*uv, vTot=qTot*uv;
-    const vExc = gst>0 ? vTot/(1+gst/100) : vTot;
+    const qTot = dmg + samp + ns + bbd;
+    const uv   = item.unitValue || 0;
+    const gst  = Number(item.gst) || 0;
+    // FIX: excl value derived from stored vTot, not recomputed
+    const vExc = gst > 0 ? vTot / (1 + gst / 100) : vTot;
 
-    tDmgQ+=dmg; tSampQ+=samp; tNsQ+=ns; tBbdQ+=bbd; tTotQ+=qTot;
-    tDmgV+=vDmg; tSampV+=vSamp; tNsV+=vNs; tBbdV+=vBbd; tIncV+=vTot; tExcV+=vExc;
+    tDmgQ  += dmg;  tSampQ += samp; tNsQ  += ns;   tBbdQ  += bbd;  tTotQ  += qTot;
+    tDmgV  += vDmg; tSampV += vSamp; tNsV += vNs;  tBbdV  += vBbd; tIncV  += vTot; tExcV += vExc;
 
     ws.getRow(dataRow).height = 15;
 
     const rowData: Array<[number,ExcelJS.CellValue,string?]> = [
       [1,sno,QTY],[2,serialNo,undefined],[3,dist.region||'',undefined],[4,dist.state||'',undefined],
       [5,'Singla Vishal & Co.',undefined],[6,dist.code||'',undefined],[7,dist.anchorName||'',undefined],
-      [8,dist.name||'',undefined],[9,code,undefined],[10,item.description,undefined],
+      [8,dist.name||'',undefined],[9,item.articleNumber,undefined],[10,item.description,undefined],
       [11,item.category||'',undefined],[12,'',undefined],[13,uv,INR],
       [14,gst>0?gst+'%':'',undefined],[15,item.standardPack||'',undefined],
       [16,dmg,QTY],[17,samp,QTY],[18,ns,QTY],[19,bbd,QTY],[20,qTot,QTY],
@@ -467,7 +510,6 @@ function buildALFSheet(ws: ExcelJS.Worksheet, dist: SignOffDistributor, audit: S
   writeSign(dataRow + 8, 28, 'Sales Team Name & contact no.', true);
 
   clearSignRow(dataRow + 9, 16);
-
   clearSignRow(dataRow + 10, 16);
   clearSignRow(dataRow + 11, 16);
 
@@ -487,9 +529,11 @@ function buildInvoiceDetailsSheet(ws: ExcelJS.Worksheet, dist: SignOffDistributo
   const headers=['Sr No','Audit Serial No.','Region','Audit Team','Anchor Code','Anchor Name','Distributor name','Invoice No.','Invoice Date','Damage Qty in Pcs','Damage Value in Rs.'];
   ws.getRow(2).height=30;
   headers.forEach((h,i)=>setCell(ws,2,i+1,h,{font:ariFont({bold:true,size:9}),fill:C.MASTER_HDR,hAlign:'center',vAlign:'middle',wrap:true,border:thinBorder}));
+  // FIX: use splitValues to get damage value from stored totalValue
   items.filter(i=>(i.qtyDamaged||0)>0).forEach((item,idx)=>{
     ws.getRow(3+idx).height=15;
-    [idx+1,audit.serialNo||audit.id||'',dist.region||'','Singla Vishal & Co.',dist.code||'',dist.anchorName||'',dist.name||'','','',item.qtyDamaged||0,(item.qtyDamaged||0)*(item.unitValue||0)].forEach((v,i)=>{
+    const sv = splitValues(item);
+    [idx+1,audit.serialNo||audit.id||'',dist.region||'','Singla Vishal & Co.',dist.code||'',dist.anchorName||'',dist.name||'','','',item.qtyDamaged||0, sv.vDmg].forEach((v,i)=>{
       setCell(ws,3+idx,i+1,v as ExcelJS.CellValue,{font:ariFont({size:9}),hAlign:i>=9?'right':'left',border:thinBorder,numFmt:i===10?'[$₹-en-IN]#,##0.00':i===9?'#,##0':undefined});
     });
   });
@@ -546,13 +590,11 @@ export function useSignOffExport(params: {
     finally { setIsExporting(false); }
   };
 
-  // ── Claim Letter PDF export ─────────────────────────────────────────────
-
+  // ── Claim Letter PDF export ─────────────────────────────────────────────────
   const exportClaimPDF = async () => {
     if (!params.distributor) return;
     setIsExportingPDF(true);
     try {
-      // Fetch fresh distributor (same as exportSignOff)
       const sb = supabase;
       let freshDist: SignOffDistributor = params.distributor;
       if (params.distributor.code) {
@@ -574,8 +616,10 @@ export function useSignOffExport(params: {
         }
       }
 
-      const totalQty   = params.items.reduce((s, i) => s + (i.quantity || (i.qtyDamaged||0) + (i.qtyNonSaleable||0) + (i.qtyBBD||0) || 0), 0);
-      const totalValue = params.items.reduce((s, i) => s + (i.totalValue || (i.quantity||0) * (i.unitValue||0) || 0), 0);
+      // FIX: use stored totalValue for PDF totals too
+      const totalQty   = params.items.reduce((s, i) => s + ((i.qtyDamaged||0) + (i.qtyNonSaleable||0) + (i.qtyBBD||0)), 0);
+      const totalValue = params.items.reduce((s, i) => s + (i.totalValue ?? ((i.qtyDamaged||0)+(i.qtyNonSaleable||0)+(i.qtyBBD||0)) * (i.unitValue||0)), 0);
+
       const auditDate  = params.audit.scheduledDate || '';
       const serialNo   = params.audit.serialNo || '';
       const anchorName = freshDist.anchorName || freshDist.name || '';
@@ -629,11 +673,11 @@ export function useSignOffExport(params: {
 
       const body1 = `
         <p>We, hereby confirm that leakage &amp; breakage audit has been completed at our premises by Auditors.</p><br>
-        <p>Request you to please raise credit note in our Anchor’s account as per below details: -</p><br>`;
+        <p>Request you to please raise credit note in our Anchor's account as per below details: -</p><br>`;
 
       const body2 = `
         <p>We, hereby confirm that leakage &amp; breakage audit has been completed at our distributor as per below details. Request you to please raise credit note to our account accordingly.</p><br>
-        <p>Request you to please raise credit note in our Anchor’s account as per below details: -</p><br>`;
+        <p>Request you to please raise credit note in our Anchor's account as per below details: -</p><br>`;
 
       const extra2 = `<br><p>We hereby confirm that credit note amount shall be reimbursed to abovementioned Distributor.</p>`;
 
@@ -672,7 +716,6 @@ export function useSignOffExport(params: {
   };
 
   // ── ALF PDF export ──────────────────────────────────────────────────────────
-
   const exportALFPDF = async () => {
     if (!params.distributor || params.items.length === 0) return;
     setIsExportingALF(true);
@@ -684,7 +727,6 @@ export function useSignOffExport(params: {
         if (dbDist) freshDist = { ...params.distributor, name: dbDist.name || params.distributor.name, anchorName: dbDist.anchorName || params.distributor.anchorName, address: dbDist.address || '', city: dbDist.city || '', state: dbDist.state || '', region: dbDist.region || '' };
       }
 
-      // Enrich with itemMaster
       const codes = [...new Set(params.items.map(i => i.articleNumber))];
       const itemMasterMap: Record<string, any> = {};
       if (codes.length) {
@@ -712,7 +754,6 @@ export function useSignOffExport(params: {
         return `Q${Math.ceil((d.getMonth() + 1) / 3)} ${d.getFullYear()}`;
       };
 
-      // Group + column headers for HTML PDF
       const groups = [
         { label: 'Master Details',                cols: 15, color: '#D9E1F2' },
         { label: 'Quantity Detail',               cols: 5,  color: '#BDD7EE' },
@@ -740,21 +781,35 @@ export function useSignOffExport(params: {
         const bbd  = item.qtyBBD         || 0;
         const samp = item.qtySampling    || 0;
         const tot  = dmg + ns + bbd + samp;
-        const vDmg = dmg  * uv; const vNs = ns * uv; const vBbd = bbd * uv; const vSamp = samp * uv;
-        const vTot = tot  * uv;
-        const vExc = gst > 0 ? vTot / (1 + gst / 100) : vTot;
+
+        // FIX: use splitValues for consistent per-type values
+        const sv   = splitValues(item);
+        const vExc = gst > 0 ? sv.vTot / (1 + gst / 100) : sv.vTot;
+
         const cols = [
           idx + 1, params.audit.serialNo || '', freshDist.region || '', freshDist.state || '',
           params.audit.auditorName || '', freshDist.code || '', freshDist.anchorName || freshDist.name || '',
           freshDist.name || '', item.articleNumber, item.description, item.category || '', '',
           fmtINR(uv), gst > 0 ? gst + '%' : '', item.standardPack || '',
           fmtQ(dmg), fmtQ(samp), fmtQ(ns), fmtQ(bbd), fmtQ(tot),
-          fmtINR(vDmg), fmtINR(vSamp), fmtINR(vNs), fmtINR(vBbd), fmtINR(vTot), fmtINR(vExc),
+          fmtINR(sv.vDmg), fmtINR(sv.vSamp), fmtINR(sv.vNs), fmtINR(sv.vBbd), fmtINR(sv.vTot), fmtINR(vExc),
           item.mfgDate || '', item.expDate || '', lifeM(item.mfgDate || '', item.expDate || ''), mfgQ(item.mfgDate || ''),
           item.reasonCode || '', item.remarks || '',
         ];
         rows += `<tr>${cols.map(c => `<td>${c}</td>`).join('')}</tr>`;
       });
+
+      // FIX: totals use splitValues-derived values
+      const totDmg  = enriched.reduce((s, i) => s + splitValues(i).vDmg,  0);
+      const totSamp = enriched.reduce((s, i) => s + splitValues(i).vSamp, 0);
+      const totNs   = enriched.reduce((s, i) => s + splitValues(i).vNs,   0);
+      const totBbd  = enriched.reduce((s, i) => s + splitValues(i).vBbd,  0);
+      const totInc  = enriched.reduce((s, i) => s + splitValues(i).vTot,  0);
+      const totExc  = enriched.reduce((s, i) => {
+        const sv = splitValues(i);
+        const gst = Number(i.gst) || 0;
+        return s + (gst > 0 ? sv.vTot / (1 + gst / 100) : sv.vTot);
+      }, 0);
 
       const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
 <title>Article Level Format — ${params.audit.serialNo || ''}</title>
@@ -765,45 +820,19 @@ export function useSignOffExport(params: {
   .meta { font-size: 8pt; margin-bottom: 6pt; display: flex; gap: 24pt; flex-wrap: wrap; }
   .meta span { font-weight: bold; }
   table { width: 100%; border-collapse: collapse; table-layout: fixed; }
-  tfoot { display: table-row-group; }  /* prevents repeating tfoot on every printed page */
+  tfoot { display: table-row-group; }
   th { font-weight: bold; font-size: 6pt; padding: 2pt 1pt; text-align: center; border: 0.5pt solid #999; vertical-align: bottom; word-wrap: break-word; }
   td { padding: 2pt 1pt; border: 0.5pt solid #ccc; text-align: center; vertical-align: middle; overflow: hidden; font-size: 7pt; word-wrap: break-word; }
   td:nth-child(8), td:nth-child(10), td:nth-child(11) { text-align: left; }
-  /* nowrap only on INR value + date columns — everything else can wrap */
   td:nth-child(n+21):nth-child(-n+28) { white-space: nowrap; }
-  /* Column widths */
-  col.c1  { width: 1.5%; }   /* Sr No — widened */
-  col.c2  { width: 6.5%; }   /* Serial No — narrowed */
-  col.c3  { width: 2.3%; }   /* Region -0.5 */
-  col.c4  { width: 2.0%; }   /* State -0.5 */
-  col.c5  { width: 3.0%; }   /* Audit Team -0.5 */
-  col.c6  { width: 2.5%; }   /* Anchor Code -0.5 */
-  col.c7  { width: 4.0%; }
-  col.c8  { width: 4.0%; }
-  col.c9  { width: 3.0%; }
-  col.c10 { width: 5.0%; }
-  col.c11 { width: 3.0%; }
-  col.c12 { width: 0.5%; }   /* NPI */
-  col.c13 { width: 3.0%; }
-  col.c14 { width: 1.5%; }
-  col.c15 { width: 1.5%; }
-  col.c16 { width: 2.5%; }   /* PD Pcs +0.5 */
-  col.c17 { width: 2.5%; }   /* Samp Pcs +0.5 */
-  col.c18 { width: 2.5%; }   /* NS Pcs +0.5 */
-  col.c19 { width: 2.5%; }   /* BBD Pcs +0.5 */
-  col.c20 { width: 2.5%; }   /* Total Pcs +0.5 */
-  col.c21 { width: 4.3%; }
-  col.c22 { width: 3.8%; }
-  col.c23 { width: 4.8%; }
-  col.c24 { width: 4.3%; }
-  col.c25 { width: 4.8%; }
-  col.c26 { width: 4.8%; }
-  col.c27 { width: 3.6%; }
-  col.c28 { width: 3.6%; }
-  col.c29 { width: 2.0%; }
-  col.c30 { width: 3.0%; }
-  col.c31 { width: 3.5%; }
-  col.c32 { width: 3.5%; }
+  col.c1  { width: 1.5%; } col.c2  { width: 6.5%; } col.c3  { width: 2.3%; } col.c4  { width: 2.0%; }
+  col.c5  { width: 3.0%; } col.c6  { width: 2.5%; } col.c7  { width: 4.0%; } col.c8  { width: 4.0%; }
+  col.c9  { width: 3.0%; } col.c10 { width: 5.0%; } col.c11 { width: 3.0%; } col.c12 { width: 0.5%; }
+  col.c13 { width: 3.0%; } col.c14 { width: 1.5%; } col.c15 { width: 1.5%; } col.c16 { width: 2.5%; }
+  col.c17 { width: 2.5%; } col.c18 { width: 2.5%; } col.c19 { width: 2.5%; } col.c20 { width: 2.5%; }
+  col.c21 { width: 4.3%; } col.c22 { width: 3.8%; } col.c23 { width: 4.8%; } col.c24 { width: 4.3%; }
+  col.c25 { width: 4.8%; } col.c26 { width: 4.8%; } col.c27 { width: 3.6%; } col.c28 { width: 3.6%; }
+  col.c29 { width: 2.0%; } col.c30 { width: 3.0%; } col.c31 { width: 3.5%; } col.c32 { width: 3.5%; }
   tr:nth-child(even) td { background: #f9f9f9; }
   .totals td { font-weight: bold; background: #E2EFDA !important; border-top: 1.5pt solid #333; }
   .declaration { margin-top: 16pt; font-size: 8pt; line-height: 1.6; }
@@ -831,12 +860,12 @@ export function useSignOffExport(params: {
       <td>${fmtQ(enriched.reduce((s,i)=>s+(i.qtyNonSaleable||0),0))}</td>
       <td>${fmtQ(enriched.reduce((s,i)=>s+(i.qtyBBD||0),0))}</td>
       <td>${fmtQ(enriched.reduce((s,i)=>s+((i.qtyDamaged||0)+(i.qtyNonSaleable||0)+(i.qtyBBD||0)+(i.qtySampling||0)),0))}</td>
-      <td>${fmtINR(enriched.reduce((s,i)=>s+(i.qtyDamaged||0)*(i.unitValue||0),0))}</td>
-      <td>${fmtINR(enriched.reduce((s,i)=>s+(i.qtySampling||0)*(i.unitValue||0),0))}</td>
-      <td>${fmtINR(enriched.reduce((s,i)=>s+(i.qtyNonSaleable||0)*(i.unitValue||0),0))}</td>
-      <td>${fmtINR(enriched.reduce((s,i)=>s+(i.qtyBBD||0)*(i.unitValue||0),0))}</td>
-      <td>${fmtINR(enriched.reduce((s,i)=>s+(i.totalValue||0),0))}</td>
-      <td>${fmtINR(enriched.reduce((s,i)=>s+(Number(i.gst)>0?(i.totalValue||0)/(1+Number(i.gst)/100):(i.totalValue||0)),0))}</td>
+      <td>${fmtINR(totDmg)}</td>
+      <td>${fmtINR(totSamp)}</td>
+      <td>${fmtINR(totNs)}</td>
+      <td>${fmtINR(totBbd)}</td>
+      <td>${fmtINR(totInc)}</td>
+      <td>${fmtINR(totExc)}</td>
       ${Array(6).fill('<td></td>').join('')}
     </tr>
   </tfoot>
@@ -855,11 +884,7 @@ export function useSignOffExport(params: {
     <td class="sign-cell">&nbsp;</td>
     <td class="sign-cell"><b>Sales Team Name &amp; contact no.</b></td>
   </tr>
-  <tr>
-    <td class="sign-cell">&nbsp;</td>
-    <td class="sign-cell">&nbsp;</td>
-    <td class="sign-cell">&nbsp;</td>
-  </tr>
+  <tr><td class="sign-cell">&nbsp;</td><td class="sign-cell">&nbsp;</td><td class="sign-cell">&nbsp;</td></tr>
   <tr><td class="sign-cell">&nbsp;</td><td class="sign-cell">&nbsp;</td><td class="sign-cell">&nbsp;</td></tr>
   <tr>
     <td class="sign-cell"><b>Seal &amp; Sign -</b></td>
@@ -882,7 +907,6 @@ export function useSignOffExport(params: {
       setIsExportingALF(false);
     }
   };
-
 
   return { exportSignOff, isExporting, exportClaimPDF, isExportingPDF, exportALFPDF, isExportingALF };
 }

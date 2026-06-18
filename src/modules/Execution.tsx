@@ -303,7 +303,14 @@ export function ExecutionModule() {
 
   const fetchItems = async (ticketId: string) => {
     const { data } = await supabase.from('auditLineItems').select('*').eq('ticketId', ticketId).order('articleNumber', { ascending: true });
-    if (data) setItems(data as AuditLineItem[]);
+    if (!data) return;
+    setItems(data as AuditLineItem[]);
+
+    // Sum exactly like Excel — read stored totalValue, sum in paise to avoid JS float drift
+    const totalPaise = (data as AuditLineItem[]).reduce((s, i) => s + Math.round((i.totalValue || 0) * 100), 0);
+    const trueTotal  = totalPaise / 100;
+    setActiveTicket(prev => prev ? { ...prev, verifiedTotal: trueTotal } : prev);
+    await supabase.from('auditTickets').update({ verifiedTotal: trueTotal, updatedAt: new Date().toISOString() }).eq('id', ticketId);
   };
 
   const loadDumpData = async (distCode: string) => {
@@ -620,7 +627,7 @@ export function ExecutionModule() {
 
     if (['qtyNonSaleable', 'qtyBBD', 'qtyDamaged'].includes(field)) {
        updatedItem.quantity   = (Number(updatedItem.qtyNonSaleable) || 0) + (Number(updatedItem.qtyBBD) || 0) + (Number(updatedItem.qtyDamaged) || 0);
-       updatedItem.totalValue = updatedItem.quantity * (updatedItem.unitValue || 0);
+       updatedItem.totalValue = Math.round(updatedItem.quantity * (updatedItem.unitValue || 0) * 100) / 100;
     }
 
     if (field === 'unitValue') {
@@ -630,7 +637,7 @@ export function ExecutionModule() {
        const trueQty = (Number(updatedItem.qtyNonSaleable) || 0) + (Number(updatedItem.qtyBBD) || 0) + (Number(updatedItem.qtyDamaged) || 0)
                     || (Number(updatedItem.quantity) || 0);
        updatedItem.quantity   = trueQty;
-       updatedItem.totalValue = trueQty * newRate;
+       updatedItem.totalValue = Math.round(trueQty * newRate * 100) / 100;
     }
 
     if (field === 'mfgDate' || field === 'expDate') {
@@ -717,7 +724,7 @@ export function ExecutionModule() {
                   + (Number(itemToSave.qtyDamaged)       || 0)
                   || (Number(itemToSave.quantity)         || 0);
     const trueRate  = Number(itemToSave.unitValue) || 0;
-    const trueValue = trueQty * trueRate;
+    const trueValue = Math.round(trueQty * trueRate * 100) / 100;
 
     // Patch itemToSave with corrected values
     itemToSave.quantity   = trueQty;
@@ -980,7 +987,7 @@ export function ExecutionModule() {
           id: crypto.randomUUID(), ticketId: activeTicket.id,
           articleNumber: articleCode, description, category: dumpItem?.category || '',
           quantity: qDmg, qtyDamaged: qDmg, qtyNonSaleable: 0, qtyBBD: 0,
-          unitValue, totalValue: qDmg * unitValue,
+          unitValue, totalValue: Math.round(qDmg * unitValue * 100) / 100,
           reasonCode: 'Verified / OK', mfgDate, expDate, productLife,
           remarks: rowRemarks || 'Sending Invoice',
           bbdApprovalStatus: 'none', qtyDrained: 0,
@@ -989,7 +996,7 @@ export function ExecutionModule() {
           id: crypto.randomUUID(), ticketId: activeTicket.id,
           articleNumber: articleCode, description, category: dumpItem?.category || '',
           quantity: effectiveNs, qtyDamaged: 0, qtyNonSaleable: effectiveNs, qtyBBD: 0,
-          unitValue, totalValue: effectiveNs * unitValue,
+          unitValue, totalValue: Math.round(effectiveNs * unitValue * 100) / 100,
           reasonCode: 'Verified / OK', mfgDate, expDate, productLife,
           remarks: rowRemarks || '',
           bbdApprovalStatus: 'none', qtyDrained: 0,
@@ -998,7 +1005,7 @@ export function ExecutionModule() {
           id: crypto.randomUUID(), ticketId: activeTicket.id,
           articleNumber: articleCode, description, category: dumpItem?.category || '',
           quantity: qBbd, qtyDamaged: 0, qtyNonSaleable: 0, qtyBBD: qBbd,
-          unitValue, totalValue: qBbd * unitValue,
+          unitValue, totalValue: Math.round(qBbd * unitValue * 100) / 100,
           reasonCode: 'Verified / OK', mfgDate, expDate, productLife,
           remarks: rowRemarks || '',
           bbdApprovalStatus: qBbd > 0 && expDate && activeTicket.scheduledDate && expDate > activeTicket.scheduledDate ? 'pending' : 'none',
