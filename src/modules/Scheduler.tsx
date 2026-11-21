@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import { supabase, logActivity, notifyLinkedUsers } from '../supabase';
+import { getCachedData, setCachedData, fetchCachedDistributors, fetchCachedUsers } from '../supabaseOptimized';
 import { AuditTicket, Distributor, UserProfile, DateProposal } from '../types';
 import { Calendar as CalendarIcon, Plus, Store, MapPin, CheckCircle2, X, Send, AlertCircle, MessageSquare, Filter, Trash2, CalendarCheck, ChevronLeft, ChevronRight, Clock, Edit2, Search, User as UserIcon, Phone, Mail } from 'lucide-react';
 import { cn, useAuth } from '../App';
@@ -36,11 +37,16 @@ async function fetchAllRows<T>(
 }
 
 export function SchedulerModule() {
-  const { user, profile } = useAuth();
-  const [tickets, setTickets] = useState<AuditTicket[]>([]);
-  const [distributors, setDistributors] = useState<any[]>([]); 
-  const [auditors, setAuditors] = useState<UserProfile[]>([]);
-  const [allUsers, setAllUsers] = useState<UserProfile[]>([]); 
+  const { user, profile, activeAssignment } = useAuth();
+  const assignmentId = activeAssignment?.id || 'assignment-1';
+  const isGlobal = ['superadmin', 'admin', 'ho', 'auditor'].includes(profile?.role || '');
+  const cacheKeyDist = `distributors-${assignmentId}-${isGlobal ? 'all' : `${profile?.role}-${profile?.uid}`}`;
+  const cacheKeyTickets = `scheduler-tickets-${assignmentId}-${profile?.uid || 'anon'}`;
+
+  const [tickets, setTickets] = useState<AuditTicket[]>(() => getCachedData<AuditTicket[]>(cacheKeyTickets) || []);
+  const [distributors, setDistributors] = useState<any[]>(() => getCachedData<any[]>(cacheKeyDist) || []); 
+  const [auditors, setAuditors] = useState<UserProfile[]>(() => (getCachedData<UserProfile[]>('global-users') || []).filter(u => u.role === 'auditor'));
+  const [allUsers, setAllUsers] = useState<UserProfile[]>(() => getCachedData<UserProfile[]>('global-users') || []); 
   
   const [currentMonth, setCurrentMonth] = useState(new Date());
   
@@ -123,66 +129,55 @@ export function SchedulerModule() {
     const fetchData = async () => {
       if (!profile) return;
       try {
-        // Column projection — only fetch what the scheduler uses
-        let dQuery = supabase.from('distributors')
-          .select('id,code,name,city,state,region,approvedValue,aseIds,asmIds,smIds,dmIds,hoIds,active');
-        if (profile.role === 'ase') dQuery = dQuery.contains('aseIds', [profile.uid]);
-        else if (profile.role === 'asm') dQuery = dQuery.contains('asmIds', [profile.uid]);
-        else if (profile.role === 'sm')  dQuery = dQuery.contains('smIds',  [profile.uid]);
-        else if (profile.role === 'dm')  dQuery = dQuery.contains('dmIds',  [profile.uid]);
-        
-        const [fetchedDistributors, usersList] = await Promise.all([
-          fetchAllRows<any>(() => dQuery),
-          fetchAllRows<UserProfile>(() => supabase.from('users').select('uid,name,email,role,phone,region,active')),
-        ]);
-        setDistributors(fetchedDistributors);
-        
-        if (true) {
-          setAllUsers(usersList);
-          setAuditors(usersList.filter(u => u.role === 'auditor'));
-        }
-
-        // Paginated ticket fetch — prevents truncation at 1000 rows
+        // Fetch distributors, users, and tickets concurrently in 1 wave!
         let tBaseQuery = () => {
-          let q = supabase.from('auditTickets').select('id,distributorId,status,scheduledDate,proposedDate,auditorIds,approvedValue,auditDays,dateProposals,createdAt,updatedAt');
+          let q = supabase.from('auditTickets')
+            .select('id,assignment_id,distributorId,status,scheduledDate,proposedDate,auditorIds,approvedValue,auditDays,dateProposals,createdAt,updatedAt')
+            .eq('assignment_id', assignmentId);
           if (profile.role === 'auditor')
             q = q.or(`auditorId.eq.${profile.uid},auditorIds.cs.{${profile.uid}}`);
-          else if (['ase', 'asm', 'sm', 'dm'].includes(profile.role)) {
-            const distIds = fetchedDistributors.map((d: any) => d.id);
-            if (distIds.length > 0) q = q.in('distributorId', distIds);
-          }
           return q;
         };
-        if (profile.role !== 'ase' && profile.role !== 'asm' && profile.role !== 'sm' && profile.role !== 'dm'
-            || fetchedDistributors.length > 0) {
-          const allTickets = await fetchAllRows<AuditTicket>(tBaseQuery);
-          const validTickets = allTickets.filter((t: AuditTicket) => fetchedDistributors.some((d: any) => d.id === t.distributorId));
-          setTickets(validTickets);
-        } else {
-          setTickets([]);
-        }
+
+        const [fetchedDistributors, usersList, allTickets] = await Promise.all([
+          fetchCachedDistributors(assignmentId, profile),
+          fetchCachedUsers(),
+          fetchAllRows<AuditTicket>(tBaseQuery),
+        ]);
+
+        setDistributors(fetchedDistributors);
+        setAllUsers(usersList);
+        setAuditors(usersList.filter((u: UserProfile) => u.role === 'auditor'));
+
+        const distIdSet = new Set(fetchedDistributors.map((d: any) => d.id));
+        const validTickets = allTickets.filter((t: AuditTicket) => distIdSet.has(t.distributorId));
+        setTickets(validTickets);
+        setCachedData(cacheKeyTickets, validTickets);
       } catch (error) { console.error("Error fetching scheduler data:", error); }
     };
 
     fetchData();
     const channel = supabase
-      .channel('scheduler-tickets')
+      .channel(`scheduler-tickets-${assignmentId}`)
       .on('postgres_changes',
         { event: '*', schema: 'public', table: 'auditTickets' },
         (payload: any) => {
           // Surgical update — don't refetch all distributors+users+tickets on every change
           const { eventType, new: updated, old } = payload;
+          if (updated && updated.assignment_id && updated.assignment_id !== assignmentId) return;
           setTickets(prev => {
-            if (eventType === 'INSERT') return [...prev, updated];
-            if (eventType === 'DELETE') return prev.filter((t: any) => t.id !== old.id);
-            if (eventType === 'UPDATE') return prev.map((t: any) => t.id === updated.id ? { ...t, ...updated } : t);
-            return prev;
+            let next = prev;
+            if (eventType === 'INSERT') next = [...prev, updated];
+            else if (eventType === 'DELETE') next = prev.filter((t: any) => t.id !== old.id);
+            else if (eventType === 'UPDATE') next = prev.map((t: any) => t.id === updated.id ? { ...t, ...updated } : t);
+            setCachedData(cacheKeyTickets, next);
+            return next;
           });
         }
       )
       .subscribe();
     return () => { supabase.removeChannel(channel); };
-  }, [profile?.uid, profile?.role]);
+  }, [profile?.uid, profile?.role, assignmentId]);
 
   const deleteTicket = async (ticketId: string) => {
     if (window.confirm("Are you sure you want to permanently delete this ticket?")) {
@@ -224,6 +219,7 @@ export function SchedulerModule() {
       } else {
         const newTicket = {
           id: crypto.randomUUID(),
+          assignment_id: assignmentId,
           distributorId: createData.distributorId,
           proposedDate: createData.proposedDate,
           auditorIds: [], 
@@ -313,12 +309,13 @@ export function SchedulerModule() {
       } else {
         const dist = distMap[negDistId];
         const newTicket = {
-                  id: crypto.randomUUID(),
+          id: crypto.randomUUID(),
+          assignment_id: assignmentId,
           distributorId: negDistId, proposedDate: null, auditorIds: [], auditDays: calculateAuditDays(dist.approvedValue), approvedValue: dist.approvedValue, maxAllowedValue: dist.approvedValue * 1.05, status: 'tentative', scheduledDate: null, verifiedTotal: 0, presenceLogs: [], signOffs: {}, media: [], dateProposals: [newProposal], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
         };
         const { error } = await supabase.from('auditTickets').insert([newTicket]);
         if (error) throw error;
-        logActivity(user, profile, "Date Requested", `Admin requested a date proposal from ASE for ${dist?.name}`);
+        logActivity(user, profile, "Date Requested", `Admin requested a date proposal from ASE for ${dist?.name}`, assignmentId);
       }
 
       notifyLinkedUsers(negDistId, "Date Requested", `Admin requested a date proposal for ${distMap[negDistId]?.name}.`);
@@ -399,12 +396,13 @@ export function SchedulerModule() {
       } else {
         const dist = distMap[finalTargetDistId];
         const newTicket = {
-                  id: crypto.randomUUID(),
+          id: crypto.randomUUID(),
+          assignment_id: assignmentId,
           distributorId: finalTargetDistId, proposedDate: proposalData.date || null, auditorIds: [], auditDays: calculateAuditDays(dist.approvedValue), approvedValue: dist.approvedValue, maxAllowedValue: dist.approvedValue * 1.05, status: 'tentative', scheduledDate: null, verifiedTotal: 0, presenceLogs: [], signOffs: {}, media: [], dateProposals: [newProposal], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
         };
         const { error } = await supabase.from('auditTickets').insert([newTicket]);
         if (error) throw error;
-        logActivity(user, profile, "Date Proposed", `${profile?.role.toUpperCase()} initiated a date proposal for ${dist?.name}`);
+        logActivity(user, profile, "Date Proposed", `${profile?.role.toUpperCase()} initiated a date proposal for ${dist?.name}`, assignmentId);
       }
 
       notifyLinkedUsers(finalTargetDistId, "New Message / Proposal", `${profile.name} has submitted a new date proposal or message for ${distMap[finalTargetDistId]?.name}.`);

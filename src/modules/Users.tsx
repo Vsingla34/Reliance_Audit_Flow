@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { supabase, logActivity } from '../supabase';
+import { getCachedData, setCachedData, fetchCachedUsers, invalidateCache } from '../supabaseOptimized';
 import { UserProfile } from '../types';
 import { Plus, Search, Edit2, Trash2, X, Shield, Mail, MapPin, User as UserIcon, Filter, CheckCircle2, Lock, Phone, Loader2, Upload, Download } from 'lucide-react';
 import { cn, useAuth } from '../App';
@@ -9,7 +10,7 @@ import Papa from 'papaparse';
 
 export function UsersModule() {
   const { profile, user } = useAuth();
-  const [usersList, setUsersList] = useState<UserProfile[]>([]);
+  const [usersList, setUsersList] = useState<UserProfile[]>(() => getCachedData<UserProfile[]>('global-users') || []);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterRole, setFilterRole] = useState('all');
   
@@ -37,14 +38,10 @@ export function UsersModule() {
     auth: { persistSession: false, autoRefreshToken: false } 
   }), [supabaseUrl, supabaseKey]);
 
-  const fetchData = async () => {
+  const fetchData = async (force = false) => {
     if (!profile) return;
     try {
-      const { data, error } = await supabase
-        .from('users')
-        .select('*')
-        .order('role', { ascending: true });
-      if (error) throw error;
+      const data = await fetchCachedUsers(force);
       if (data) setUsersList(data as UserProfile[]);
     } catch (error) {
       console.error('Error fetching users:', error);
@@ -52,9 +49,9 @@ export function UsersModule() {
   };
 
   useEffect(() => {
-    fetchData();
+    fetchData(false);
     const channel = supabase.channel('users-changes')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'users' }, fetchData)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'users' }, () => fetchData(true))
       .subscribe();
     return () => { supabase.removeChannel(channel); };
   }, [profile]);

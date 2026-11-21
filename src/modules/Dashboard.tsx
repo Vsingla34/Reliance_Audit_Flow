@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { supabase } from '../supabase';
+import { getCachedData, setCachedData, fetchCachedDistributors } from '../supabaseOptimized';
 import { AuditTicket, Distributor } from '../types';
 import { useAuth, cn } from '../App';
 import {
@@ -10,44 +11,45 @@ import {
 import { motion } from 'motion/react';
 import { startOfMonth, endOfMonth, differenceInDays, addDays, format } from 'date-fns';
 
+const DASH_TICKET_COLS = 'id,assignment_id,distributorId,status,scheduledDate,approvedValue,verifiedTotal,updatedAt,auditorId,auditorIds';
+
 export function DashboardModule() {
-  const { profile } = useAuth();
-  const [tickets, setTickets] = useState<AuditTicket[]>([]);
-  const [distributors, setDistributors] = useState<Distributor[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const { profile, activeAssignment } = useAuth();
+  const assignmentId = activeAssignment?.id || 'assignment-1';
+  const cacheKeyTickets = `dash-tickets-${assignmentId}-${profile?.uid || 'anon'}`;
+  const isGlobal = ['superadmin', 'admin', 'ho', 'auditor'].includes(profile?.role || '');
+  const cacheKeyDist = `distributors-${assignmentId}-${isGlobal ? 'all' : `${profile?.role}-${profile?.uid}`}`;
+
+  const [tickets, setTickets] = useState<AuditTicket[]>(() => getCachedData<AuditTicket[]>(cacheKeyTickets) || []);
+  const [distributors, setDistributors] = useState<Distributor[]>(() => getCachedData<Distributor[]>(cacheKeyDist) || []);
+  const [isLoading, setIsLoading] = useState(() => !getCachedData(cacheKeyTickets));
 
   useEffect(() => {
     const fetchData = async () => {
       if (!profile) return;
-      setIsLoading(true);
+      if (!getCachedData(cacheKeyTickets)) setIsLoading(true);
       try {
-        let dQuery = supabase.from('distributors').select('*');
-        if (profile.role === 'ase') dQuery = dQuery.contains('aseIds', [profile.uid]);
-        else if (profile.role === 'asm') dQuery = dQuery.contains('asmIds', [profile.uid]);
-        else if (profile.role === 'sm') dQuery = dQuery.contains('smIds', [profile.uid]);
-        else if (profile.role === 'dm') dQuery = dQuery.contains('dmIds', [profile.uid]);
-
-        const { data: dData, error: dError } = await dQuery;
-        if (dError) throw dError;
-        const fetchedDistributors = (dData || []) as Distributor[];
-        setDistributors(fetchedDistributors);
-
-        let tQuery = supabase.from('auditTickets').select('*');
+        let tQuery = supabase.from('auditTickets').select(DASH_TICKET_COLS).eq('assignment_id', assignmentId);
         if (profile.role === 'auditor') {
           tQuery = tQuery.or(`auditorId.eq.${profile.uid},auditorIds.cs.{${profile.uid}}`);
-        } else if (['ase', 'asm', 'sm', 'dm'].includes(profile.role)) {
-          const distIds = fetchedDistributors.map(d => d.id);
-          if (distIds.length > 0) tQuery = tQuery.in('distributorId', distIds);
-          else { setTickets([]); setIsLoading(false); return; }
         }
 
-        const { data: tData, error: tError } = await tQuery;
-        if (tError) throw tError;
-        if (tData) {
-          const validTickets = (tData as AuditTicket[]).filter(
-            t => fetchedDistributors.some(d => d.id === t.distributorId)
+        // Fetch distributors and tickets in parallel instead of waterfalling
+        const [fetchedDistributors, tRes] = await Promise.all([
+          fetchCachedDistributors(assignmentId, profile),
+          tQuery,
+        ]);
+
+        setDistributors(fetchedDistributors);
+
+        if (tRes.error) throw tRes.error;
+        if (tRes.data) {
+          const distIdSet = new Set(fetchedDistributors.map((d: any) => d.id));
+          const validTickets = (tRes.data as AuditTicket[]).filter(
+            t => distIdSet.has(t.distributorId)
           );
           setTickets(validTickets);
+          setCachedData(cacheKeyTickets, validTickets);
         }
       } catch (error) {
         console.error('Error fetching dashboard data:', error);
@@ -56,7 +58,7 @@ export function DashboardModule() {
       }
     };
     fetchData();
-  }, [profile]);
+  }, [profile, assignmentId]);
 
   const distMap = useMemo(() => {
     const map: Record<string, Distributor> = {};
@@ -65,7 +67,7 @@ export function DashboardModule() {
   }, [distributors]);
 
   const currentMonthStart = startOfMonth(new Date()).toISOString();
-  const currentMonthEnd   = endOfMonth(new Date()).toISOString();
+  const currentMonthEnd = endOfMonth(new Date()).toISOString();
 
   const metrics = useMemo(() => {
     const active = tickets.filter(t =>
@@ -73,17 +75,17 @@ export function DashboardModule() {
     );
     const completedThisMonth = tickets.filter(
       t => t.status === 'closed' &&
-           t.updatedAt && t.updatedAt >= currentMonthStart && t.updatedAt <= currentMonthEnd
+        t.updatedAt && t.updatedAt >= currentMonthStart && t.updatedAt <= currentMonthEnd
     );
     const requiresAction = tickets.filter(t =>
       ['tentative', 'auditor_submitted', 'submitted'].includes(t.status)
     );
     const totalVerifiedValue = completedThisMonth.reduce((sum, t) => sum + (t.verifiedTotal || 0), 0);
     return {
-      activeCount:    active.length,
+      activeCount: active.length,
       completedCount: completedThisMonth.length,
-      actionCount:    requiresAction.length,
-      totalValue:     totalVerifiedValue,
+      actionCount: requiresAction.length,
+      totalValue: totalVerifiedValue,
     };
   }, [tickets, currentMonthStart, currentMonthEnd]);
 
@@ -91,7 +93,7 @@ export function DashboardModule() {
   const upcomingReminders = useMemo(() => {
     if (!['ase', 'auditor'].includes(profile?.role || '')) return [];
 
-    const today    = new Date();
+    const today = new Date();
     today.setHours(0, 0, 0, 0);
     const dayPlus2 = addDays(today, 2);
     dayPlus2.setHours(23, 59, 59, 999);
@@ -186,16 +188,16 @@ export function DashboardModule() {
           {/* Reminder cards */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
             {upcomingReminders.map((ticket, i) => {
-              const dist         = distMap[ticket.distributorId];
-              const schedDate    = new Date(ticket.scheduledDate!);
+              const dist = distMap[ticket.distributorId];
+              const schedDate = new Date(ticket.scheduledDate!);
               schedDate.setHours(0, 0, 0, 0);
-              const today        = new Date(); today.setHours(0, 0, 0, 0);
-              const daysUntil    = differenceInDays(schedDate, today);
+              const today = new Date(); today.setHours(0, 0, 0, 0);
+              const daysUntil = differenceInDays(schedDate, today);
 
               const urgency =
-                daysUntil === 0 ? { label: 'Today',     bg: 'bg-rose-50',   border: 'border-rose-200',   text: 'text-rose-700',   badge: 'bg-rose-100 text-rose-700',   dot: 'bg-rose-500'   } :
-                daysUntil === 1 ? { label: 'Tomorrow',  bg: 'bg-amber-50',  border: 'border-amber-200',  text: 'text-amber-700',  badge: 'bg-amber-100 text-amber-700',  dot: 'bg-amber-500'  } :
-                                  { label: 'In 2 days', bg: 'bg-indigo-50', border: 'border-indigo-200', text: 'text-indigo-700', badge: 'bg-indigo-100 text-indigo-700', dot: 'bg-indigo-500' };
+                daysUntil === 0 ? { label: 'Today', bg: 'bg-rose-50', border: 'border-rose-200', text: 'text-rose-700', badge: 'bg-rose-100 text-rose-700', dot: 'bg-rose-500' } :
+                  daysUntil === 1 ? { label: 'Tomorrow', bg: 'bg-amber-50', border: 'border-amber-200', text: 'text-amber-700', badge: 'bg-amber-100 text-amber-700', dot: 'bg-amber-500' } :
+                    { label: 'In 2 days', bg: 'bg-indigo-50', border: 'border-indigo-200', text: 'text-indigo-700', badge: 'bg-indigo-100 text-indigo-700', dot: 'bg-indigo-500' };
 
               return (
                 <motion.div
@@ -439,7 +441,6 @@ export function DashboardModule() {
           </table>
         </div>
       </motion.div>
-
     </div>
   );
 }

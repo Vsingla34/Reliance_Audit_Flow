@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { supabase, logActivity } from '../../supabase';
+import { supabase, logActivity, getActiveAssignmentId } from '../../supabase';
 import { AuditTicket, Distributor } from '../../types';
 import { Box, X, Search, ChevronDown, Info, ArrowLeft, Package } from 'lucide-react';
 import { motion } from 'motion/react';
@@ -54,15 +54,17 @@ export function AddItemModal({ isOpen, onClose, activeTicket, distributor, avail
   useEffect(() => {
     if (!isManualMode) return;
     setIsMasterLoading(true);
+    const assignmentId = activeTicket.assignment_id || getActiveAssignmentId();
     supabase
       .from('itemMaster')
       .select('id, itemCode, itemName, gst, category, approxShelfLife, standardPack')
+      .eq('assignment_id', assignmentId)
       .order('itemName', { ascending: true })
       .then(({ data, error }) => {
         if (!error && data) setMasterList(data as ItemMasterEntry[]);
         setIsMasterLoading(false);
       });
-  }, [isManualMode]);
+  }, [isManualMode, activeTicket.assignment_id]);
 
   useEffect(() => {
     if (mfgDate && expDate) {
@@ -121,10 +123,11 @@ export function AddItemModal({ isOpen, onClose, activeTicket, distributor, avail
 
       const inserts = [];
       const itemRemarks = remarks.trim();
+      const assignmentId = activeTicket.assignment_id || getActiveAssignmentId();
 
       if (qDamaged > 0) {
         inserts.push({
-          id: Math.random().toString(36).substring(7), ticketId: activeTicket.id, articleNumber, description, category, 
+          id: Math.random().toString(36).substring(7), assignment_id: assignmentId, ticketId: activeTicket.id, articleNumber, description, category, 
           quantity: qDamaged, qtyNonSaleable: 0, qtyBBD: 0, qtyDamaged: qDamaged,
           unitValue, totalValue: qDamaged * unitValue, reasonCode: reason, mfgDate, expDate, productLife,
           bbdApprovalStatus: 'none', qtyDrained: 0, remarks: itemRemarks
@@ -132,7 +135,7 @@ export function AddItemModal({ isOpen, onClose, activeTicket, distributor, avail
       }
       if (qNonSaleable > 0) {
         inserts.push({
-          id: Math.random().toString(36).substring(7), ticketId: activeTicket.id, articleNumber, description, category, 
+          id: Math.random().toString(36).substring(7), assignment_id: assignmentId, ticketId: activeTicket.id, articleNumber, description, category, 
           quantity: qNonSaleable, qtyNonSaleable: qNonSaleable, qtyBBD: 0, qtyDamaged: 0,
           unitValue, totalValue: qNonSaleable * unitValue, reasonCode: reason, mfgDate, expDate, productLife,
           bbdApprovalStatus: 'none', qtyDrained: 0, remarks: itemRemarks
@@ -140,7 +143,7 @@ export function AddItemModal({ isOpen, onClose, activeTicket, distributor, avail
       }
       if (qBBD > 0) {
         inserts.push({
-          id: Math.random().toString(36).substring(7), ticketId: activeTicket.id, articleNumber, description, category, 
+          id: Math.random().toString(36).substring(7), assignment_id: assignmentId, ticketId: activeTicket.id, articleNumber, description, category, 
           quantity: qBBD, qtyNonSaleable: 0, qtyBBD: qBBD, qtyDamaged: 0,
           unitValue, totalValue: qBBD * unitValue, reasonCode: reason, mfgDate, expDate, productLife,
           bbdApprovalStatus: 'none', qtyDrained: 0, remarks: itemRemarks

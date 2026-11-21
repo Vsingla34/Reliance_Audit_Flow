@@ -1,89 +1,120 @@
 /**
  * useSignOffExport.ts  — Reliance Audit System
  *
- * 5-sheet Excel workbook + 2 PDF exports (Claim Letter, ALF PDF)
+ * 4-sheet Excel workbook + 2 PDF exports (Claim Letter, ALF PDF)
  *
  *  Sheet 1: "Sign Format."
- *  Sheet 2: "Article Level Format Revised"  (32 cols, group headers)
- *  Sheet 3: "Invoie details - Primary Damage"
+ *  Sheet 2: "Article Level Format Revised"  (group headers)
+ *  Sheet 3: "Invoie details - <Category>"
  *  Sheet 4: "Attendance Sheet"
  *
- * FIX: All value calculations now use item.totalValue (stored in DB) as the
+ * FIX: All value calculations use item.totalValue (stored in DB) as the
  * source of truth rather than recomputing qty * unitValue, which causes
  * floating-point drift (e.g. ₹1,050,413.96 vs ₹1,050,414.11).
  *
- * The split by type (damaged/nonSaleable/BBD) uses proportional allocation
- * from the stored totalValue so the per-type values always sum exactly to
- * item.totalValue.
+ * The split by type (damaged/nonSaleable/BBD/sampling) uses proportional
+ * allocation from the stored totalValue so the per-type values always sum
+ * exactly to item.totalValue.
+ *
+ * CATEGORY-DRIVEN LAYOUT
+ * -----------------------
+ * Not every audit tracks all four categories — e.g. a "Quality Audit" only
+ * ever records Non-Saleable / Non-manufacturing-defect stock, never Primary
+ * Damage, Sampling or BBD. Rendering all four columns anyway (with the
+ * unused ones permanently zero) doesn't match how these reports are
+ * actually used downstream.
+ *
+ * So both "Sign Format." and "Article Level Format Revised" now only emit
+ * columns for categories that actually have quantity somewhere in the
+ * item list (see getActiveCategories). When more than one category is
+ * active, the sheets additionally show "Total Verified Quantity" / "Total
+ * Audited Value" columns (as before); with exactly one active category
+ * those totals would just duplicate the single category, so they're
+ * dropped and that category's own Incl/Excl-GST values are shown directly
+ * instead — this matches the single-category report template exactly.
+ *
+ * An empty item list (or one with zero quantity in every category) falls
+ * back to showing all four categories, so a blank/draft export still looks
+ * like the familiar full template rather than a degenerate empty grid.
  */
 import { useState } from 'react';
 import ExcelJS from 'exceljs';
-import { supabase } from '../supabase';
+import { supabase, getActiveAssignmentId } from '../supabase';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 export interface SignOffDistributor {
-  name:        string;
-  code:        string;
+  name: string;
+  code: string;
   anchorName?: string;
-  city?:       string;
-  state?:      string;
-  address?:    string;
-  region?:     string;
+  city?: string;
+  state?: string;
+  address?: string;
+  region?: string;
 }
 
 export interface SignOffAudit {
-  id?:            string;
-  serialNo?:      string;
+  id?: string;
+  serialNo?: string;
   scheduledDate?: string | null;
-  auditEndDate?:  string | null;
-  drainageDate?:    string | null;
+  auditEndDate?: string | null;
+  drainageDate?: string | null;
   drainageEndDate?: string | null;
-  approvedValue:    number;
-  verifiedTotal:  number;
-  auditorName?:   string;
-  asmName?:       string;
+  approvedValue: number;
+  verifiedTotal: number;
+  auditorName?: string;
+  asmName?: string;
+  /** Title shown at the top of "Sign Format.". Defaults to the historical
+   *  Beverage-audit title so existing callers are unaffected. */
+  reportTitle?: string;
+  /** Audit-firm name shown in "Audit Firm Name -" / "Audit Team" fields.
+   *  Defaults to the historical hardcoded firm so existing callers are
+   *  unaffected. */
+  auditFirmName?: string;
 }
 
 export interface SignOffItem {
-  articleNumber:   string;
-  description:     string;
-  quantity?:       number;
-  totalValue?:     number;
-  qtyDamaged:      number;
-  qtyNonSaleable:  number;
-  qtyBBD:          number;
-  qtySampling?:    number;
-  unitValue:       number;
-  gst?:            number;
-  standardPack?:   string;
-  category?:       string;
-  mfgDate?:        string;
-  expDate?:        string;
-  productLife?:    string;
-  reasonCode?:     string;
-  remarks?:        string;
+  articleNumber: string;
+  description: string;
+  quantity?: number;
+  totalValue?: number;
+  qtyDamaged: number;
+  qtyNonSaleable: number;
+  qtyBBD: number;
+  qtySampling?: number;
+  unitValue: number;
+  gst?: number;
+  standardPack?: string;
+  category?: string;
+  mfgDate?: string;
+  expDate?: string;
+  productLife?: string;
+  reasonCode?: string;
+  remarks?: string;
 }
 
 // ── Colour palette ────────────────────────────────────────────────────────────
 const C = {
-  LIGHT_BLUE:  'FFBDD7EE',
-  ORANGE:      'FFFFC000',
-  MASTER_HDR:  'FFD9E1F2',
-  QTY_HDR:     'FFBDD7EE',
-  VAL_HDR:     'FFE2EFDA',
-  MFD_HDR:     'FFFFF2CC',
-  AUD_HDR:     'FFD9D9D9',
-  TOTAL_ROW:   'FFFFD966',
-  WHITE:       'FFFFFFFF',
-  BLACK:       'FF000000',
+  LIGHT_BLUE: 'FFBDD7EE',
+  ORANGE: 'FFFFC000',
+  MASTER_HDR: 'FFD9E1F2',
+  QTY_HDR: 'FFBDD7EE',
+  VAL_HDR: 'FFE2EFDA',
+  MFD_HDR: 'FFFFF2CC',
+  AUD_HDR: 'FFD9D9D9',
+  TOTAL_ROW: 'FFFFD966',
+  WHITE: 'FFFFFFFF',
+  BLACK: 'FF000000',
   HEADER_GREY: 'FFD9D9D9',
-  LIGHT_YELLOW:'FFFFFFCC',
+  LIGHT_YELLOW: 'FFFFFFCC',
 };
 
-const thinSide  = { style: 'thin'   as ExcelJS.BorderStyle };
-const medSide   = { style: 'medium' as ExcelJS.BorderStyle };
+const DEFAULT_FIRM_NAME = 'Singla Vishal & Co.';
+const DEFAULT_REPORT_TITLE = 'Audit Report - Phase V Part 2 Beverage';
+
+const thinSide = { style: 'thin' as ExcelJS.BorderStyle };
+const medSide = { style: 'medium' as ExcelJS.BorderStyle };
 const thinBorder: Partial<ExcelJS.Borders> = { top: thinSide, left: thinSide, bottom: thinSide, right: thinSide };
-const medBorder:  Partial<ExcelJS.Borders> = { top: medSide,  left: medSide,  bottom: medSide,  right: medSide  };
+const medBorder: Partial<ExcelJS.Borders> = { top: medSide, left: medSide, bottom: medSide, right: medSide };
 
 function solidFill(argb: string): ExcelJS.Fill {
   return { type: 'pattern', pattern: 'solid', fgColor: { argb } };
@@ -101,21 +132,110 @@ function safeMerge(ws: ExcelJS.Worksheet, r1: number, c1: number, r2: number, c2
   try { ws.mergeCells(r1, c1, r2, c2); } catch { /* already merged */ }
 }
 function setCell(ws: ExcelJS.Worksheet, row: number, col: number, value: ExcelJS.CellValue,
-  opts: { font?: Partial<ExcelJS.Font>; fill?: string; hAlign?: ExcelJS.Alignment['horizontal'];
-    vAlign?: ExcelJS.Alignment['vertical']; wrap?: boolean; border?: Partial<ExcelJS.Borders>; numFmt?: string; } = {}) {
+  opts: {
+    font?: Partial<ExcelJS.Font>; fill?: string; hAlign?: ExcelJS.Alignment['horizontal'];
+    vAlign?: ExcelJS.Alignment['vertical']; wrap?: boolean; border?: Partial<ExcelJS.Borders>; numFmt?: string;
+  } = {}) {
   const cell = ws.getRow(row).getCell(col);
   cell.value = value;
-  if (opts.font)   cell.font   = opts.font;
-  if (opts.fill)   cell.fill   = solidFill(opts.fill);
+  if (opts.font) cell.font = opts.font;
+  if (opts.fill) cell.fill = solidFill(opts.fill);
   if (opts.border !== null) cell.border = opts.border ?? thinBorder;
   cell.alignment = aln(opts.hAlign ?? 'left', opts.vAlign ?? 'middle', opts.wrap ?? true);
   if (opts.numFmt) cell.numFmt = opts.numFmt;
 }
 
+// ═════════════════════════════════════════════════════════════════════════════
+// CATEGORY-DRIVEN LAYOUT HELPERS
+// ═════════════════════════════════════════════════════════════════════════════
+type CategoryKey = 'damage' | 'sampling' | 'nonSaleable' | 'bbd';
+
+interface CategoryDef {
+  key: CategoryKey;
+  /** Sub-header label used in "Sign Format." (Pcs / INR variants) */
+  pcsLabel: string;
+  inrLabel: string;
+  /** Sub-header label used in "Article Level Format Revised" */
+  alfPcsLabel: string;
+  alfInrLabel: string;
+  /** Human label used for the Invoice-details sheet title/tab and reports */
+  shortLabel: string;
+}
+
+const CATEGORY_DEFS: CategoryDef[] = [
+  {
+    key: 'damage',
+    pcsLabel: 'Primary Damage\n(Pcs)',
+    inrLabel: 'Primary Damage\n(INR)',
+    alfPcsLabel: 'Primary Damage\n(Pcs)',
+    alfInrLabel: 'Primary Damage\n(INR)',
+    shortLabel: 'Primary Damage',
+  },
+  {
+    key: 'sampling',
+    pcsLabel: 'Sampling/Liquidation/\nFOC (PCS)',
+    inrLabel: 'Sampling/Liquidation/\nFOC (INR)',
+    alfPcsLabel: 'Sampling/Liquidation/FOC (PCS)',
+    alfInrLabel: 'Sampling/Liquidation/FOC (INR)',
+    shortLabel: 'Sampling-Liquidation-FOC',
+  },
+  {
+    key: 'nonSaleable',
+    pcsLabel: 'Non-Saleable product and\nNon-manufacturing Defect\n(Pcs)',
+    inrLabel: 'Non-Saleable product and\nNon-manufacturing Defect\n(INR)',
+    alfPcsLabel: 'Non-Saleable product and Non-manufacturing Defect (Pcs)',
+    alfInrLabel: 'Non-Saleable product and Non-manufacturing Defect (INR)',
+    shortLabel: 'Non-Saleable',
+  },
+  {
+    key: 'bbd',
+    pcsLabel: 'BBD Stock\n(Pcs)',
+    inrLabel: 'BBD Stock\n(INR)',
+    alfPcsLabel: 'BBD Stock\n(Pcs)',
+    alfInrLabel: 'BBD Stock\n(INR)',
+    shortLabel: 'BBD',
+  },
+];
+
+function categoryQty(item: SignOffItem, key: CategoryKey): number {
+  switch (key) {
+    case 'damage': return item.qtyDamaged || 0;
+    case 'sampling': return item.qtySampling || 0;
+    case 'nonSaleable': return item.qtyNonSaleable || 0;
+    case 'bbd': return item.qtyBBD || 0;
+  }
+}
+
+/** Which categories actually have quantity across this batch of items.
+ *  Falls back to all four (legacy full layout) when the batch is empty or
+ *  has no quantity in any category. */
+function getActiveCategories(items: SignOffItem[]): CategoryDef[] {
+  const active = CATEGORY_DEFS.filter(c => items.some(i => categoryQty(i, c.key) > 0));
+  return active.length > 0 ? active : CATEGORY_DEFS;
+}
+
+function catQtyFromAgg(a: { dmg: number; ns: number; bbd: number; samp: number }, key: CategoryKey): number {
+  switch (key) {
+    case 'damage': return a.dmg;
+    case 'sampling': return a.samp;
+    case 'nonSaleable': return a.ns;
+    case 'bbd': return a.bbd;
+  }
+}
+function catValFromAgg(a: { vDmg: number; vNs: number; vBbd: number; vSamp: number }, key: CategoryKey): number {
+  switch (key) {
+    case 'damage': return a.vDmg;
+    case 'sampling': return a.vSamp;
+    case 'nonSaleable': return a.vNs;
+    case 'bbd': return a.vBbd;
+  }
+}
+
 // ── Fresh distributor helper ──────────────────────────────────────────────────
 async function fetchFreshDist(dist: SignOffDistributor): Promise<SignOffDistributor> {
   if (!dist.code) return dist;
-  const { data } = await supabase.from('distributors').select('id,code,name,anchorName,address,city,state,region').eq('code', dist.code).single();
+  const assignmentId = getActiveAssignmentId();
+  const { data } = await supabase.from('distributors').select('id,code,name,anchorName,address,city,state,region').eq('assignment_id', assignmentId).eq('code', dist.code).maybeSingle();
   if (!data) return dist;
   return { ...dist, name: data.name || dist.name, anchorName: data.anchorName || dist.anchorName, address: data.address || '', city: data.city || '', state: data.state || '', region: data.region || '' };
 }
@@ -124,7 +244,8 @@ async function fetchFreshDist(dist: SignOffDistributor): Promise<SignOffDistribu
 async function enrichWithItemMaster(items: SignOffItem[]): Promise<SignOffItem[]> {
   const codes = [...new Set(items.map(i => i.articleNumber))];
   if (!codes.length) return items;
-  const { data } = await supabase.from('itemMaster').select('itemCode,gst,standardPack,category').in('itemCode', codes);
+  const assignmentId = getActiveAssignmentId();
+  const { data } = await supabase.from('itemMaster').select('itemCode,gst,standardPack,category').eq('assignment_id', assignmentId).in('itemCode', codes);
   const map: Record<string, any> = {};
   if (data) data.forEach((m: any) => { map[m.itemCode] = m; });
   return items.map(i => ({ ...i, gst: map[i.articleNumber]?.gst ?? i.gst ?? 0, standardPack: map[i.articleNumber]?.standardPack ?? i.standardPack ?? '', category: map[i.articleNumber]?.category || i.category || '' }));
@@ -141,11 +262,11 @@ async function enrichWithItemMaster(items: SignOffItem[]): Promise<SignOffItem[]
 function splitValues(item: SignOffItem): {
   vDmg: number; vNs: number; vBbd: number; vSamp: number; vTot: number;
 } {
-  const qDmg  = item.qtyDamaged     || 0;
-  const qNs   = item.qtyNonSaleable || 0;
-  const qBbd  = item.qtyBBD         || 0;
-  const qSamp = item.qtySampling    || 0;
-  const qTot  = qDmg + qNs + qBbd + qSamp;
+  const qDmg = item.qtyDamaged || 0;
+  const qNs = item.qtyNonSaleable || 0;
+  const qBbd = item.qtyBBD || 0;
+  const qSamp = item.qtySampling || 0;
+  const qTot = qDmg + qNs + qBbd + qSamp;
 
   // Use stored totalValue as the canonical total — never recompute from unitValue
   const vTot = item.totalValue != null
@@ -156,13 +277,36 @@ function splitValues(item: SignOffItem): {
 
   // Proportional split with 2dp rounding
   const round2 = (n: number) => Math.round(n * 100) / 100;
-  const vDmg  = round2(vTot * qDmg  / qTot);
-  const vNs   = round2(vTot * qNs   / qTot);
-  const vBbd  = round2(vTot * qBbd  / qTot);
+  const vDmg = round2(vTot * qDmg / qTot);
+  const vNs = round2(vTot * qNs / qTot);
+  const vBbd = round2(vTot * qBbd / qTot);
   // Last type absorbs any rounding remainder so sum == vTot exactly
   const vSamp = round2(vTot - vDmg - vNs - vBbd);
 
   return { vDmg, vNs, vBbd, vSamp, vTot };
+}
+
+// ── Fixed physical-column partitioning ────────────────────────────────────────
+// Instead of shrinking the sheet to only as many columns as are needed
+// (which left narrow 1-2 column boxes that truncated text), the sheet
+// always keeps its ORIGINAL total width and column widths. Categories that
+// aren't active simply don't get their own sub-column — the physical slots
+// they would have used are merged into the categories that ARE active, so
+// those get wider (not narrower) boxes than before. This keeps every
+// layout — 1 active category or 4 — visually identical in overall
+// proportions to the original full report.
+function partitionRange(start: number, end: number, n: number): Array<[number, number]> {
+  const total = end - start + 1;
+  const base = Math.floor(total / n);
+  let rem = total - base * n;
+  const ranges: Array<[number, number]> = [];
+  let cur = start;
+  for (let i = 0; i < n; i++) {
+    const w = base + (i < rem ? 1 : 0);
+    ranges.push([cur, cur + w - 1]);
+    cur += w;
+  }
+  return ranges;
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -170,14 +314,37 @@ function splitValues(item: SignOffItem): {
 // ═════════════════════════════════════════════════════════════════════════════
 function buildSignSheet(ws: ExcelJS.Worksheet, dist: SignOffDistributor, audit: SignOffAudit, items: SignOffItem[]) {
   ws.pageSetup = { orientation: 'landscape', paperSize: 9, fitToPage: true, fitToWidth: 1, fitToHeight: 0 };
+
+  const activeCategories = getActiveCategories(items);
+  const showTotals = activeCategories.length > 1;
+  const firmName = audit.auditFirmName || DEFAULT_FIRM_NAME;
+  const reportTitle = audit.reportTitle || DEFAULT_REPORT_TITLE;
+
+  // ── Fixed-width layout: sheet is ALWAYS columns A-M (13 cols), same
+  // widths as the original full-category report. The 5 physical columns
+  // reserved for quantity (B:F) and the 5 for value (G:K) are partitioned
+  // among however many categories are active — 1 active category gets all
+  // 5 physical columns merged into one wide box instead of a cramped single
+  // column. Approved Amount (L) and Variance % (M) are always single,
+  // unaffected columns, exactly as before.
   ws.columns = [
-    { width: 2  }, { width: 14 }, { width: 14 }, { width: 22 }, { width: 12 },
+    { width: 2 }, { width: 14 }, { width: 14 }, { width: 22 }, { width: 12 },
     { width: 12 }, { width: 14 }, { width: 14 }, { width: 22 }, { width: 14 },
     { width: 14 }, { width: 14 }, { width: 12 },
   ];
+  const lastCol = 13;
 
-  // ── FIX: aggregate using splitValues() so per-type values derive from
-  //         stored totalValue — not recomputed from unitValue * qty ──────────
+  const numQtyLogical = activeCategories.length + (showTotals ? 1 : 0);
+  const numValLogical = activeCategories.length + (showTotals ? 1 : 0);
+  const qtyPartition = partitionRange(2, 6, numQtyLogical);   // B:F
+  const valPartition = partitionRange(7, 11, numValLogical);  // G:K
+  const qtyRanges: Array<[number, number]> = qtyPartition.slice(0, activeCategories.length);
+  const totalQtyRange: [number, number] | null = showTotals ? qtyPartition[qtyPartition.length - 1] : null;
+  const valRanges: Array<[number, number]> = valPartition.slice(0, activeCategories.length);
+  const totalValRange: [number, number] | null = showTotals ? valPartition[valPartition.length - 1] : null;
+  const approvedCol = 12;
+  const varianceCol = 13;
+
   const agg = new Map<string, {
     dmg: number; ns: number; bbd: number; samp: number;
     vDmg: number; vNs: number; vBbd: number; vSamp: number; vTot: number;
@@ -190,32 +357,35 @@ function buildSignSheet(ws: ExcelJS.Worksheet, dist: SignOffDistributor, audit: 
     }
     const a = agg.get(item.articleNumber)!;
     const sv = splitValues(item);
-    a.dmg   += item.qtyDamaged     || 0;
-    a.ns    += item.qtyNonSaleable || 0;
-    a.bbd   += item.qtyBBD         || 0;
-    a.samp  += item.qtySampling    || 0;
-    a.vDmg  += sv.vDmg;
-    a.vNs   += sv.vNs;
-    a.vBbd  += sv.vBbd;
+    a.dmg += item.qtyDamaged || 0;
+    a.ns += item.qtyNonSaleable || 0;
+    a.bbd += item.qtyBBD || 0;
+    a.samp += item.qtySampling || 0;
+    a.vDmg += sv.vDmg;
+    a.vNs += sv.vNs;
+    a.vBbd += sv.vBbd;
     a.vSamp += sv.vSamp;
-    a.vTot  += sv.vTot;
+    a.vTot += sv.vTot;
     if ((item.unitValue || 0) > a.uv) a.uv = item.unitValue;
   }
 
   const rows = [...agg.values()];
-  const qDmg  = rows.reduce((s, v) => s + v.dmg,   0);
-  const qSamp = rows.reduce((s, v) => s + v.samp,  0);
-  const qNs   = rows.reduce((s, v) => s + v.ns,    0);
-  const qBbd  = rows.reduce((s, v) => s + v.bbd,   0);
-  const qTot  = qDmg + qSamp + qNs + qBbd;
-  const vDmg  = rows.reduce((s, v) => s + v.vDmg,  0);
+  const qDmg = rows.reduce((s, v) => s + v.dmg, 0);
+  const qSamp = rows.reduce((s, v) => s + v.samp, 0);
+  const qNs = rows.reduce((s, v) => s + v.ns, 0);
+  const qBbd = rows.reduce((s, v) => s + v.bbd, 0);
+  const qTot = qDmg + qSamp + qNs + qBbd;
+  const vDmg = rows.reduce((s, v) => s + v.vDmg, 0);
   const vSamp = rows.reduce((s, v) => s + v.vSamp, 0);
-  const vNs   = rows.reduce((s, v) => s + v.vNs,   0);
-  const vBbd  = rows.reduce((s, v) => s + v.vBbd,  0);
+  const vNs = rows.reduce((s, v) => s + v.vNs, 0);
+  const vBbd = rows.reduce((s, v) => s + v.vBbd, 0);
   // FIX: grand total = sum of all stored totalValues (not recomputed)
-  const vTot  = rows.reduce((s, v) => s + v.vTot,  0);
+  const vTot = rows.reduce((s, v) => s + v.vTot, 0);
 
-  const approved    = audit.approvedValue || 0;
+  const qtyByKey: Record<CategoryKey, number> = { damage: qDmg, sampling: qSamp, nonSaleable: qNs, bbd: qBbd };
+  const valByKey: Record<CategoryKey, number> = { damage: vDmg, sampling: vSamp, nonSaleable: vNs, bbd: vBbd };
+
+  const approved = audit.approvedValue || 0;
   const variancePct = approved > 0 ? (vTot - approved) / approved : 0;
   const INR = '[$₹-en-IN]#,##0.00'; const QTY = '#,##0'; const PCT = '0.00%';
 
@@ -224,160 +394,215 @@ function buildSignSheet(ws: ExcelJS.Worksheet, dist: SignOffDistributor, audit: 
   const scT = (row: number, col: number, value: ExcelJS.CellValue, opts: any = {}) =>
     setCell(ws, row, col, value, { font: tnrFont({ bold: opts.bold, size: opts.size || 10, underline: opts.underline }), ...opts });
 
-  nr(18); safeMerge(ws,r,2,r,13);
-  scT(r,2,'Audit Report - Phase V Part 2 Beverage',{bold:true,size:12,hAlign:'center',vAlign:'middle',wrap:false,border:{}});
+  nr(18); safeMerge(ws, r, 2, r, lastCol);
+  scT(r, 2, reportTitle, { bold: true, size: 12, hAlign: 'center', vAlign: 'middle', wrap: false, border: {} });
 
-  const infoLines: [string,string][] = [
-    ['Audit Serial No. - ', audit.serialNo||''], ['Audit Firm Name - ', 'Singla Vishal & Co.'],
-    ['Anchor Code - ', dist.code||''], ['Anchor Name/ Direct DB Name - ', dist.anchorName||''],
-    ['Distributor name & City - ', `${dist.name||''}, ${dist.city||''}`],
-    ['Audit Start Date - ', audit.scheduledDate||''], ['Audit End Date- ', audit.auditEndDate||audit.scheduledDate||''],
-    ['Drainage Start Date - ', audit.drainageDate||''], ['Drainage End Date - ', audit.drainageEndDate||''],
+  const infoLines: [string, string][] = [
+    ['Audit Serial No. - ', audit.serialNo || ''], ['Audit Firm Name - ', firmName],
+    ['Anchor Code - ', dist.code || ''], ['Anchor Name/ Direct DB Name - ', dist.anchorName || ''],
+    ['Distributor name & City - ', `${dist.name || ''}, ${dist.city || ''}`],
+    ['Audit Start Date - ', audit.scheduledDate || ''], ['Audit End Date- ', audit.auditEndDate || audit.scheduledDate || ''],
+    ['Drainage Start Date - ', audit.drainageDate || ''], ['Drainage End Date - ', audit.drainageEndDate || ''],
   ];
-  const addrParts = [dist.name,dist.address,dist.city,dist.state,dist.region].filter(Boolean);
+  const addrParts = [dist.name, dist.address, dist.city, dist.state, dist.region].filter(Boolean);
   const customerAddress = addrParts.join(', ') || dist.name || 'N/A';
 
-  const addrStartRow = r+1;
-  safeMerge(ws,addrStartRow,7,addrStartRow+2,13);
-  const addrCell = ws.getCell(addrStartRow,7);
-  addrCell.value = { richText: [
-    { text: 'Customer Full Address :- ', font: { ...tnrFont({bold:true,size:10}), underline: true } },
-    { text: customerAddress, font: { ...tnrFont({bold:false,size:10}), underline: false } },
-  ]} as any;
-  addrCell.alignment = aln('left','top',true); addrCell.border = thinBorder;
+  // Info/address block layout is fixed (B:F label, G:M address) — identical
+  // to the original report regardless of how many categories are active.
+  const infoRightStart = 7;
+  const leftBlockEnd = 6;
 
-  infoLines.forEach(([label,value],i) => {
-    nr(16); safeMerge(ws,r,2,r,6);
-    const cell = ws.getCell(r,2);
-    cell.value = { richText: [{ text: label, font: tnrFont({bold:true,size:10}) }, { text: value, font: tnrFont({bold:false,size:10}) }] } as any;
-    cell.alignment = aln('left','middle',false); cell.border = thinBorder;
-    if (i >= 3) { safeMerge(ws,r,7,r,13); scT(r,7,'',{hAlign:'left',border:thinBorder}); }
+  const addrStartRow = r + 1;
+  safeMerge(ws, addrStartRow, infoRightStart, addrStartRow + 2, lastCol);
+  const addrCell = ws.getCell(addrStartRow, infoRightStart);
+  addrCell.value = {
+    richText: [
+      { text: 'Customer Full Address :- ', font: { ...tnrFont({ bold: true, size: 10 }), underline: true } },
+      { text: customerAddress, font: { ...tnrFont({ bold: false, size: 10 }), underline: false } },
+    ]
+  } as any;
+  addrCell.alignment = aln('left', 'top', true); addrCell.border = thinBorder;
+
+  infoLines.forEach(([label, value], i) => {
+    nr(16); safeMerge(ws, r, 2, r, leftBlockEnd);
+    const cell = ws.getCell(r, 2);
+    cell.value = { richText: [{ text: label, font: tnrFont({ bold: true, size: 10 }) }, { text: value, font: tnrFont({ bold: false, size: 10 }) }] } as any;
+    cell.alignment = aln('left', 'middle', false); cell.border = thinBorder;
+    if (i >= 3) { safeMerge(ws, r, infoRightStart, r, lastCol); scT(r, infoRightStart, '', { hAlign: 'left', border: thinBorder }); }
   });
 
+  // ── Category group headers ───────────────────────────────────────────────
+  // merge helper: writes into the first column of a range, merging the
+  // whole range if it spans more than one physical column.
+  const mScT = (range: [number, number], row: number, value: ExcelJS.CellValue, opts: any = {}) => {
+    if (range[0] !== range[1]) safeMerge(ws, row, range[0], row, range[1]);
+    scT(row, range[0], value, opts);
+  };
+
   nr(18);
-  safeMerge(ws,r,2,r,6); scT(r,2,'Quantity Details - Physically verified & Drained',{bold:true,size:9,fill:C.LIGHT_BLUE,hAlign:'center',vAlign:'middle',wrap:false,border:thinBorder});
-  safeMerge(ws,r,7,r,11); scT(r,7,'Value Details',{bold:true,size:9,fill:C.LIGHT_BLUE,hAlign:'center',vAlign:'middle',wrap:false,border:thinBorder});
-  safeMerge(ws,r,12,r,13); scT(r,12,'Variance Summary',{bold:true,size:9,fill:C.ORANGE,hAlign:'center',vAlign:'middle',wrap:false,border:thinBorder});
+  safeMerge(ws, r, 2, r, 6); scT(r, 2, 'Quantity Details - Physically verified & Drained', { bold: true, size: 9, fill: C.LIGHT_BLUE, hAlign: 'center', vAlign: 'middle', wrap: false, border: thinBorder });
+  safeMerge(ws, r, 7, r, 11); scT(r, 7, 'Value Details', { bold: true, size: 9, fill: C.LIGHT_BLUE, hAlign: 'center', vAlign: 'middle', wrap: false, border: thinBorder });
+  safeMerge(ws, r, approvedCol, r, varianceCol); scT(r, approvedCol, 'Variance Summary', { bold: true, size: 9, fill: C.ORANGE, hAlign: 'center', vAlign: 'middle', wrap: false, border: thinBorder });
 
   nr(50);
-  const subH: Array<[number,number,string,string]> = [
-    [2,2,'Primary Damage\n(Pcs)',C.LIGHT_BLUE],[3,3,'Sampling/Liquidation/\nFOC (PCS)',C.LIGHT_BLUE],
-    [4,4,'Non-Saleable product and\nNon-manufacturing Defect\n(Pcs)',C.LIGHT_BLUE],[5,5,'BBD Stock\n(Pcs)',C.LIGHT_BLUE],
-    [6,6,'Total Verified\nQuantity (Pcs)',C.LIGHT_BLUE],[7,7,'Primary Damage\n(INR)',C.LIGHT_BLUE],
-    [8,8,'Sampling/Liquidation/\nFOC (INR)',C.LIGHT_BLUE],[9,9,'Non-Saleable product and\nNon-manufacturing Defect\n(INR)',C.LIGHT_BLUE],
-    [10,10,'BBD Stock\n(INR)',C.LIGHT_BLUE],[11,11,'Total\nAudited\nValue',C.LIGHT_BLUE],
-    [12,12,'Approved\nAmount',C.ORANGE],[13,13,'Variance %',C.ORANGE],
-  ];
-  for (const [c1,c2,text,fc] of subH) {
-    if (c1!==c2) safeMerge(ws,r,c1,r,c2);
-    scT(r,c1,text,{bold:true,size:8,fill:fc,hAlign:'center',vAlign:'middle',wrap:true,border:thinBorder});
-  }
+  activeCategories.forEach((cat, i) => mScT(qtyRanges[i], r, cat.pcsLabel, { bold: true, size: 8, fill: C.LIGHT_BLUE, hAlign: 'center', vAlign: 'middle', wrap: true, border: thinBorder }));
+  if (showTotals) mScT(totalQtyRange!, r, 'Total Verified\nQuantity (Pcs)', { bold: true, size: 8, fill: C.LIGHT_BLUE, hAlign: 'center', vAlign: 'middle', wrap: true, border: thinBorder });
+  activeCategories.forEach((cat, i) => mScT(valRanges[i], r, cat.inrLabel, { bold: true, size: 8, fill: C.LIGHT_BLUE, hAlign: 'center', vAlign: 'middle', wrap: true, border: thinBorder }));
+  if (showTotals) mScT(totalValRange!, r, 'Total\nAudited\nValue', { bold: true, size: 8, fill: C.LIGHT_BLUE, hAlign: 'center', vAlign: 'middle', wrap: true, border: thinBorder });
+  scT(r, approvedCol, 'Approved\nAmount', { bold: true, size: 8, fill: C.ORANGE, hAlign: 'center', vAlign: 'middle', wrap: true, border: thinBorder });
+  scT(r, varianceCol, 'Variance %', { bold: true, size: 8, fill: C.ORANGE, hAlign: 'center', vAlign: 'middle', wrap: true, border: thinBorder });
 
   nr(16);
-  const totals: Array<[number,ExcelJS.CellValue,string|undefined]> = [
-    [2,qDmg,QTY],[3,qSamp,QTY],[4,qNs,QTY],[5,qBbd,QTY],[6,qTot,QTY],
-    [7,vDmg,INR],[8,vSamp,INR],[9,vNs,INR],[10,vBbd,INR],[11,vTot,INR],
-    [12,approved,INR],[13,variancePct,PCT],
-  ];
-  for (const [col,val,fmt] of totals) scT(r,col,val,{hAlign:'center',vAlign:'middle',wrap:false,border:thinBorder,numFmt:fmt});
+  activeCategories.forEach((cat, i) => mScT(qtyRanges[i], r, qtyByKey[cat.key], { hAlign: 'center', vAlign: 'middle', wrap: false, border: thinBorder, numFmt: QTY }));
+  if (showTotals) mScT(totalQtyRange!, r, qTot, { hAlign: 'center', vAlign: 'middle', wrap: false, border: thinBorder, numFmt: QTY });
+  activeCategories.forEach((cat, i) => mScT(valRanges[i], r, valByKey[cat.key], { hAlign: 'center', vAlign: 'middle', wrap: false, border: thinBorder, numFmt: INR }));
+  if (showTotals) mScT(totalValRange!, r, vTot, { hAlign: 'center', vAlign: 'middle', wrap: false, border: thinBorder, numFmt: INR });
+  scT(r, approvedCol, approved, { hAlign: 'center', vAlign: 'middle', wrap: false, border: thinBorder, numFmt: INR });
+  scT(r, varianceCol, variancePct, { hAlign: 'center', vAlign: 'middle', wrap: false, border: thinBorder, numFmt: PCT });
 
   nr(6); nr(6);
 
-  nr(80); safeMerge(ws,r,2,r,9);
-  setCell(ws,r,2,['Declaration from Customer -','1. This is to certify that the quantity mentioned in report is final for all the issues related to quality / leakage / breakage / damage / BBD / Primary or transit damage till the date of Audit.','2. I confirm that all stocks received by me with expiry date upto date of Audit has been cleared by company and I will not raise any further claim in this regard for products with expired.','3. Stock with above-mentioned quality & value has been verified and drained in front of us and no further claim shall be raised by for such cases in future.','4. We understood that, value mentioned in Audit report is indicative and final claim value shall be accessed by Reliance before processing the expiry claim.'].join('\n'),{font:tnrFont({size:9}),hAlign:'left',vAlign:'top',wrap:true,border:thinBorder});
-  safeMerge(ws,r,10,r,13); setCell(ws,r,10,"Customer's Authorised person Name -\n\n\n\n\nSeal & Sign -",{font:tnrFont({size:10}),hAlign:'left',vAlign:'top',wrap:true,border:thinBorder});
+  // Declaration blocks split the remaining width roughly 2:1 (left notes /
+  // right name-and-sign), same proportion as the full 4-category layout.
+  const totalWidth = lastCol - 1;
+  const rightWidth = Math.max(2, Math.min(4, Math.round(totalWidth / 3)));
+  const leftEnd = lastCol - rightWidth;
+  const rightStart = leftEnd + 1;
 
-  nr(6); nr(60); safeMerge(ws,r,2,r,9);
-  setCell(ws,r,2,['Declaration from Reliance Sales Team -','1. This is to certify that the quantity mentioned in report is final for all the issues related to quality / leakage / breakage / damage / BBD / Primary or transit damage till the date of Audit.','2. This is to certify that Physical verification and destruction is taken place in front of myself. All the stock is drained by the distributor in front of Auditor.'].join('\n'),{font:tnrFont({size:9}),hAlign:'left',vAlign:'top',wrap:true,border:thinBorder});
-  safeMerge(ws,r,10,r,13); setCell(ws,r,10,'Sales Team Name & contact no.\n\nSales Team EMP ID\n\nSign',{font:tnrFont({size:10}),hAlign:'left',vAlign:'top',wrap:true,border:thinBorder});
+  nr(80); safeMerge(ws, r, 2, r, leftEnd);
+  setCell(ws, r, 2, ['Declaration from Customer -', '1. This is to certify that the quantity mentioned in report is final for all the issues related to quality / leakage / breakage / damage / BBD / Primary or transit damage till the date of Audit.', '2. I confirm that all stocks received by me with expiry date upto date of Audit has been cleared by company and I will not raise any further claim in this regard for products with expired.', '3. Stock with above-mentioned quality & value has been verified and drained in front of us and no further claim shall be raised by for such cases in future.', '4. We understood that, value mentioned in Audit report is indicative and final claim value shall be accessed by Reliance before processing the expiry claim.'].join('\n'), { font: tnrFont({ size: 9 }), hAlign: 'left', vAlign: 'top', wrap: true, border: thinBorder });
+  safeMerge(ws, r, rightStart, r, lastCol); setCell(ws, r, rightStart, "Customer's Authorised person Name -\n\n\n\n\nSeal & Sign -", { font: tnrFont({ size: 10 }), hAlign: 'left', vAlign: 'top', wrap: true, border: thinBorder });
 
-  nr(6); nr(60); safeMerge(ws,r,2,r,9);
-  setCell(ws,r,2,["Declaration from Auditor-","1. This is to certify that Physical verification is done by us in front of customer and abovementioned sales Team.","2. Drainage of Stock has also been completed for the above mentioned quantity and no expired stock is available in customer's location."].join('\n'),{font:tnrFont({size:9}),hAlign:'left',vAlign:'top',wrap:true,border:thinBorder});
-  safeMerge(ws,r,10,r,13); setCell(ws,r,10,'Auditor Name & contact no.\n\n\nSeal & Sign',{font:tnrFont({size:10}),hAlign:'left',vAlign:'top',wrap:true,border:thinBorder});
+  nr(6); nr(60); safeMerge(ws, r, 2, r, leftEnd);
+  setCell(ws, r, 2, ['Declaration from Reliance Sales Team -', '1. This is to certify that the quantity mentioned in report is final for all the issues related to quality / leakage / breakage / damage / BBD / Primary or transit damage till the date of Audit.', '2. This is to certify that Physical verification and destruction is taken place in front of myself. All the stock is drained by the distributor in front of Auditor.'].join('\n'), { font: tnrFont({ size: 9 }), hAlign: 'left', vAlign: 'top', wrap: true, border: thinBorder });
+  safeMerge(ws, r, rightStart, r, lastCol); setCell(ws, r, rightStart, 'Sales Team Name & contact no.\n\nSales Team EMP ID\n\nSign', { font: tnrFont({ size: 10 }), hAlign: 'left', vAlign: 'top', wrap: true, border: thinBorder });
+
+  nr(6); nr(60); safeMerge(ws, r, 2, r, leftEnd);
+  setCell(ws, r, 2, ["Declaration from Auditor-", "1. This is to certify that Physical verification is done by us in front of customer and abovementioned sales Team.", "2. Drainage of Stock has also been completed for the above mentioned quantity and no expired stock is available in customer's location."].join('\n'), { font: tnrFont({ size: 9 }), hAlign: 'left', vAlign: 'top', wrap: true, border: thinBorder });
+  safeMerge(ws, r, rightStart, r, lastCol); setCell(ws, r, rightStart, 'Auditor Name & contact no.\n\n\nSeal & Sign', { font: tnrFont({ size: 10 }), hAlign: 'left', vAlign: 'top', wrap: true, border: thinBorder });
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// SHEET 2 — Article Level Format Revised  (32 cols A-AF)
+// SHEET 2 — Article Level Format Revised
 // ═════════════════════════════════════════════════════════════════════════════
 function buildALFSheet(ws: ExcelJS.Worksheet, dist: SignOffDistributor, audit: SignOffAudit, items: SignOffItem[]) {
   ws.pageSetup = { orientation: 'landscape', paperSize: 9, fitToPage: true, fitToWidth: 1, fitToHeight: 0, margins: { left: 0.25, right: 0.25, top: 0.25, bottom: 0.25, header: 0, footer: 0 } };
 
+  const activeCategories = getActiveCategories(items);
+  const showTotals = activeCategories.length > 1;
+  const firmName = audit.auditFirmName || DEFAULT_FIRM_NAME;
+
+  // ── Fixed physical-column layout (always 32 columns, A:AF) ───────────────
+  // Master Details (1-15), Quantity (16-20), Value (21-26), MFD/Expiry
+  // (27-30), Findings (31-32) — identical to the original full-category
+  // report in every case. Categories that aren't active don't get their own
+  // sub-column; instead the physical slots they'd have used are merged into
+  // whichever categories ARE active, so a single-category audit gets one
+  // wide, readable box per group instead of a cramped one-column box.
+  const MASTER_COLS = 15;
+  const qtyStart = MASTER_COLS + 1;      // 16
+  const qtyEnd = qtyStart + 4;         // 20  (5 physical columns, fixed)
+  const valStart = qtyEnd + 1;           // 21
+  const valEnd = valStart + 5;         // 26  (6 physical columns, fixed)
+  const mfdStart = valEnd + 1;           // 27
+  const mfgDateCol = mfdStart, expDateCol = mfdStart + 1, lifeCol = mfdStart + 2, qtrCol = mfdStart + 3; // 27-30
+  const audStart = mfdStart + 4;         // 31
+  const issueCol = audStart, remarksCol = audStart + 1; // 31-32
+  const lastCol = remarksCol;           // 32, always
+
+  const numQtyLogical = activeCategories.length + (showTotals ? 1 : 0);
+  const numValLogical = showTotals ? activeCategories.length + 2 : 2; // incl + excl GST
+  const qtyPartition = partitionRange(qtyStart, qtyEnd, numQtyLogical);
+  const valPartition = partitionRange(valStart, valEnd, numValLogical);
+
+  const qtyRanges: Array<[number, number]> = qtyPartition.slice(0, activeCategories.length);
+  const totalQtyRange: [number, number] | null = showTotals ? qtyPartition[qtyPartition.length - 1] : null;
+  const valRanges: Array<[number, number]> = showTotals ? valPartition.slice(0, activeCategories.length) : [];
+  const totalInclRange: [number, number] = showTotals ? valPartition[valPartition.length - 2] : valPartition[0];
+  const totalExclRange: [number, number] = showTotals ? valPartition[valPartition.length - 1] : valPartition[1];
+
+  // Column widths stay exactly as the original — only the merges above change.
+  const masterWidths = [6, 16, 12, 12, 16, 14, 18, 18, 14, 28, 14, 10, 14, 8, 10];
   const colWidths = [
-    6, 16, 12, 12, 16, 14, 18, 18, 14, 28, 14, 10, 14, 8, 10,
-    10, 12, 18, 10, 10, 14, 14, 18, 12, 14, 14, 13, 13, 8, 14, 24, 18,
+    ...masterWidths,
+    10, 10, 12, 18, 10,          // qty  (16-20)
+    14, 14, 18, 12, 14, 14,      // val  (21-26)
+    13, 13, 8, 14,               // mfd  (27-30)
+    24, 18,                      // aud  (31-32)
   ];
   ws.columns = colWidths.map(w => ({ width: w }));
   ws.views = [{}];
 
   ws.getRow(1).height = 10;
-
   ws.getRow(2).height = 20;
-  const groups: Array<[number,number,string,string]> = [
-    [1,  15, 'Master Details',                C.MASTER_HDR],
-    [16, 20, 'Quanity Detail',                C.QTY_HDR],
-    [21, 26, 'Value Details - Including GST', C.VAL_HDR],
-    [27, 30, 'MFD & Expiry Date',             C.MFD_HDR],
-    [31, 32, 'Auditor Findings',              C.AUD_HDR],
+
+  // merge helper: writes into the first column of a range, merging the
+  // whole range if it spans more than one physical column.
+  const mSetHdr = (range: [number, number], text: string, fc: string) => {
+    if (range[0] !== range[1]) safeMerge(ws, 3, range[0], 3, range[1]);
+    setHdr(range[0], text, fc);
+  };
+
+  const groups: Array<[number, number, string, string]> = [
+    [1, MASTER_COLS, 'Master Details', C.MASTER_HDR],
+    [qtyStart, qtyEnd, 'Quantity Detail', C.QTY_HDR],
+    [valStart, valEnd, showTotals ? 'Value Details - Including GST' : 'Value Details', C.VAL_HDR],
+    [mfdStart, qtrCol, 'MFD & Expiry Date', C.MFD_HDR],
+    [audStart, remarksCol, 'Auditor Findings', C.AUD_HDR],
   ];
-  for (const [c1,c2,text,fc] of groups) {
-    safeMerge(ws,2,c1,2,c2);
-    setCell(ws,2,c1,text,{font:ariFont({bold:true,size:11}),fill:fc,hAlign:'center',vAlign:'middle',wrap:false,border:thinBorder});
+  for (const [c1, c2, text, fc] of groups) {
+    safeMerge(ws, 2, c1, 2, c2);
+    setCell(ws, 2, c1, text, { font: ariFont({ bold: true, size: 11 }), fill: fc, hAlign: 'center', vAlign: 'middle', wrap: false, border: thinBorder });
   }
 
   ws.getRow(3).height = 150;
-  const colHeaders: Array<[number,string,string]> = [
-    [1,  'Sr No',                                                                           C.MASTER_HDR],
-    [2,  'Std. Serial No.',                                                                 C.MASTER_HDR],
-    [3,  'Region',                                                                          C.MASTER_HDR],
-    [4,  'State',                                                                           C.MASTER_HDR],
-    [5,  'Audit Team',                                                                      C.MASTER_HDR],
-    [6,  'Anchor Code',                                                                     C.MASTER_HDR],
-    [7,  'Anchor Name',                                                                     C.MASTER_HDR],
-    [8,  'Distributor name',                                                                C.MASTER_HDR],
-    [9,  'Article Code',                                                                    C.MASTER_HDR],
-    [10, 'Brand Pack',                                                                      C.MASTER_HDR],
-    [11, 'Category (CSD, Still, Water, Energy)',                                            C.MASTER_HDR],
-    [12, 'NPI / NON - NPI',                                                                C.MASTER_HDR],
-    [13, "Rate Including GST\n(As per Waitage Avg of Primary from Apr'25 to Jan'26)",      C.MASTER_HDR],
-    [14, 'GST %',                                                                           C.MASTER_HDR],
-    [15, 'Standard Pack',                                                                   C.MASTER_HDR],
-    [16, 'Primary Damage\n(Pcs)',                                                           C.QTY_HDR],
-    [17, 'Sampling/Liquidation/FOC (PCS)',                                                  C.QTY_HDR],
-    [18, 'Non-Saleable product and Non-manufacturing Defect (Pcs)',                        C.QTY_HDR],
-    [19, 'BBD Stock\n(Pcs)',                                                                C.QTY_HDR],
-    [20, 'Total Verified\nQuantity (Pcs)',                                                  C.QTY_HDR],
-    [21, 'Primary Damage\n(INR)',                                                           C.VAL_HDR],
-    [22, 'Sampling/Liquidation/FOC (INR)',                                                  C.VAL_HDR],
-    [23, 'Non-Saleable product and Non-manufacturing Defect (INR)',                        C.VAL_HDR],
-    [24, 'BBD Stock\n(INR)',                                                                C.VAL_HDR],
-    [25, 'Total Audited Value\n(Including GST)',                                            C.VAL_HDR],
-    [26, 'Total Audited Value\n(Excluding GST)',                                            C.VAL_HDR],
-    [27, 'Manufacturing Date',                                                              C.MFD_HDR],
-    [28, 'Expiry Date',                                                                     C.MFD_HDR],
-    [29, 'Product life in Months',                                                          C.MFD_HDR],
-    [30, 'Manufacturing Quarter',                                                           C.MFD_HDR],
-    [31, 'Issue in Product in detail',                                                      C.AUD_HDR],
-    [32, 'Auditor Remarks',                                                                 C.AUD_HDR],
+  const masterHeaders: string[] = [
+    'Sr No', 'Std. Serial No.', 'Region', 'State', 'Audit Team', 'Anchor Code', 'Anchor Name', 'Distributor name',
+    'Article Code', 'Brand Pack', 'Category (CSD, Still, Water, Energy)', 'NPI / NON - NPI',
+    "Rate Including GST\n(As per Waitage Avg of Primary from Apr'25 to Jan'26)", 'GST %', 'Standard Pack',
   ];
-  for (const [col,text,fc] of colHeaders) {
+  masterHeaders.forEach((text, i) => {
+    const cell = ws.getRow(3).getCell(i + 1);
+    cell.value = text; cell.font = ariFont({ bold: true, size: 9 }); cell.fill = solidFill(C.MASTER_HDR);
+    cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true }; cell.border = thinBorder;
+  });
+
+  function setHdr(col: number, text: string, fc: string) {
     const cell = ws.getRow(3).getCell(col);
-    cell.value     = text;
-    cell.font      = ariFont({bold:true, size:9});
-    cell.fill      = solidFill(fc);
-    cell.alignment = { horizontal:'center', vertical:'middle', wrapText: true };
-    cell.border    = thinBorder;
+    cell.value = text; cell.font = ariFont({ bold: true, size: 9 }); cell.fill = solidFill(fc);
+    cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true }; cell.border = thinBorder;
   }
+
+  activeCategories.forEach((cat, i) => mSetHdr(qtyRanges[i], cat.alfPcsLabel, C.QTY_HDR));
+  if (showTotals) mSetHdr(totalQtyRange!, 'Total Verified\nQuantity (Pcs)', C.QTY_HDR);
+
+  if (showTotals) {
+    activeCategories.forEach((cat, i) => mSetHdr(valRanges[i], cat.alfInrLabel, C.VAL_HDR));
+    mSetHdr(totalInclRange, 'Total Audited Value\n(Including GST)', C.VAL_HDR);
+    mSetHdr(totalExclRange, 'Total Audited Value\n(Excluding GST)', C.VAL_HDR);
+  } else {
+    const cat = activeCategories[0];
+    mSetHdr(totalInclRange, `${cat.alfInrLabel} ( Including GST)`, C.VAL_HDR);
+    mSetHdr(totalExclRange, `${cat.alfInrLabel} ( Excluding GST)`, C.VAL_HDR);
+  }
+
+  setHdr(mfgDateCol, 'Manufacturing Date', C.MFD_HDR);
+  setHdr(expDateCol, 'Expiry Date', C.MFD_HDR);
+  setHdr(lifeCol, 'Product life in Months', C.MFD_HDR);
+  setHdr(qtrCol, 'Manufacturing Quarter', C.MFD_HDR);
+  setHdr(issueCol, 'Issue in Product in detail', C.AUD_HDR);
+  setHdr(remarksCol, 'Auditor Remarks', C.AUD_HDR);
 
   const serialNo = audit.serialNo || audit.id || '';
   const INR = '[$₹-en-IN]#,##0.00'; const QTY = '#,##0';
 
   const lifeMonths = (mfg?: string, exp?: string): string => {
-    if (!mfg||!exp) return '';
-    try { const m=new Date(mfg),e=new Date(exp); const mo=(e.getFullYear()-m.getFullYear())*12+(e.getMonth()-m.getMonth()); return mo>0?mo+' M':''; } catch { return ''; }
+    if (!mfg || !exp) return '';
+    try { const m = new Date(mfg), e = new Date(exp); const mo = (e.getFullYear() - m.getFullYear()) * 12 + (e.getMonth() - m.getMonth()); return mo > 0 ? mo + ' M' : ''; } catch { return ''; }
   };
   const mfgQuarter = (mfg?: string): string => {
     if (!mfg) return '';
-    try { const m=new Date(mfg); const fy=m.getMonth()>=3?m.getFullYear():m.getFullYear()-1; const q=Math.floor(((m.getMonth()-3+12)%12)/3)+1; return `Q${q} FY${String(fy).slice(2)}-${String(fy+1).slice(2)}`; } catch { return ''; }
+    try { const m = new Date(mfg); const fy = m.getMonth() >= 3 ? m.getFullYear() : m.getFullYear() - 1; const q = Math.floor(((m.getMonth() - 3 + 12) % 12) / 3) + 1; return `Q${q} FY${String(fy).slice(2)}-${String(fy + 1).slice(2)}`; } catch { return ''; }
   };
 
   // ── FIX: aggregate using splitValues() ───────────────────────────────────
@@ -396,74 +621,108 @@ function buildALFSheet(ws: ExcelJS.Worksheet, dist: SignOffDistributor, audit: S
     }
     const a = agg.get(item.articleNumber)!;
     const sv = splitValues(item);
-    a.dmg   += item.qtyDamaged     || 0;
-    a.ns    += item.qtyNonSaleable || 0;
-    a.bbd   += item.qtyBBD         || 0;
-    a.samp  += item.qtySampling    || 0;
-    a.vDmg  += sv.vDmg;
-    a.vNs   += sv.vNs;
-    a.vBbd  += sv.vBbd;
+    a.dmg += item.qtyDamaged || 0;
+    a.ns += item.qtyNonSaleable || 0;
+    a.bbd += item.qtyBBD || 0;
+    a.samp += item.qtySampling || 0;
+    a.vDmg += sv.vDmg;
+    a.vNs += sv.vNs;
+    a.vBbd += sv.vBbd;
     a.vSamp += sv.vSamp;
-    a.vTot  += sv.vTot;
+    a.vTot += sv.vTot;
     if ((item.unitValue || 0) > (a.item.unitValue || 0)) a.item = { ...a.item, ...item };
     else if (item.mfgDate && !a.item.mfgDate) a.item = { ...a.item, mfgDate: item.mfgDate, expDate: item.expDate };
   }
 
   let sno = 0;
-  let tDmgQ=0, tSampQ=0, tNsQ=0, tBbdQ=0, tTotQ=0;
-  let tDmgV=0, tSampV=0, tNsV=0, tBbdV=0, tIncV=0, tExcV=0;
-  let dataRow = 4;
+  let tTotQ = 0;
+  const tQtyByKey: Record<CategoryKey, number> = { damage: 0, sampling: 0, nonSaleable: 0, bbd: 0 };
+  const tValByKey: Record<CategoryKey, number> = { damage: 0, sampling: 0, nonSaleable: 0, bbd: 0 };
+  let tIncV = 0, tExcV = 0;
+  let dataRow = 4; // data always starts at row 4
 
-  for (const [, { item, dmg, ns, bbd, samp, vDmg, vNs, vBbd, vSamp, vTot }] of agg) {
+  // merge helper for data/total rows: writes into the first column of a
+  // range, merging the whole range (for that row only) if it spans more
+  // than one physical column.
+  const mCell = (range: [number, number], row: number, value: ExcelJS.CellValue, opts: { font?: Partial<ExcelJS.Font>; fill?: string; hAlign?: ExcelJS.Alignment['horizontal']; numFmt?: string } = {}) => {
+    if (range[0] !== range[1]) safeMerge(ws, row, range[0], row, range[1]);
+    const cell = ws.getRow(row).getCell(range[0]);
+    cell.value = value;
+    cell.font = opts.font ?? ariFont({ size: 9 });
+    cell.alignment = { horizontal: opts.hAlign ?? 'center', vertical: 'middle', wrapText: false };
+    cell.border = thinBorder;
+    if (opts.fill) cell.fill = solidFill(opts.fill);
+    if (opts.numFmt) cell.numFmt = opts.numFmt;
+  };
+
+  for (const [, a] of agg) {
+    const { item, dmg, ns, bbd, samp, vTot } = a;
     sno++;
     const qTot = dmg + samp + ns + bbd;
-    const uv   = item.unitValue || 0;
-    const gst  = Number(item.gst) || 0;
+    const uv = item.unitValue || 0;
+    const gst = Number(item.gst) || 0;
     // FIX: excl value derived from stored vTot, not recomputed
     const vExc = gst > 0 ? vTot / (1 + gst / 100) : vTot;
 
-    tDmgQ  += dmg;  tSampQ += samp; tNsQ  += ns;   tBbdQ  += bbd;  tTotQ  += qTot;
-    tDmgV  += vDmg; tSampV += vSamp; tNsV += vNs;  tBbdV  += vBbd; tIncV  += vTot; tExcV += vExc;
+    tTotQ += qTot; tIncV += vTot; tExcV += vExc;
+    (['damage', 'sampling', 'nonSaleable', 'bbd'] as CategoryKey[]).forEach(k => {
+      tQtyByKey[k] += catQtyFromAgg(a, k);
+      tValByKey[k] += catValFromAgg(a, k);
+    });
 
     ws.getRow(dataRow).height = 15;
 
-    const rowData: Array<[number,ExcelJS.CellValue,string?]> = [
-      [1,sno,QTY],[2,serialNo,undefined],[3,dist.region||'',undefined],[4,dist.state||'',undefined],
-      [5,'Singla Vishal & Co.',undefined],[6,dist.code||'',undefined],[7,dist.anchorName||'',undefined],
-      [8,dist.name||'',undefined],[9,item.articleNumber,undefined],[10,item.description,undefined],
-      [11,item.category||'',undefined],[12,'',undefined],[13,uv,INR],
-      [14,gst>0?gst+'%':'',undefined],[15,item.standardPack||'',undefined],
-      [16,dmg,QTY],[17,samp,QTY],[18,ns,QTY],[19,bbd,QTY],[20,qTot,QTY],
-      [21,vDmg,INR],[22,vSamp,INR],[23,vNs,INR],[24,vBbd,INR],[25,vTot,INR],[26,vExc,INR],
-      [27,item.mfgDate||'',undefined],[28,item.expDate||'',undefined],
-      [29,lifeMonths(item.mfgDate,item.expDate),undefined],[30,mfgQuarter(item.mfgDate),undefined],
-      [31,item.reasonCode||'',undefined],[32,item.remarks||'',undefined],
+    const rowData: Array<[number, ExcelJS.CellValue, string?]> = [
+      [1, sno, QTY], [2, serialNo, undefined], [3, dist.region || '', undefined], [4, dist.state || '', undefined],
+      [5, firmName, undefined], [6, dist.code || '', undefined], [7, dist.anchorName || '', undefined],
+      [8, dist.name || '', undefined], [9, item.articleNumber, undefined], [10, item.description, undefined],
+      [11, item.category || '', undefined], [12, '', undefined], [13, uv, INR],
+      [14, gst > 0 ? gst + '%' : '', undefined], [15, item.standardPack || '', undefined],
+      [27, item.mfgDate || '', undefined], [28, item.expDate || '', undefined], // placeholders, overwritten below with dynamic cols
     ];
-
-    for (const [col,val,fmt] of rowData) {
+    // Fixed master columns 1-15
+    for (const [col, val, fmt] of rowData.slice(0, 13)) {
       const cell = ws.getRow(dataRow).getCell(col);
-      cell.value     = val;
-      cell.font      = ariFont({size:9});
-      cell.alignment = { horizontal: col<=2||col===7||col===8||col===9||col===10||col===11 ? 'left' : 'center', vertical:'middle', wrapText: false };
-      cell.border    = thinBorder;
+      cell.value = val;
+      cell.font = ariFont({ size: 9 });
+      cell.alignment = { horizontal: col <= 2 || col === 7 || col === 8 || col === 9 || col === 10 || col === 11 ? 'left' : 'center', vertical: 'middle', wrapText: false };
+      cell.border = thinBorder;
       if (fmt) cell.numFmt = fmt;
+    }
+
+    // Dynamic quantity / value columns
+    activeCategories.forEach((cat, i) => mCell(qtyRanges[i], dataRow, catQtyFromAgg(a, cat.key), { numFmt: QTY }));
+    if (showTotals) mCell(totalQtyRange!, dataRow, qTot, { numFmt: QTY });
+    if (showTotals) activeCategories.forEach((cat, i) => mCell(valRanges[i], dataRow, catValFromAgg(a, cat.key), { numFmt: INR }));
+    mCell(totalInclRange, dataRow, vTot, { numFmt: INR });
+    mCell(totalExclRange, dataRow, vExc, { numFmt: INR });
+
+    // MFD / Expiry / Findings columns
+    const tailData: Array<[number, ExcelJS.CellValue]> = [
+      [mfgDateCol, item.mfgDate || ''], [expDateCol, item.expDate || ''],
+      [lifeCol, lifeMonths(item.mfgDate, item.expDate)], [qtrCol, mfgQuarter(item.mfgDate)],
+      [issueCol, item.reasonCode || ''], [remarksCol, item.remarks || ''],
+    ];
+    for (const [col, val] of tailData) {
+      const cell = ws.getRow(dataRow).getCell(col);
+      cell.value = val; cell.font = ariFont({ size: 9 });
+      cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: false }; cell.border = thinBorder;
     }
     dataRow++;
   }
 
   // ── TOTALS ROW ─────────────────────────────────────────────────────────────
   ws.getRow(dataRow).height = 14;
-  safeMerge(ws,dataRow,1,dataRow,15);
-  setCell(ws,dataRow,1,'TOTAL',{font:ariFont({bold:true,size:9}),fill:C.TOTAL_ROW,hAlign:'center',border:thinBorder});
+  safeMerge(ws, dataRow, 1, dataRow, MASTER_COLS);
+  setCell(ws, dataRow, 1, 'TOTAL', { font: ariFont({ bold: true, size: 9 }), fill: C.TOTAL_ROW, hAlign: 'center', border: thinBorder });
 
-  const totalCols: Array<[number,number,string]> = [
-    [16,tDmgQ,QTY],[17,tSampQ,QTY],[18,tNsQ,QTY],[19,tBbdQ,QTY],[20,tTotQ,QTY],
-    [21,tDmgV,INR],[22,tSampV,INR],[23,tNsV,INR],[24,tBbdV,INR],[25,tIncV,INR],[26,tExcV,INR],
-  ];
-  for (const [col,val,fmt] of totalCols) {
-    setCell(ws,dataRow,col,val,{font:ariFont({bold:true,size:9}),fill:C.TOTAL_ROW,hAlign:'center',border:thinBorder,numFmt:fmt});
-  }
-  for (let c=27;c<=32;c++) setCell(ws,dataRow,c,'',{fill:C.TOTAL_ROW,border:thinBorder});
+  const totalOpts = { font: ariFont({ bold: true, size: 9 }), fill: C.TOTAL_ROW };
+  activeCategories.forEach((cat, i) => mCell(qtyRanges[i], dataRow, tQtyByKey[cat.key], { ...totalOpts, numFmt: QTY }));
+  if (showTotals) mCell(totalQtyRange!, dataRow, tTotQ, { ...totalOpts, numFmt: QTY });
+  if (showTotals) activeCategories.forEach((cat, i) => mCell(valRanges[i], dataRow, tValByKey[cat.key], { ...totalOpts, numFmt: INR }));
+  mCell(totalInclRange, dataRow, tIncV, { ...totalOpts, numFmt: INR });
+  mCell(totalExclRange, dataRow, tExcV, { ...totalOpts, numFmt: INR });
+  for (let c = mfgDateCol; c <= lastCol; c++) setCell(ws, dataRow, c, '', { fill: C.TOTAL_ROW, border: thinBorder });
 
   // ── SIGN-OFF DECLARATION SECTION ────────────────────────────────────────────
   const whiteFill = solidFill(C.WHITE);
@@ -471,7 +730,7 @@ function buildALFSheet(ws: ExcelJS.Worksheet, dist: SignOffDistributor, audit: S
 
   const clearSignRow = (rowNum: number, h = 18) => {
     ws.getRow(rowNum).height = h;
-    for (let c = 1; c <= 32; c++) {
+    for (let c = 1; c <= lastCol; c++) {
       const cell = ws.getRow(rowNum).getCell(c);
       cell.fill = whiteFill;
       cell.border = noB;
@@ -504,37 +763,44 @@ function buildALFSheet(ws: ExcelJS.Worksheet, dist: SignOffDistributor, audit: S
 
   clearSignRow(dataRow + 7, 10);
 
+  // Third sign block sits near the start of the MFD section, same relative
+  // position as the original fixed 32-column layout.
+  const signCol3 = Math.min(lastCol, mfdStart);
+
   clearSignRow(dataRow + 8, 18);
-  writeSign(dataRow + 8, 3,  "Customer's Authorised person Name -", true);
-  writeSign(dataRow + 8, 15, '3rd Party Auditor', true);
-  writeSign(dataRow + 8, 28, 'Sales Team Name & contact no.', true);
+  writeSign(dataRow + 8, 3, "Customer's Authorised person Name -", true);
+  writeSign(dataRow + 8, MASTER_COLS, '3rd Party Auditor', true);
+  writeSign(dataRow + 8, signCol3, 'Sales Team Name & contact no.', true);
 
   clearSignRow(dataRow + 9, 16);
   clearSignRow(dataRow + 10, 16);
   clearSignRow(dataRow + 11, 16);
 
   clearSignRow(dataRow + 12, 18);
-  writeSign(dataRow + 12, 3,  'Seal & Sign -', true);
-  writeSign(dataRow + 12, 15, 'Auditor Sign', true);
-  writeSign(dataRow + 12, 28, 'Sign');
+  writeSign(dataRow + 12, 3, 'Seal & Sign -', true);
+  writeSign(dataRow + 12, MASTER_COLS, 'Auditor Sign', true);
+  writeSign(dataRow + 12, signCol3, 'Sign');
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// SHEET 3 — Invoice Details Primary Damage
+// SHEET 3 — Invoice Details (category-named)
 // ═════════════════════════════════════════════════════════════════════════════
-function buildInvoiceDetailsSheet(ws: ExcelJS.Worksheet, dist: SignOffDistributor, audit: SignOffAudit, items: SignOffItem[]) {
+function buildInvoiceDetailsSheet(ws: ExcelJS.Worksheet, dist: SignOffDistributor, audit: SignOffAudit, items: SignOffItem[], category: CategoryDef) {
   ws.pageSetup = { orientation: 'landscape', paperSize: 9, fitToPage: true, fitToWidth: 1, fitToHeight: 0 };
-  ws.columns = [8,16,12,14,14,18,18,16,12,12,14].map(w=>({width:w}));
-  setCell(ws,1,1,'Primary Damage - Invoice Level Details',{font:ariFont({bold:true,size:11}),hAlign:'left',border:{}});
-  const headers=['Sr No','Audit Serial No.','Region','Audit Team','Anchor Code','Anchor Name','Distributor name','Invoice No.','Invoice Date','Damage Qty in Pcs','Damage Value in Rs.'];
-  ws.getRow(2).height=30;
-  headers.forEach((h,i)=>setCell(ws,2,i+1,h,{font:ariFont({bold:true,size:9}),fill:C.MASTER_HDR,hAlign:'center',vAlign:'middle',wrap:true,border:thinBorder}));
-  // FIX: use splitValues to get damage value from stored totalValue
-  items.filter(i=>(i.qtyDamaged||0)>0).forEach((item,idx)=>{
-    ws.getRow(3+idx).height=15;
+  ws.columns = [8, 16, 12, 14, 14, 18, 18, 16, 12, 12, 14].map(w => ({ width: w }));
+  const firmName = audit.auditFirmName || DEFAULT_FIRM_NAME;
+  setCell(ws, 1, 1, `${category.shortLabel} - Invoice Level Details`, { font: ariFont({ bold: true, size: 11 }), hAlign: 'left', border: {} });
+  const headers = ['Sr No', 'Audit Serial No.', 'Region', 'Audit Team', 'Anchor Code', 'Anchor Name', 'Distributor name', 'Invoice No.', 'Invoice Date', 'Damage Qty in Pcs', 'Damage Value in Rs.'];
+  ws.getRow(2).height = 30;
+  headers.forEach((h, i) => setCell(ws, 2, i + 1, h, { font: ariFont({ bold: true, size: 9 }), fill: C.MASTER_HDR, hAlign: 'center', vAlign: 'middle', wrap: true, border: thinBorder }));
+  // FIX: use splitValues to get the category's value from the stored totalValue
+  items.filter(i => categoryQty(i, category.key) > 0).forEach((item, idx) => {
+    ws.getRow(3 + idx).height = 15;
     const sv = splitValues(item);
-    [idx+1,audit.serialNo||audit.id||'',dist.region||'','Singla Vishal & Co.',dist.code||'',dist.anchorName||'',dist.name||'','','',item.qtyDamaged||0, sv.vDmg].forEach((v,i)=>{
-      setCell(ws,3+idx,i+1,v as ExcelJS.CellValue,{font:ariFont({size:9}),hAlign:i>=9?'right':'left',border:thinBorder,numFmt:i===10?'[$₹-en-IN]#,##0.00':i===9?'#,##0':undefined});
+    const qty = categoryQty(item, category.key);
+    const val = catValFromAgg({ vDmg: sv.vDmg, vNs: sv.vNs, vBbd: sv.vBbd, vSamp: sv.vSamp }, category.key);
+    [idx + 1, audit.serialNo || audit.id || '', dist.region || '', firmName, dist.code || '', dist.anchorName || '', dist.name || '', '', '', qty, val].forEach((v, i) => {
+      setCell(ws, 3 + idx, i + 1, v as ExcelJS.CellValue, { font: ariFont({ size: 9 }), hAlign: i >= 9 ? 'right' : 'left', border: thinBorder, numFmt: i === 10 ? '[$₹-en-IN]#,##0.00' : i === 9 ? '#,##0' : undefined });
     });
   });
 }
@@ -543,15 +809,15 @@ function buildInvoiceDetailsSheet(ws: ExcelJS.Worksheet, dist: SignOffDistributo
 // SHEET 4 — Attendance Sheet
 // ═════════════════════════════════════════════════════════════════════════════
 function buildAttendanceSheet(ws: ExcelJS.Worksheet, dist: SignOffDistributor, audit: SignOffAudit) {
-  ws.columns=[6,20,14,14,10,10,12,14].map(w=>({width:w}));
-  setCell(ws,1,1,'Mandays details (Do mention date wise/Auditor Wise details)',{font:ariFont({bold:true,size:10}),hAlign:'left',border:{}});
-  ['Day','Name of Auditor','Auditor no.','Date of audit','In Time','Out Time','Total Mandays','Counting/Drainage'].forEach((h,i)=>setCell(ws,2,i+1,h,{font:ariFont({bold:true,size:9}),fill:C.MASTER_HDR,hAlign:'center',vAlign:'middle',wrap:true,border:thinBorder}));
-  ws.getRow(2).height=25;
-  setCell(ws,3,1,1,{font:ariFont({size:9}),hAlign:'center',border:thinBorder});
-  for (let c=2;c<=8;c++) setCell(ws,3,c,'',{font:ariFont({size:9}),border:thinBorder});
-  setCell(ws,12,1,`Distributor: ${dist.name||''}`,{font:ariFont({bold:true,size:10}),hAlign:'left',border:{}});
-  setCell(ws,13,1,'Sales Team:',{font:ariFont({size:10}),hAlign:'left',border:{}});
-  setCell(ws,14,1,'Auditor:',{font:ariFont({size:10}),hAlign:'left',border:{}});
+  ws.columns = [6, 20, 14, 14, 10, 10, 12, 14].map(w => ({ width: w }));
+  setCell(ws, 1, 1, 'Mandays details (Do mention date wise/Auditor Wise details)', { font: ariFont({ bold: true, size: 10 }), hAlign: 'left', border: {} });
+  ['Day', 'Name of Auditor', 'Auditor no.', 'Date of audit', 'In Time', 'Out Time', 'Total Mandays', 'Counting/Drainage'].forEach((h, i) => setCell(ws, 2, i + 1, h, { font: ariFont({ bold: true, size: 9 }), fill: C.MASTER_HDR, hAlign: 'center', vAlign: 'middle', wrap: true, border: thinBorder }));
+  ws.getRow(2).height = 25;
+  setCell(ws, 3, 1, 1, { font: ariFont({ size: 9 }), hAlign: 'center', border: thinBorder });
+  for (let c = 2; c <= 8; c++) setCell(ws, 3, c, '', { font: ariFont({ size: 9 }), border: thinBorder });
+  setCell(ws, 12, 1, `Distributor: ${dist.name || ''}`, { font: ariFont({ bold: true, size: 10 }), hAlign: 'left', border: {} });
+  setCell(ws, 13, 1, 'Sales Team:', { font: ariFont({ size: 10 }), hAlign: 'left', border: {} });
+  setCell(ws, 14, 1, 'Auditor:', { font: ariFont({ size: 10 }), hAlign: 'left', border: {} });
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -559,34 +825,45 @@ function buildAttendanceSheet(ws: ExcelJS.Worksheet, dist: SignOffDistributor, a
 // ═════════════════════════════════════════════════════════════════════════════
 export function useSignOffExport(params: {
   distributor: SignOffDistributor | undefined;
-  audit:       SignOffAudit;
-  items:       SignOffItem[];
+  audit: SignOffAudit;
+  items: SignOffItem[];
 }) {
-  const [isExporting,     setIsExporting]     = useState(false);
-  const [isExportingPDF,  setIsExportingPDF]  = useState(false);
-  const [isExportingALF,  setIsExportingALF]  = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
+  const [isExportingPDF, setIsExportingPDF] = useState(false);
+  const [isExportingALF, setIsExportingALF] = useState(false);
 
   // ── Excel sign-off export ───────────────────────────────────────────────────
   const exportSignOff = async () => {
     if (!params.distributor) return;
     setIsExporting(true);
     try {
-      const freshDist    = await fetchFreshDist(params.distributor);
+      const freshDist = await fetchFreshDist(params.distributor);
       const enrichedItems = await enrichWithItemMaster(params.items);
+
+      // Pick which category the Invoice-details sheet is named/filtered for:
+      // if the audit only ever tracks one category, use that one; otherwise
+      // keep the historical "Primary Damage" sheet so existing full-category
+      // (Beverage-style) reports are unaffected.
+      const activeCategories = getActiveCategories(enrichedItems);
+      const invoiceCategory = activeCategories.length === 1
+        ? activeCategories[0]
+        : (activeCategories.find(c => c.key === 'damage') || activeCategories[0]);
+      const invoiceSheetName = `Invoie details - ${invoiceCategory.shortLabel}`.slice(0, 31);
+
       const wb = new ExcelJS.Workbook();
       wb.creator = 'Reliance Audit System'; wb.created = new Date();
-      buildSignSheet           (wb.addWorksheet('Sign Format.'),                    freshDist, params.audit, enrichedItems);
-      buildALFSheet            (wb.addWorksheet('Article Level Format Revised'),    freshDist, params.audit, enrichedItems);
-      buildInvoiceDetailsSheet (wb.addWorksheet('Invoie details - Primary Damage'), freshDist, params.audit, enrichedItems);
-      buildAttendanceSheet     (wb.addWorksheet('Attendance Sheet'),                freshDist, params.audit);
-      const buf  = await wb.xlsx.writeBuffer();
-      const blob = new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
-      const url  = URL.createObjectURL(blob);
-      const a    = document.createElement('a');
+      buildSignSheet(wb.addWorksheet('Sign Format.'), freshDist, params.audit, enrichedItems);
+      buildALFSheet(wb.addWorksheet('Article Level Format Revised'), freshDist, params.audit, enrichedItems);
+      buildInvoiceDetailsSheet(wb.addWorksheet(invoiceSheetName), freshDist, params.audit, enrichedItems, invoiceCategory);
+      buildAttendanceSheet(wb.addWorksheet('Attendance Sheet'), freshDist, params.audit);
+      const buf = await wb.xlsx.writeBuffer();
+      const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
       const safeName = (freshDist.name || params.distributor.code || 'Audit').replace(/[\\/:*?"<>|]/g, '-');
-      a.href = url; a.download = `AuditReport_${safeName}_${params.audit.scheduledDate??'draft'}.xlsx`;
+      a.href = url; a.download = `AuditReport_${safeName}_${params.audit.scheduledDate ?? 'draft'}.xlsx`;
       document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
-    } catch(err){ console.error(err); alert('Failed to generate Excel. Please try again.'); }
+    } catch (err) { console.error(err); alert('Failed to generate Excel. Please try again.'); }
     finally { setIsExporting(false); }
   };
 
@@ -596,35 +873,37 @@ export function useSignOffExport(params: {
     setIsExportingPDF(true);
     try {
       const sb = supabase;
+      const assignmentId = getActiveAssignmentId();
       let freshDist: SignOffDistributor = params.distributor;
       if (params.distributor.code) {
         const { data: dbDist } = await sb
           .from('distributors')
           .select('id,code,name,anchorName,address,city,state,region')
+          .eq('assignment_id', assignmentId)
           .eq('code', params.distributor.code)
-          .single();
+          .maybeSingle();
         if (dbDist) {
           freshDist = {
             ...params.distributor,
-            name:       dbDist.name       || params.distributor.name       || '',
+            name: dbDist.name || params.distributor.name || '',
             anchorName: dbDist.anchorName || params.distributor.anchorName || '',
-            address:    dbDist.address    || '',
-            city:       dbDist.city       || '',
-            state:      dbDist.state      || '',
-            region:     dbDist.region     || '',
+            address: dbDist.address || '',
+            city: dbDist.city || '',
+            state: dbDist.state || '',
+            region: dbDist.region || '',
           };
         }
       }
 
       // FIX: use stored totalValue for PDF totals too
-      const totalQty   = params.items.reduce((s, i) => s + ((i.qtyDamaged||0) + (i.qtyNonSaleable||0) + (i.qtyBBD||0)), 0);
-      const totalValue = params.items.reduce((s, i) => s + (i.totalValue ?? ((i.qtyDamaged||0)+(i.qtyNonSaleable||0)+(i.qtyBBD||0)) * (i.unitValue||0)), 0);
+      const totalQty = params.items.reduce((s, i) => s + ((i.qtyDamaged || 0) + (i.qtyNonSaleable || 0) + (i.qtyBBD || 0)), 0);
+      const totalValue = params.items.reduce((s, i) => s + (i.totalValue ?? ((i.qtyDamaged || 0) + (i.qtyNonSaleable || 0) + (i.qtyBBD || 0)) * (i.unitValue || 0)), 0);
 
-      const auditDate  = params.audit.scheduledDate || '';
-      const serialNo   = params.audit.serialNo || '';
+      const auditDate = params.audit.scheduledDate || '';
+      const serialNo = params.audit.serialNo || '';
       const anchorName = freshDist.anchorName || freshDist.name || '';
       const anchorCode = freshDist.code || '';
-      const distCity   = freshDist.city || '';
+      const distCity = freshDist.city || '';
       const distNameCity = distCity ? `${freshDist.name}, ${distCity}` : freshDist.name;
       const fmtValue = (v: number) =>
         '₹' + v.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -721,29 +1000,30 @@ export function useSignOffExport(params: {
     setIsExportingALF(true);
     try {
       const sb = supabase;
+      const assignmentId = getActiveAssignmentId();
       let freshDist: SignOffDistributor = params.distributor;
       if (params.distributor.code) {
-        const { data: dbDist } = await sb.from('distributors').select('id,code,name,anchorName,address,city,state,region').eq('code', params.distributor.code).single();
+        const { data: dbDist } = await sb.from('distributors').select('id,code,name,anchorName,address,city,state,region').eq('assignment_id', assignmentId).eq('code', params.distributor.code).maybeSingle();
         if (dbDist) freshDist = { ...params.distributor, name: dbDist.name || params.distributor.name, anchorName: dbDist.anchorName || params.distributor.anchorName, address: dbDist.address || '', city: dbDist.city || '', state: dbDist.state || '', region: dbDist.region || '' };
       }
 
       const codes = [...new Set(params.items.map(i => i.articleNumber))];
       const itemMasterMap: Record<string, any> = {};
       if (codes.length) {
-        const { data: m } = await sb.from('itemMaster').select('itemCode,gst,standardPack,category').in('itemCode', codes);
+        const { data: m } = await sb.from('itemMaster').select('itemCode,gst,standardPack,category').eq('assignment_id', assignmentId).in('itemCode', codes);
         if (m) m.forEach((r: any) => { itemMasterMap[r.itemCode] = r; });
       }
 
       const enriched = params.items.map(i => ({
         ...i,
-        gst:          itemMasterMap[i.articleNumber]?.gst          ?? i.gst          ?? 0,
+        gst: itemMasterMap[i.articleNumber]?.gst ?? i.gst ?? 0,
         standardPack: itemMasterMap[i.articleNumber]?.standardPack ?? i.standardPack ?? '',
-        category:     itemMasterMap[i.articleNumber]?.category     || i.category     || '',
+        category: itemMasterMap[i.articleNumber]?.category || i.category || '',
       }));
 
-      const fmtINR  = (v: number) => '₹' + v.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-      const fmtQ    = (v: number) => v > 0 ? v.toLocaleString('en-IN') : '0';
-      const lifeM   = (mfg: string, exp: string) => {
+      const fmtINR = (v: number) => '₹' + v.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      const fmtQ = (v: number) => v > 0 ? v.toLocaleString('en-IN') : '0';
+      const lifeM = (mfg: string, exp: string) => {
         if (!mfg || !exp) return '';
         const d = Math.ceil((new Date(exp).getTime() - new Date(mfg).getTime()) / 86400000);
         return (d / 30).toFixed(1) + ' M';
@@ -755,11 +1035,11 @@ export function useSignOffExport(params: {
       };
 
       const groups = [
-        { label: 'Master Details',                cols: 15, color: '#D9E1F2' },
-        { label: 'Quantity Detail',               cols: 5,  color: '#BDD7EE' },
-        { label: 'Value Details - Incl. GST',     cols: 6,  color: '#E2EFDA' },
-        { label: 'MFD & Expiry Date',             cols: 4,  color: '#FFF2CC' },
-        { label: 'Auditor Findings',              cols: 2,  color: '#D9D9D9' },
+        { label: 'Master Details', cols: 15, color: '#D9E1F2' },
+        { label: 'Quantity Detail', cols: 5, color: '#BDD7EE' },
+        { label: 'Value Details - Incl. GST', cols: 6, color: '#E2EFDA' },
+        { label: 'MFD & Expiry Date', cols: 4, color: '#FFF2CC' },
+        { label: 'Auditor Findings', cols: 2, color: '#D9D9D9' },
       ];
       const groupRow = groups.map(g => `<th colspan="${g.cols}" style="background:${g.color};font-size:7pt;font-weight:bold;padding:3pt;text-align:center;border:0.5pt solid #999">${g.label}</th>`).join('');
       const headers = [
@@ -774,16 +1054,16 @@ export function useSignOffExport(params: {
 
       let rows = '';
       enriched.forEach((item, idx) => {
-        const uv   = item.unitValue || 0;
-        const gst  = Number(item.gst) || 0;
-        const dmg  = item.qtyDamaged     || 0;
-        const ns   = item.qtyNonSaleable || 0;
-        const bbd  = item.qtyBBD         || 0;
-        const samp = item.qtySampling    || 0;
-        const tot  = dmg + ns + bbd + samp;
+        const uv = item.unitValue || 0;
+        const gst = Number(item.gst) || 0;
+        const dmg = item.qtyDamaged || 0;
+        const ns = item.qtyNonSaleable || 0;
+        const bbd = item.qtyBBD || 0;
+        const samp = item.qtySampling || 0;
+        const tot = dmg + ns + bbd + samp;
 
         // FIX: use splitValues for consistent per-type values
-        const sv   = splitValues(item);
+        const sv = splitValues(item);
         const vExc = gst > 0 ? sv.vTot / (1 + gst / 100) : sv.vTot;
 
         const cols = [
@@ -800,12 +1080,12 @@ export function useSignOffExport(params: {
       });
 
       // FIX: totals use splitValues-derived values
-      const totDmg  = enriched.reduce((s, i) => s + splitValues(i).vDmg,  0);
+      const totDmg = enriched.reduce((s, i) => s + splitValues(i).vDmg, 0);
       const totSamp = enriched.reduce((s, i) => s + splitValues(i).vSamp, 0);
-      const totNs   = enriched.reduce((s, i) => s + splitValues(i).vNs,   0);
-      const totBbd  = enriched.reduce((s, i) => s + splitValues(i).vBbd,  0);
-      const totInc  = enriched.reduce((s, i) => s + splitValues(i).vTot,  0);
-      const totExc  = enriched.reduce((s, i) => {
+      const totNs = enriched.reduce((s, i) => s + splitValues(i).vNs, 0);
+      const totBbd = enriched.reduce((s, i) => s + splitValues(i).vBbd, 0);
+      const totInc = enriched.reduce((s, i) => s + splitValues(i).vTot, 0);
+      const totExc = enriched.reduce((s, i) => {
         const sv = splitValues(i);
         const gst = Number(i.gst) || 0;
         return s + (gst > 0 ? sv.vTot / (1 + gst / 100) : sv.vTot);
@@ -849,17 +1129,17 @@ export function useSignOffExport(params: {
   <div>Auditor: <span>${params.audit.auditorName || ''}</span></div>
 </div>
 <table>
-  <colgroup>${Array.from({length:32},(_,i)=>`<col class="c${i+1}">`).join('')}</colgroup>
-  <thead><tr>${groupRow}</tr><tr>${headers.map(h => `<th>${h.replace(/\\n/g,'<br>')}</th>`).join('')}</tr></thead>
+  <colgroup>${Array.from({ length: 32 }, (_, i) => `<col class="c${i + 1}">`).join('')}</colgroup>
+  <thead><tr>${groupRow}</tr><tr>${headers.map(h => `<th>${h.replace(/\\n/g, '<br>')}</th>`).join('')}</tr></thead>
   <tbody>${rows}</tbody>
   <tfoot>
     <tr class="totals">
       ${Array(15).fill('<td></td>').join('')}
-      <td>${fmtQ(enriched.reduce((s,i)=>s+(i.qtyDamaged||0),0))}</td>
-      <td>${fmtQ(enriched.reduce((s,i)=>s+(i.qtySampling||0),0))}</td>
-      <td>${fmtQ(enriched.reduce((s,i)=>s+(i.qtyNonSaleable||0),0))}</td>
-      <td>${fmtQ(enriched.reduce((s,i)=>s+(i.qtyBBD||0),0))}</td>
-      <td>${fmtQ(enriched.reduce((s,i)=>s+((i.qtyDamaged||0)+(i.qtyNonSaleable||0)+(i.qtyBBD||0)+(i.qtySampling||0)),0))}</td>
+      <td>${fmtQ(enriched.reduce((s, i) => s + (i.qtyDamaged || 0), 0))}</td>
+      <td>${fmtQ(enriched.reduce((s, i) => s + (i.qtySampling || 0), 0))}</td>
+      <td>${fmtQ(enriched.reduce((s, i) => s + (i.qtyNonSaleable || 0), 0))}</td>
+      <td>${fmtQ(enriched.reduce((s, i) => s + (i.qtyBBD || 0), 0))}</td>
+      <td>${fmtQ(enriched.reduce((s, i) => s + ((i.qtyDamaged || 0) + (i.qtyNonSaleable || 0) + (i.qtyBBD || 0) + (i.qtySampling || 0)), 0))}</td>
       <td>${fmtINR(totDmg)}</td>
       <td>${fmtINR(totSamp)}</td>
       <td>${fmtINR(totNs)}</td>

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { supabase } from '../../supabase';
+import { supabase, getActiveAssignmentId } from '../../supabase';
 import { AuditTicket, AuditComment } from '../../types';
 import { MessageSquare, X, Send, Loader2 } from 'lucide-react';
 import { cn } from '../../App';
@@ -196,8 +196,10 @@ async function notifyDiscussionParticipants(
 
     if (recipientSet.size === 0) return;
 
+    const assignmentId = ticket.assignment_id || getActiveAssignmentId();
     const notifications = Array.from(recipientSet).map(uid => ({
       recipient_id: uid,
+      assignment_id: assignmentId,
       title:        `New message in discussion`,
       message:      `${sender.name} (${sender.role.toUpperCase()}): "${message.length > 80 ? message.slice(0, 80) + '…' : message}"`,
       is_read:      false,

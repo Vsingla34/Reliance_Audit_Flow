@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { supabase, logActivity } from '../supabase';
+import { getCachedData, fetchCachedDistributors, fetchCachedUsers, invalidateCache } from '../supabaseOptimized';
 import { Distributor, UserProfile } from '../types';
 import { 
   Plus, Search, Store, MapPin, Edit2, Trash2, X, Upload, Download,
@@ -30,9 +31,13 @@ async function fetchAllRows<T>(
 }
 
 export function DistributorsModule() {
-  const { profile, user } = useAuth();
-  const [distributors, setDistributors] = useState<any[]>([]); 
-  const [users, setUsers] = useState<UserProfile[]>([]);
+  const { profile, user, activeAssignment } = useAuth();
+  const assignmentId = activeAssignment?.id || 'assignment-1';
+  const isGlobal = ['superadmin', 'admin', 'ho', 'auditor'].includes(profile?.role || '');
+  const cacheKeyDist = `distributors-${assignmentId}-${isGlobal ? 'all' : `${profile?.role}-${profile?.uid}`}`;
+
+  const [distributors, setDistributors] = useState<any[]>(() => getCachedData<any[]>(cacheKeyDist) || []); 
+  const [users, setUsers] = useState<UserProfile[]>(() => getCachedData<UserProfile[]>('global-users') || []);
   const [searchTerm, setSearchTerm] = useState('');
   
   const [filterAse, setFilterAse] = useState('all');
@@ -60,19 +65,12 @@ export function DistributorsModule() {
     active: true, address: '', city: '', state: '', region: ''
   });
 
-  const fetchData = async () => {
+  const fetchData = async (force = false) => {
     if (!profile) return;
     try {
-      let distQuery = supabase.from('distributors').select('id,code,name,anchorName,address,city,state,region,approvedValue,aseIds,asmIds,smIds,dmIds,hoIds,active,assignment_serial_no');
-      
-      if (profile.role === 'ase') distQuery = distQuery.contains('aseIds', [profile.uid]);
-      if (profile.role === 'asm') distQuery = distQuery.contains('asmIds', [profile.uid]);
-      if (profile.role === 'sm') distQuery = distQuery.contains('smIds', [profile.uid]);
-      if (profile.role === 'dm') distQuery = distQuery.contains('dmIds', [profile.uid]);
-
       const [distData, usersData] = await Promise.all([
-        fetchAllRows<any>(() => distQuery.order('name', { ascending: true })),
-        fetchAllRows<UserProfile>(() => supabase.from('users').select('uid,name,email,role,phone,region,active')),
+        fetchCachedDistributors(assignmentId, profile, force),
+        fetchCachedUsers(force),
       ]);
 
       setDistributors(distData);
@@ -81,10 +79,10 @@ export function DistributorsModule() {
   };
 
   useEffect(() => {
-    fetchData();
-    const channel = supabase.channel('distributors-changes').on('postgres_changes', { event: '*', schema: 'public', table: 'distributors' }, fetchData).subscribe();
+    fetchData(false);
+    const channel = supabase.channel(`distributors-changes-${assignmentId}`).on('postgres_changes', { event: '*', schema: 'public', table: 'distributors' }, () => fetchData(true)).subscribe();
     return () => { supabase.removeChannel(channel); };
-  }, [profile]);
+  }, [profile, assignmentId]);
 
   useEffect(() => {
     setCurrentPage(1);
@@ -206,23 +204,24 @@ export function DistributorsModule() {
       });
 
       if (editingDist) {
-        const { error } = await supabase.from('distributors').update(sanitizedData).eq('id', editingDist.id);
+        const { error } = await supabase.from('distributors').update(sanitizedData).eq('id', editingDist.id).eq('assignment_id', assignmentId);
         if (error) throw error;
         
-        await supabase.from('auditTickets').update({ approvedValue: sanitizedData.approvedValue, maxAllowedValue: (sanitizedData.approvedValue || 0) * 1.05 }).eq('distributorId', editingDist.id).in('status', ['tentative', 'scheduled', 'in_progress']);
-        logActivity(user!, profile!, "Distributor Updated", `Updated details for ${formData.name}`);
+        await supabase.from('auditTickets').update({ approvedValue: sanitizedData.approvedValue, maxAllowedValue: (sanitizedData.approvedValue || 0) * 1.05 }).eq('distributorId', editingDist.id).eq('assignment_id', assignmentId).in('status', ['tentative', 'scheduled', 'in_progress']);
+        logActivity(user!, profile!, "Distributor Updated", `Updated details for ${formData.name}`, assignmentId);
       } else {
         const newDistId = Math.random().toString(36).substring(7);
-        const { error } = await supabase.from('distributors').insert([{ ...sanitizedData, id: newDistId }]);
+        const { error } = await supabase.from('distributors').insert([{ ...sanitizedData, id: newDistId, assignment_id: assignmentId }]);
         if (error) throw error;
         
         const tentativeTicket = {
-          id: Math.random().toString(36).substring(7), distributorId: newDistId, proposedDate: null, auditorId: null, approvedValue: sanitizedData.approvedValue, maxAllowedValue: (sanitizedData.approvedValue || 0) * 1.05, status: 'tentative', verifiedTotal: 0, dateProposals: [], comments: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
+          id: Math.random().toString(36).substring(7), assignment_id: assignmentId, distributorId: newDistId, proposedDate: null, auditorId: null, approvedValue: sanitizedData.approvedValue, maxAllowedValue: (sanitizedData.approvedValue || 0) * 1.05, status: 'tentative', verifiedTotal: 0, dateProposals: [], comments: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
         };
         await supabase.from('auditTickets').insert([tentativeTicket]);
-        logActivity(user!, profile!, "Distributor Added", `Created new distributor: ${formData.name}`);
+        logActivity(user!, profile!, "Distributor Added", `Created new distributor: ${formData.name}`, assignmentId);
       }
-      setIsModalOpen(false); setEditingDist(null); resetForm(); fetchData();
+      invalidateCache(`distributors-${assignmentId}`);
+      setIsModalOpen(false); setEditingDist(null); resetForm(); fetchData(true);
     } catch (error: any) { alert(`Failed to save distributor: ${error.message}`); }
   };
 
@@ -377,6 +376,7 @@ export function DistributorsModule() {
 
           return {
             id:                 Math.random().toString(36).substring(7),
+            assignment_id:      assignmentId,
             code,
             assignment_serial_no: get([COL.assignmentNo], cols) || '',
             anchorName:         get([COL.anchorName], cols) || '',
@@ -403,9 +403,10 @@ export function DistributorsModule() {
         const { error } = await supabase.from('distributors').insert(newDistributors);
         if (error) throw error;
 
+        invalidateCache(`distributors-${assignmentId}`);
         logActivity(user!, profile!, "Distributors Imported", `Bulk imported ${newDistributors.length} distributors via CSV`);
         alert(`Successfully imported ${newDistributors.length} distributors!`);
-        fetchData();
+        fetchData(true);
 
       } catch (error: any) {
         console.error(error);

@@ -9,7 +9,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { CheckInBlock } from '../components/Execution/CheckInBlock';
 import { AddItemModal } from '../components/Execution/AddItemModal';
 import { ChatModal } from '../components/Execution/ChatModal';
-import { saveQueue } from '../supabaseOptimized';
+import { saveQueue, getCachedData, setCachedData, fetchCachedDistributors, fetchCachedUsers } from '../supabaseOptimized';
 
 const BUCKET_NAME = 'audit-media'; 
 
@@ -49,9 +49,14 @@ async function fetchAllRows<T>(
 }
 
 export function ExecutionModule() {
-  const { profile, user } = useAuth();
-  const [tickets, setTickets] = useState<AuditTicket[]>([]);
-  const [distributors, setDistributors] = useState<any[]>([]); 
+  const { profile, user, activeAssignment } = useAuth();
+  const assignmentId = activeAssignment?.id || 'assignment-1';
+  const isGlobal = ['superadmin', 'admin', 'ho', 'auditor'].includes(profile?.role || '');
+  const cacheKeyDist = `distributors-${assignmentId}-${isGlobal ? 'all' : `${profile?.role}-${profile?.uid}`}`;
+  const cacheKeyTickets = `exec-tickets-${assignmentId}-${profile?.uid || 'anon'}`;
+
+  const [tickets, setTickets] = useState<AuditTicket[]>(() => getCachedData<AuditTicket[]>(cacheKeyTickets) || []);
+  const [distributors, setDistributors] = useState<any[]>(() => getCachedData<any[]>(cacheKeyDist) || []); 
   const [activeTicket, setActiveTicket] = useState<AuditTicket | null>(null);
   const [ticketUsers, setTicketUsers] = useState<{ id: string; name: string; role: string; phone?: string; email?: string }[]>([]);
   
@@ -233,32 +238,27 @@ export function ExecutionModule() {
   const fetchData = async () => {
     if (!profile) return;
     try {
-      // Paginated distributors fetch — handles 1100+ distributors without truncation
-      let distBaseQuery = () => {
-        let q = supabase.from('distributors').select('id,code,name,anchorName,address,city,state,region,approvedValue,aseIds,asmIds,smIds,dmIds,hoIds,active,assignment_serial_no');
-        if (profile.role === 'ase') q = q.contains('aseIds', [profile.uid]);
-        else if (profile.role === 'asm') q = q.contains('asmIds', [profile.uid]);
-        else if (profile.role === 'sm')  q = q.contains('smIds',  [profile.uid]);
-        else if (profile.role === 'dm')  q = q.contains('dmIds',  [profile.uid]);
-        return q;
-      };
-      const fetchedDistributors = await fetchAllRows<any>(distBaseQuery);
-      setDistributors(fetchedDistributors);
-
-      const validDistIds = new Set(fetchedDistributors.map((d: any) => d.id));
-
-      // Paginated tickets fetch
+      // Fetch distributors and tickets in parallel (no waterfall)
       let ticketBaseQuery = () => {
         let q = supabase.from('auditTickets')
-          .select('id,distributorId,status,scheduledDate,proposedDate,auditorIds,approvedValue,maxAllowedValue,verifiedTotal,signOffs,presenceLogs,drainageDate,auditDays,updatedAt,createdAt')
+          .select('id,assignment_id,distributorId,status,scheduledDate,proposedDate,auditorIds,approvedValue,maxAllowedValue,verifiedTotal,signOffs,presenceLogs,drainageDate,auditDays,updatedAt,createdAt')
+          .eq('assignment_id', assignmentId)
           .in('status', ['scheduled', 'in_progress', 'auditor_submitted', 'submitted', 'drainage_pending', 'signed', 'evidence_uploaded', 'closed']);
         if (profile.role === 'auditor')
           q = q.or(`auditorId.eq.${profile.uid},auditorIds.cs.{${profile.uid}}`);
         return q;
       };
-      const fetchedTickets = await fetchAllRows<AuditTicket>(ticketBaseQuery);
+
+      const [fetchedDistributors, fetchedTickets] = await Promise.all([
+        fetchCachedDistributors(assignmentId, profile),
+        fetchAllRows<AuditTicket>(ticketBaseQuery),
+      ]);
+
+      setDistributors(fetchedDistributors);
+      const validDistIds = new Set(fetchedDistributors.map((d: any) => d.id));
       const validTickets = fetchedTickets.filter(t => validDistIds.has(t.distributorId));
       setTickets(validTickets);
+      setCachedData(cacheKeyTickets, validTickets);
 
     } catch (error) {
       console.error("Execution Data Fetch Error:", error);
@@ -266,13 +266,15 @@ export function ExecutionModule() {
   };
 
   useEffect(() => {
+    setActiveTicket(null);
     fetchData();
     // Realtime: listen for any auditTicket change, then surgically update local state
     // (full fetchData only runs on mount; realtime uses applyTicketPatch pattern)
-    const channel = supabase.channel('execution-channel')
+    const channel = supabase.channel(`execution-channel-${assignmentId}`)
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'auditTickets' },
         (payload: any) => {
           const updated = payload.new as AuditTicket;
+          if (updated.assignment_id && updated.assignment_id !== assignmentId) return;
           setTickets(prev => prev.map(t => t.id === updated.id ? { ...t, ...updated } : t));
           // Also patch activeTicket if it's the same ticket and this update is newer than what we have
           setActiveTicket(prev => {
@@ -284,6 +286,7 @@ export function ExecutionModule() {
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'auditTickets' },
         (payload: any) => {
           const inserted = payload.new as AuditTicket;
+          if (inserted.assignment_id && inserted.assignment_id !== assignmentId) return;
           // Only add if it belongs to a distributor this user can see
           setDistributors(prevDist => {
             const ids = new Set(prevDist.map((d: any) => d.id));
@@ -299,26 +302,44 @@ export function ExecutionModule() {
         })
       .subscribe();
     return () => { supabase.removeChannel(channel); };
-  }, [profile]);
+  }, [profile, assignmentId]);
 
   const fetchItems = async (ticketId: string) => {
-    const { data } = await supabase.from('auditLineItems').select('*').eq('ticketId', ticketId).order('articleNumber', { ascending: true });
+    const cacheKeyItems = `line-items-${ticketId}`;
+    const cached = getCachedData<AuditLineItem[]>(cacheKeyItems);
+    if (cached) setItems(cached);
+
+    const { data } = await supabase.from('auditLineItems').select('*').eq('ticketId', ticketId).eq('assignment_id', assignmentId).order('articleNumber', { ascending: true });
     if (!data) return;
     setItems(data as AuditLineItem[]);
+    setCachedData(cacheKeyItems, data);
 
     // Sum exactly like Excel — read stored totalValue, sum in paise to avoid JS float drift
     const totalPaise = (data as AuditLineItem[]).reduce((s, i) => s + Math.round((i.totalValue || 0) * 100), 0);
     const trueTotal  = totalPaise / 100;
-    setActiveTicket(prev => prev ? { ...prev, verifiedTotal: trueTotal } : prev);
-    await supabase.from('auditTickets').update({ verifiedTotal: trueTotal, updatedAt: new Date().toISOString() }).eq('id', ticketId);
+    setActiveTicket(prev => {
+      if (!prev) return prev;
+      // Only fire DB update if stored verifiedTotal drifted
+      if (Math.abs((prev.verifiedTotal || 0) - trueTotal) > 0.01) {
+        supabase.from('auditTickets').update({ verifiedTotal: trueTotal, updatedAt: new Date().toISOString() }).eq('id', ticketId).then(() => {});
+      }
+      return { ...prev, verifiedTotal: trueTotal };
+    });
   };
 
   const loadDumpData = async (distCode: string) => {
+    const cacheKeyDump = `dump-${assignmentId}-${distCode.trim().toLowerCase()}`;
+    const cachedDump = getCachedData<CombinedDumpItem[]>(cacheKeyDump);
+    if (cachedDump) {
+      setAvailableDumpItems(cachedDump);
+      return;
+    }
     try {
       // salesDump: paginated, column-projected (no select('*') which pulls all columns)
       const dump = await fetchAllRows<any>(
         () => supabase.from('salesDump')
-          .select('id,distributorCode,itemCode,itemName,quantity,rate,totalValue,category,gst,standardPack,billingDate,plant,billingDoc')
+          .select('id,assignment_id,distributorCode,itemCode,itemName,quantity,rate,totalValue,category,gst,standardPack,billingDate,plant,billingDoc')
+          .eq('assignment_id', assignmentId)
           .ilike('distributorCode', distCode.trim())
       );
       if (dump.length > 0) {
@@ -339,6 +360,7 @@ export function ExecutionModule() {
           };
         });
         setAvailableDumpItems(combined);
+        setCachedData(cacheKeyDump, combined);
       } else { setAvailableDumpItems([]); }
     } catch (error) { console.error(error); }
   };
@@ -984,7 +1006,7 @@ export function ExecutionModule() {
 
         // Build one row per qty type (matches how AddItemModal splits rows)
         if (qDmg > 0) inserts.push({
-          id: crypto.randomUUID(), ticketId: activeTicket.id,
+          id: crypto.randomUUID(), assignment_id: assignmentId, ticketId: activeTicket.id,
           articleNumber: articleCode, description, category: dumpItem?.category || '',
           quantity: qDmg, qtyDamaged: qDmg, qtyNonSaleable: 0, qtyBBD: 0,
           unitValue, totalValue: Math.round(qDmg * unitValue * 100) / 100,
@@ -993,7 +1015,7 @@ export function ExecutionModule() {
           bbdApprovalStatus: 'none', qtyDrained: 0,
         });
         if (effectiveNs > 0) inserts.push({
-          id: crypto.randomUUID(), ticketId: activeTicket.id,
+          id: crypto.randomUUID(), assignment_id: assignmentId, ticketId: activeTicket.id,
           articleNumber: articleCode, description, category: dumpItem?.category || '',
           quantity: effectiveNs, qtyDamaged: 0, qtyNonSaleable: effectiveNs, qtyBBD: 0,
           unitValue, totalValue: Math.round(effectiveNs * unitValue * 100) / 100,
@@ -1002,7 +1024,7 @@ export function ExecutionModule() {
           bbdApprovalStatus: 'none', qtyDrained: 0,
         });
         if (qBbd > 0) inserts.push({
-          id: crypto.randomUUID(), ticketId: activeTicket.id,
+          id: crypto.randomUUID(), assignment_id: assignmentId, ticketId: activeTicket.id,
           articleNumber: articleCode, description, category: dumpItem?.category || '',
           quantity: qBbd, qtyDamaged: 0, qtyNonSaleable: 0, qtyBBD: qBbd,
           unitValue, totalValue: Math.round(qBbd * unitValue * 100) / 100,
@@ -1067,6 +1089,7 @@ export function ExecutionModule() {
       const { data: rawDump } = await supabase
         .from('salesDump')
         .select('id,itemCode,itemName,quantity,rate,category')
+        .eq('assignment_id', assignmentId)
         .ilike('distributorCode', distCode);
       if (rawDump && rawDump.length > 0) {
         const dedupMap = new Map<string, CombinedDumpItem>();

@@ -14,7 +14,8 @@ import { motion } from 'motion/react';
 const BATCH_SIZE = 500;  // 500 rows/batch — reliable with PostgREST payload limits
 
 export function MastersModule() {
-  const { profile, user } = useAuth(); 
+  const { profile, user, activeAssignment } = useAuth(); 
+  const assignmentId = activeAssignment?.id || 'assignment-1'; 
   
   const [isUploadingItem, setIsUploadingItem] = useState(false);
   const [itemProgress, setItemProgress] = useState({ current: 0, total: 0 });
@@ -111,6 +112,7 @@ export function MastersModule() {
           
           return { 
             id: crypto.randomUUID(), 
+            assignment_id: assignmentId,
             itemCode, 
             itemName, 
             gst: parseNum(gst), 
@@ -133,12 +135,12 @@ export function MastersModule() {
         let processed = 0;
         for (let i = 0; i < items.length; i += BATCH_SIZE) {
           const batch = items.slice(i, i + BATCH_SIZE);
-          const { error } = await supabase.from('itemMaster').upsert(batch, { onConflict: 'itemCode' });
+          const { error } = await supabase.from('itemMaster').upsert(batch, { onConflict: 'assignment_id,itemCode' });
           if (error) throw error;
           processed += batch.length; setItemProgress({ current: processed, total: items.length });
         }
         
-        logActivity(user, profile, "Master Data Uploaded", `Uploaded/Updated ${items.length} items in the Item Master.`);
+        logActivity(user, profile, "Master Data Uploaded", `Uploaded/Updated ${items.length} items in the Item Master.`, assignmentId);
         alert(`Success! ${items.length} items uploaded to the Master.\n${duplicatesRemoved > 0 ? `(Skipped ${duplicatesRemoved} duplicate entries found in your file)` : ''}`);
       } catch (error: any) { alert(`Upload failed: ${error.message || 'Invalid CSV format'}`); } 
       finally { setIsUploadingItem(false); setItemProgress({ current: 0, total: 0 }); if (itemFileRef.current) itemFileRef.current.value = ''; }
@@ -195,6 +197,7 @@ export function MastersModule() {
           // crypto.randomUUID() = 128-bit UUID, zero collision risk at 75k rows.
           return {
             id:              crypto.randomUUID(),
+            assignment_id:   assignmentId,
             distributorCode: soldToParty,
             itemCode:        materialNo,
             quantity:        safeQty,
@@ -269,13 +272,13 @@ export function MastersModule() {
   const clearSalesDump = async () => {
     if (!user || !profile) return;
     if (profile.role !== 'superadmin') return alert("Action Denied: Only SuperAdmins can delete database contents.");
-    if (window.confirm("WARNING: This will permanently delete ALL data in the Sales Dump. Do you want to continue?")) {
+    if (window.confirm(`WARNING: This will permanently delete ALL data in the Sales Dump for "${activeAssignment?.name || 'this assignment'}". Do you want to continue?`)) {
       setIsClearingSales(true);
       try {
-        const { error } = await supabase.from('salesDump').delete().neq('id', '0');
+        const { error } = await supabase.from('salesDump').delete().eq('assignment_id', assignmentId).neq('id', '0');
         if (error) throw error; 
-        logActivity(user, profile, "Sales Dump Cleared", `WARNING: Action executed. Entire Sales Dump database was wiped.`);
-        alert("Sales Dump has been completely cleared.");
+        logActivity(user, profile, "Sales Dump Cleared", `WARNING: Action executed. Sales Dump for ${activeAssignment?.name} was wiped.`, assignmentId);
+        alert("Sales Dump for this assignment has been completely cleared.");
       } catch (error) { alert("Failed to clear Sales Dump."); } 
       finally { setIsClearingSales(false); }
     }
@@ -284,13 +287,13 @@ export function MastersModule() {
   const clearItemMaster = async () => {
     if (!user || !profile) return;
     if (profile.role !== 'superadmin') return alert("Action Denied: Only SuperAdmins can delete database contents.");
-    if (window.confirm("WARNING: This will permanently delete ALL products in the Item Master. Do you want to continue?")) {
+    if (window.confirm(`WARNING: This will permanently delete ALL products in the Item Master for "${activeAssignment?.name || 'this assignment'}". Do you want to continue?`)) {
       setIsClearingItems(true);
       try {
-        const { error } = await supabase.from('itemMaster').delete().neq('id', '0');
+        const { error } = await supabase.from('itemMaster').delete().eq('assignment_id', assignmentId).neq('id', '0');
         if (error) throw error; 
-        logActivity(user, profile, "Item Master Cleared", `WARNING: Action executed. Entire Item Master database was wiped.`);
-        alert("Item Master has been completely cleared.");
+        logActivity(user, profile, "Item Master Cleared", `WARNING: Action executed. Item Master for ${activeAssignment?.name} was wiped.`, assignmentId);
+        alert("Item Master for this assignment has been completely cleared.");
       } catch (error) { alert("Failed to clear Item Master."); } 
       finally { setIsClearingItems(false); }
     }

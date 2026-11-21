@@ -19,31 +19,118 @@ import { AuditLineItem, AuditTicket } from './types';
 // Only fetch columns actually used in the UI — dramatically reduces payload size
 
 export const TICKET_COLS = [
-  'id','distributorId','status','scheduledDate','proposedDate','auditorIds',
-  'approvedValue','maxAllowedValue','verifiedTotal','signOffs','presenceLogs',
-  'drainageDate','fieldAuditors','whatsappMediaApproved','signoffDocumentUrl',
-  'signoffDocumentApproved','dateProposals','auditDays','createdAt','updatedAt'
+  'id', 'assignment_id', 'distributorId', 'status', 'scheduledDate', 'proposedDate', 'auditorIds',
+  'approvedValue', 'maxAllowedValue', 'verifiedTotal', 'signOffs', 'presenceLogs',
+  'drainageDate', 'fieldAuditors', 'whatsappMediaApproved', 'signoffDocumentUrl',
+  'signoffDocumentApproved', 'dateProposals', 'auditDays', 'createdAt', 'updatedAt'
 ].join(',');
 
 export const DIST_COLS = [
-  'id','code','name','anchorName','address','city','state','region',
-  'approvedValue','aseIds','asmIds','smIds','dmIds','hoIds','active'
+  'id', 'assignment_id', 'code', 'name', 'anchorName', 'address', 'city', 'state', 'region',
+  'approvedValue', 'aseIds', 'asmIds', 'smIds', 'dmIds', 'hoIds', 'active', 'assignment_serial_no'
 ].join(',');
 
 export const USER_COLS = [
-  'uid','name','email','role','phone','region','active'
+  'uid', 'name', 'email', 'role', 'phone', 'region', 'active'
 ].join(',');
 
 export const LINE_ITEM_COLS = [
-  'id','ticketId','articleNumber','description','category','quantity',
-  'unitValue','totalValue','reasonCode','remarks','qtyNonSaleable','qtyBBD',
-  'qtyDamaged','mfgDate','expDate','productLife','qtyDrained','bbdApprovalStatus'
+  'id', 'assignment_id', 'ticketId', 'articleNumber', 'description', 'category', 'quantity',
+  'unitValue', 'totalValue', 'reasonCode', 'remarks', 'qtyNonSaleable', 'qtyBBD',
+  'qtyDamaged', 'mfgDate', 'expDate', 'productLife', 'qtyDrained', 'bbdApprovalStatus'
 ].join(',');
 
 export const DUMP_COLS = [
-  'id','distributorCode','itemCode','itemName','quantity','rate',
-  'totalValue','category','gst','standardPack'
+  'id', 'assignment_id', 'distributorCode', 'itemCode', 'itemName', 'quantity', 'rate',
+  'totalValue', 'category', 'gst', 'standardPack', 'billingDate', 'plant', 'billingDoc'
 ].join(',');
+
+// ── IN-MEMORY SWR CACHE (Instant 0ms Tab Switching) ──────────────────────────
+// Stores the latest fetched data per assignment/resource so navigating between
+// Overview, Today's Audits, Distributors, Schedule, Execution, and Reports
+// renders immediately from memory while refreshing quietly in the background.
+
+type CacheEntry<T = any> = {
+  data: T;
+  timestamp: number;
+};
+
+const memoryCache = new Map<string, CacheEntry>();
+
+export function getCachedData<T>(key: string): T | null {
+  const entry = memoryCache.get(key);
+  return entry ? (entry.data as T) : null;
+}
+
+export function setCachedData<T>(key: string, data: T): void {
+  memoryCache.set(key, { data, timestamp: Date.now() });
+}
+
+export function invalidateCache(prefix?: string): void {
+  if (!prefix) {
+    memoryCache.clear();
+    return;
+  }
+  for (const k of memoryCache.keys()) {
+    if (k.startsWith(prefix)) memoryCache.delete(k);
+  }
+}
+
+export async function cachedFetchAllRows<T>(
+  cacheKey: string,
+  queryBuilder: () => any,
+  opts: { ttlMs?: number; forceRefresh?: boolean; pageSize?: number } = {}
+): Promise<T[]> {
+  const { ttlMs = 30000, forceRefresh = false, pageSize = 1000 } = opts;
+  const cached = memoryCache.get(cacheKey);
+  if (!forceRefresh && cached && Date.now() - cached.timestamp < ttlMs) {
+    return cached.data as T[];
+  }
+  return dedupedFetch(cacheKey, async () => {
+    let allRows: T[] = [];
+    let from = 0;
+    while (true) {
+      const { data, error } = await queryBuilder().range(from, from + pageSize - 1);
+      if (error) throw error;
+      if (!data || data.length === 0) break;
+      allRows = allRows.concat(data as T[]);
+      if (data.length < pageSize) break;
+      from += pageSize;
+    }
+    setCachedData(cacheKey, allRows);
+    return allRows;
+  });
+}
+
+export function fetchCachedUsers(forceRefresh = false) {
+  return cachedFetchAllRows<any>(
+    'global-users',
+    () => supabase.from('users').select(USER_COLS).order('role', { ascending: true }),
+    { ttlMs: 60000, forceRefresh }
+  );
+}
+
+export function fetchCachedDistributors(
+  assignmentId: string,
+  profile: { uid: string; role: string },
+  forceRefresh = false
+) {
+  const isGlobal = ['superadmin', 'admin', 'ho', 'auditor'].includes(profile.role);
+  const scopeKey = isGlobal ? 'all' : `${profile.role}-${profile.uid}`;
+  const cacheKey = `distributors-${assignmentId}-${scopeKey}`;
+  return cachedFetchAllRows<any>(
+    cacheKey,
+    () => {
+      let q = supabase.from('distributors').select(DIST_COLS).eq('assignment_id', assignmentId);
+      if (profile.role === 'ase') q = q.contains('aseIds', [profile.uid]);
+      else if (profile.role === 'asm') q = q.contains('asmIds', [profile.uid]);
+      else if (profile.role === 'sm') q = q.contains('smIds', [profile.uid]);
+      else if (profile.role === 'dm') q = q.contains('dmIds', [profile.uid]);
+      return q.order('name', { ascending: true });
+    },
+    { ttlMs: 30000, forceRefresh }
+  );
+}
 
 // ── SAVE QUEUE ─────────────────────────────────────────────────────────────────
 // Batches rapid inline edits: if the user edits qty then immediately edits
@@ -52,7 +139,7 @@ export const DUMP_COLS = [
 
 type SaveEntry = {
   payload: Partial<AuditLineItem>;
-  timer:   ReturnType<typeof setTimeout>;
+  timer: ReturnType<typeof setTimeout>;
   resolve: () => void;
 };
 
@@ -113,7 +200,7 @@ class LineItemSaveQueue {
   }
 
   hasPending(id: string) { return this.queue.has(id); }
-  pendingCount()         { return this.queue.size; }
+  pendingCount() { return this.queue.size; }
 }
 
 // Singleton — shared across all Execution instances
@@ -170,16 +257,16 @@ export function applyLineItemPatch(
 
 // ── OPTIMIZED FETCH FUNCTIONS ──────────────────────────────────────────────────
 
-export async function fetchTickets(profile: { role: string; uid: string }, distIds: string[]) {
+export async function fetchTickets(profile: { role: string; uid: string }, distIds: string[], assignmentId = 'assignment-1') {
   // Paginated — fetches all pages to handle 1100+ assignments
   const pageSize = 1000;
   let allRows: AuditTicket[] = [];
   let from = 0;
   while (true) {
-    let q = supabase.from('auditTickets').select(TICKET_COLS);
+    let q = supabase.from('auditTickets').select(TICKET_COLS).eq('assignment_id', assignmentId);
     if (profile.role === 'auditor') {
       q = q.or(`auditorIds.cs.{${profile.uid}}`);
-    } else if (['ase','asm','sm','dm'].includes(profile.role)) {
+    } else if (['ase', 'asm', 'sm', 'dm'].includes(profile.role)) {
       if (distIds.length === 0) return [];
       q = q.in('distributorId', distIds);
     }
@@ -193,20 +280,21 @@ export async function fetchTickets(profile: { role: string; uid: string }, distI
   return allRows;
 }
 
-export async function fetchLineItems(ticketId: string): Promise<AuditLineItem[]> {
+export async function fetchLineItems(ticketId: string, assignmentId?: string): Promise<AuditLineItem[]> {
   return dedupedFetch(`items-${ticketId}`, async () => {
-    const { data, error } = await supabase
+    let q = supabase
       .from('auditLineItems')
       .select(LINE_ITEM_COLS)
-      .eq('ticketId', ticketId)
-      .order('articleNumber', { ascending: true });
+      .eq('ticketId', ticketId);
+    if (assignmentId) q = q.eq('assignment_id', assignmentId);
+    const { data, error } = await q.order('articleNumber', { ascending: true });
     if (error) throw error;
     return (data || []) as AuditLineItem[];
   });
 }
 
-export async function fetchDumpItems(distCode: string) {
-  return dedupedFetch(`dump-${distCode}`, async () => {
+export async function fetchDumpItems(distCode: string, assignmentId = 'assignment-1') {
+  return dedupedFetch(`dump-${assignmentId}-${distCode}`, async () => {
     // Paginated salesDump fetch — a single distributor can have hundreds of lines
     const pageSize = 1000;
     let allRows: any[] = [];
@@ -215,6 +303,7 @@ export async function fetchDumpItems(distCode: string) {
       const { data, error } = await supabase
         .from('salesDump')
         .select(DUMP_COLS)
+        .eq('assignment_id', assignmentId)
         .ilike('distributorCode', distCode.trim())
         .range(from, from + pageSize - 1);
       if (error) break;

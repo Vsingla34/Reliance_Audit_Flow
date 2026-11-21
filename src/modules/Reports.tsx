@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../supabase';
+import { getCachedData, setCachedData, fetchCachedDistributors } from '../supabaseOptimized';
 import { AuditTicket, Distributor } from '../types';
 import {
   BarChart3, Download, FileText, IndianRupee, RefreshCw,
@@ -55,11 +56,14 @@ interface ReportRow {
 }
 
 export function ReportsModule() {
-  const { profile } = useAuth();
+  const { profile, activeAssignment } = useAuth();
+  const assignmentId = activeAssignment?.id || 'assignment-1';
+  const cacheKeyReport = `report-rows-${assignmentId}`;
+
   const [tickets, setTickets]           = useState<AuditTicket[]>([]);
   const [distributors, setDistributors] = useState<Distributor[]>([]);
-  const [reportData, setReportData]     = useState<ReportRow[]>([]);
-  const [loading, setLoading]           = useState(false);
+  const [reportData, setReportData]     = useState<ReportRow[]>(() => getCachedData<ReportRow[]>(cacheKeyReport) || []);
+  const [loading, setLoading]           = useState(() => !getCachedData(cacheKeyReport));
   const [isExporting, setIsExporting]   = useState(false);
 
   // ── Distributor filter state ──────────────────────────────────────────────
@@ -74,23 +78,23 @@ export function ReportsModule() {
   // ── Fetch base data ────────────────────────────────────────────────────────
   const fetchReportData = useCallback(async () => {
     if (!hasAccess) return;
-    setLoading(true);
+    if (!getCachedData(cacheKeyReport)) setLoading(true);
     try {
-      const [tRes, dRes] = await Promise.all([
-        supabase.from('auditTickets').select('*')
+      const [tRes, fetchedDist] = await Promise.all([
+        supabase.from('auditTickets')
+          .select('id,assignment_id,distributorId,status,scheduledDate,approvedValue,signOffs')
+          .eq('assignment_id', assignmentId)
           .in('status', ['signed', 'evidence_uploaded', 'closed', 'drainage_pending', 'submitted']),
-        supabase.from('distributors').select('*'),
+        fetchCachedDistributors(assignmentId, profile || { uid: '', role: 'admin' }),
       ]);
       if (tRes.error) throw tRes.error;
-      if (dRes.error) throw dRes.error;
       setTickets((tRes.data || []) as AuditTicket[]);
-      setDistributors((dRes.data || []) as Distributor[]);
+      setDistributors((fetchedDist || []) as Distributor[]);
     } catch (err) {
       console.error('Error fetching report data:', err);
-    } finally {
       setLoading(false);
     }
-  }, [hasAccess]);
+  }, [hasAccess, assignmentId, profile, cacheKeyReport]);
 
   useEffect(() => { fetchReportData(); }, [fetchReportData]);
 
@@ -115,6 +119,7 @@ export function ReportsModule() {
           const { data, error } = await supabase
             .from('auditLineItems')
             .select('*')
+            .eq('assignment_id', assignmentId)
             .in('ticketId', ticketIds)
             .range(from, from + pageSize - 1);
           if (error) throw error;
@@ -128,6 +133,10 @@ export function ReportsModule() {
         const rows: ReportRow[] = [];
         let sno = 0;
 
+        // O(1) Ticket Lookup Map instead of O(N*M) tickets.find()
+        const ticketMap: Record<string, AuditTicket> = {};
+        tickets.forEach(t => { ticketMap[t.id] = t; });
+
         // ── Enrich items with itemMaster data (category, GST, standardPack) ──
         // auditLineItems often has these as empty — itemMaster is the source of truth
         const uniqueArticleCodes = [...new Set(allItems.map(i => i.articleNumber).filter(Boolean))];
@@ -139,6 +148,7 @@ export function ReportsModule() {
             const { data: masterRows } = await supabase
               .from('itemMaster')
               .select('itemCode,category,gst,standardPack')
+              .eq('assignment_id', assignmentId)
               .in('itemCode', uniqueArticleCodes.slice(b, b + BATCH));
             if (masterRows) {
               masterRows.forEach((m: any) => {
@@ -153,7 +163,7 @@ export function ReportsModule() {
         }
 
         for (const item of allItems) {
-          const ticket = tickets.find(t => t.id === item.ticketId);
+          const ticket = ticketMap[item.ticketId];
           if (!ticket) continue;
           const dist = distMap[ticket.distributorId];
           if (!dist) continue;
@@ -236,6 +246,7 @@ export function ReportsModule() {
         }
 
         setReportData(rows);
+        setCachedData(cacheKeyReport, rows);
       } catch (err) {
         console.error('Error building report:', err);
       } finally {

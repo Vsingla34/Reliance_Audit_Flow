@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { supabase } from '../supabase';
+import { getCachedData, setCachedData, fetchCachedDistributors, fetchCachedUsers } from '../supabaseOptimized';
 import { AuditTicket, UserProfile } from '../types';
 import {
   CalendarRange, Store, User as UserIcon, IndianRupee, MapPin,
@@ -17,13 +18,17 @@ import {
 type PeriodFilter = 'today' | 'this_week' | 'previous';
 
 export function TodayAssignmentsModule() {
-  const { profile } = useAuth();
+  const { profile, activeAssignment } = useAuth();
+  const assignmentId = activeAssignment?.id || 'assignment-1';
+  const isGlobal = ['superadmin', 'admin', 'ho', 'auditor'].includes(profile?.role || '');
+  const cacheKeyDist = `distributors-${assignmentId}-${isGlobal ? 'all' : `${profile?.role}-${profile?.uid}`}`;
+  const cacheKeyTickets = `today-tickets-${assignmentId}-${profile?.uid || 'anon'}`;
 
   // ── State ─────────────────────────────────────────────────────────────────
-  const [allTickets, setAllTickets]     = useState<AuditTicket[]>([]);
-  const [distributors, setDistributors] = useState<any[]>([]);
-  const [allUsers, setAllUsers]         = useState<UserProfile[]>([]);
-  const [isLoading, setIsLoading]       = useState(true);
+  const [allTickets, setAllTickets]     = useState<AuditTicket[]>(() => getCachedData<AuditTicket[]>(cacheKeyTickets) || []);
+  const [distributors, setDistributors] = useState<any[]>(() => getCachedData<any[]>(cacheKeyDist) || []);
+  const [allUsers, setAllUsers]         = useState<UserProfile[]>(() => getCachedData<UserProfile[]>('global-users') || []);
+  const [isLoading, setIsLoading]       = useState(() => !getCachedData(cacheKeyTickets));
 
   // Filters
   const [periodFilter, setPeriodFilter] = useState<PeriodFilter>('today');
@@ -74,74 +79,54 @@ export function TodayAssignmentsModule() {
   useEffect(() => {
     const fetchData = async () => {
       if (!profile) return;
-      setIsLoading(true);
+      if (!getCachedData(cacheKeyTickets)) setIsLoading(true);
       try {
-        // 1. Distributors — superadmin/admin/ho see ALL, others scoped by role
         const isGlobalAdmin = ['superadmin', 'admin', 'ho'].includes(profile.role);
-        let dQuery = supabase.from('distributors').select('*');
-        if (!isGlobalAdmin) {
-          if      (profile.role === 'ase') dQuery = dQuery.contains('aseIds',  [profile.uid]);
-          else if (profile.role === 'asm') dQuery = dQuery.contains('asmIds',  [profile.uid]);
-          else if (profile.role === 'sm')  dQuery = dQuery.contains('smIds',   [profile.uid]);
-          else if (profile.role === 'dm')  dQuery = dQuery.contains('dmIds',   [profile.uid]);
-        }
-        // No filter for superadmin/admin/ho → fetch all distributors
 
-        const [dRes, uRes] = await Promise.all([
-          dQuery,
-          supabase.from('users').select('*'),
-        ]);
-        if (dRes.error) throw dRes.error;
-
-        const fetchedDist = (dRes.data || []) as any[];
-        setDistributors(fetchedDist);
-        if (uRes.data) setAllUsers(uRes.data as UserProfile[]);
-
-        const distIds = fetchedDist.map((d: any) => d.id);
-
-        // 2. Paginated ticket fetch — handles 1100+ rows without truncation
-        //    Range: last 4 weeks → 2 days ahead. Excludes tentative.
-        //    superadmin/admin/ho: NO distributorId filter → all assignments
-        //    ase/asm/sm/dm: scoped to their distributor ids
-        //    auditor: scoped to their uid in auditorIds
+        // Fetch distributors, users, and tickets in parallel with column projection
         const pageSize = 1000;
-        let allFetchedTickets: AuditTicket[] = [];
-        let from = 0;
+        const fetchScopedTickets = async () => {
+          let allFetched: AuditTicket[] = [];
+          let from = 0;
+          while (true) {
+            let tQuery = supabase
+              .from('auditTickets')
+              .select('id,assignment_id,distributorId,status,scheduledDate,auditorId,auditorIds,approvedValue,verifiedTotal,updatedAt')
+              .eq('assignment_id', assignmentId)
+              .neq('status', 'tentative')
+              .gte('scheduledDate', prevStart)
+              .lte('scheduledDate', twoDaysStr)
+              .range(from, from + pageSize - 1);
 
-        while (true) {
-          let tQuery = supabase
-            .from('auditTickets')
-            .select('*')
-            .neq('status', 'tentative')
-            .gte('scheduledDate', prevStart)
-            .lte('scheduledDate', twoDaysStr)
-            .range(from, from + pageSize - 1);
-
-          if (profile.role === 'auditor') {
-            tQuery = tQuery.or(`auditorId.eq.${profile.uid},auditorIds.cs.{${profile.uid}}`);
-          } else if (!isGlobalAdmin) {
-            // scoped roles (ase/asm/sm/dm)
-            if (distIds.length === 0) { setAllTickets([]); setIsLoading(false); return; }
-            tQuery = tQuery.in('distributorId', distIds);
+            if (profile.role === 'auditor') {
+              tQuery = tQuery.or(`auditorId.eq.${profile.uid},auditorIds.cs.{${profile.uid}}`);
+            }
+            const tRes = await tQuery;
+            if (tRes.error) throw tRes.error;
+            const page = (tRes.data || []) as AuditTicket[];
+            allFetched = allFetched.concat(page);
+            if (page.length < pageSize) break;
+            from += pageSize;
           }
-          // superadmin/admin/ho: no extra filter → fetch all
+          return allFetched;
+        };
 
-          const tRes = await tQuery;
-          if (tRes.error) throw tRes.error;
-          const page = (tRes.data || []) as AuditTicket[];
-          allFetchedTickets = allFetchedTickets.concat(page);
-          if (page.length < pageSize) break;
-          from += pageSize;
-        }
+        const [fetchedDist, fetchedUsers, allFetchedTickets] = await Promise.all([
+          fetchCachedDistributors(assignmentId, profile),
+          fetchCachedUsers(),
+          fetchScopedTickets(),
+        ]);
 
-        // Cross-check tickets against fetched distributors
-        // For admins this is a no-op (all dists fetched), for scoped roles it guards stale data
-        const distIdSet = new Set(distIds);
+        setDistributors(fetchedDist);
+        setAllUsers(fetchedUsers as UserProfile[]);
+
+        const distIdSet = new Set(fetchedDist.map((d: any) => d.id));
         const validTickets = isGlobalAdmin
-          ? allFetchedTickets   // admins already get all — skip the filter for performance
+          ? allFetchedTickets
           : allFetchedTickets.filter(t => distIdSet.has(t.distributorId));
 
         setAllTickets(validTickets);
+        setCachedData(cacheKeyTickets, validTickets);
       } catch (err) {
         console.error("Error fetching assignments:", err);
       } finally {
@@ -152,11 +137,22 @@ export function TodayAssignmentsModule() {
     fetchData();
 
     const channel = supabase
-      .channel('today-assignments-channel')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'auditTickets' }, fetchData)
+      .channel(`today-assignments-channel-${assignmentId}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'auditTickets' }, (payload: any) => {
+        const { eventType, new: updated, old } = payload;
+        if (updated && updated.assignment_id && updated.assignment_id !== assignmentId) return;
+        setAllTickets(prev => {
+          let next = prev;
+          if (eventType === 'INSERT') next = [...prev, updated];
+          else if (eventType === 'DELETE') next = prev.filter(t => t.id !== old.id);
+          else if (eventType === 'UPDATE') next = prev.map(t => t.id === updated.id ? { ...t, ...updated } : t);
+          setCachedData(cacheKeyTickets, next);
+          return next;
+        });
+      })
       .subscribe();
     return () => { supabase.removeChannel(channel); };
-  }, [profile, todayStr, twoDaysStr, prevStart]);
+  }, [profile, todayStr, twoDaysStr, prevStart, assignmentId]);
 
   // ── Derived ticket buckets ────────────────────────────────────────────────
 
