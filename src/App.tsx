@@ -3,19 +3,34 @@ import { supabase, logActivity, ACTIVE_ASSIGNMENT_STORAGE_KEY } from './supabase
 import { User } from '@supabase/supabase-js';
 import { UserProfile, ActivityLog, Assignment } from './types';
 import { LayoutDashboard, Users, Store, CalendarClock, PlaySquare, FileBarChart, LogOut, Menu, X, Database, Bell, Trash2, Search, CheckCheck, Loader2, CalendarDays, Download, ArrowLeft, Mail, ShieldCheck, Eye, EyeOff, FolderKanban, ArrowLeftRight } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence, MotionConfig } from 'motion/react';
 import { isToday, isThisWeek, isThisMonth } from 'date-fns';
 import logo from './public/favicon.png'
 
 // Modules (Code-split & lazy-loaded for fast initial load, with instant preloading)
 import { DashboardModule } from './modules/Dashboard';
-const UsersModule = React.lazy(() => import('./modules/Users').then(m => ({ default: m.UsersModule })));
-const DistributorsModule = React.lazy(() => import('./modules/Distributors').then(m => ({ default: m.DistributorsModule })));
-const SchedulerModule = React.lazy(() => import('./modules/Scheduler').then(m => ({ default: m.SchedulerModule })));
-const ExecutionModule = React.lazy(() => import('./modules/Execution').then(m => ({ default: m.ExecutionModule })));
-const MastersModule = React.lazy(() => import('./modules/Masters').then(m => ({ default: m.MastersModule })));
-const ReportsModule = React.lazy(() => import('./modules/Reports').then(m => ({ default: m.ReportsModule })));
-const TodayAssignmentsModule = React.lazy(() => import('./modules/TodayAssignments').then(m => ({ default: m.TodayAssignmentsModule })));
+// Module chunk loaders — kept as named functions so we can warm them up in the
+// background after login (avoids the spinner/latency on first tap of each tab).
+const loadUsers = () => import('./modules/Users');
+const loadDistributors = () => import('./modules/Distributors');
+const loadScheduler = () => import('./modules/Scheduler');
+const loadExecution = () => import('./modules/Execution');
+const loadMasters = () => import('./modules/Masters');
+const loadReports = () => import('./modules/Reports');
+const loadToday = () => import('./modules/TodayAssignments');
+const MODULE_PRELOADERS = [loadToday, loadScheduler, loadExecution, loadDistributors, loadReports, loadMasters, loadUsers];
+
+const UsersModule = React.lazy(() => loadUsers().then(m => ({ default: m.UsersModule })));
+const DistributorsModule = React.lazy(() => loadDistributors().then(m => ({ default: m.DistributorsModule })));
+const SchedulerModule = React.lazy(() => loadScheduler().then(m => ({ default: m.SchedulerModule })));
+const ExecutionModule = React.lazy(() => loadExecution().then(m => ({ default: m.ExecutionModule })));
+const MastersModule = React.lazy(() => loadMasters().then(m => ({ default: m.MastersModule })));
+const ReportsModule = React.lazy(() => loadReports().then(m => ({ default: m.ReportsModule })));
+const TodayAssignmentsModule = React.lazy(() => loadToday().then(m => ({ default: m.TodayAssignmentsModule })));
+
+// Phones/tablets: swap slide/scale entrance animations for plain fades — far
+// cheaper on mobile GPUs and removes the "laggy" feel when switching pages.
+const IS_COMPACT_DEVICE = typeof window !== 'undefined' && window.matchMedia?.('(max-width: 1023px)').matches;
 
 // Force Password Setup & Assignment Selector
 import { ForcePasswordSetup } from './components/ForcePasswordSetup';
@@ -33,8 +48,8 @@ const AuthContext = createContext<AuthContextType>({
   user: null,
   profile: null,
   activeAssignment: null,
-  setActiveAssignment: () => {},
-  signOut: async () => {},
+  setActiveAssignment: () => { },
+  signOut: async () => { },
 });
 export const useAuth = () => useContext(AuthContext);
 
@@ -45,14 +60,14 @@ export function cn(...classes: (string | undefined | null | false)[]) {
 // --- REFINED COLOR ENGINE FOR ACTIVITY LOGS ---
 const getLogStyle = (action: string) => {
   const a = action.toLowerCase();
-  if (a.includes('scheduled')) return { bg: 'bg-indigo-50/50', border: 'border-indigo-100', text: 'text-indigo-900', tag: 'bg-indigo-100/50 text-indigo-700' };
-  if (a.includes('drainage')) return { bg: 'bg-cyan-50/50', border: 'border-cyan-100', text: 'text-cyan-900', tag: 'bg-cyan-100/50 text-cyan-700' };
-  if (a.includes('check-in') || a.includes('selfie')) return { bg: 'bg-sky-50/50', border: 'border-sky-100', text: 'text-sky-900', tag: 'bg-sky-100/50 text-sky-700' };
-  if (a.includes('whatsapp') || a.includes('document')) return { bg: 'bg-fuchsia-50/50', border: 'border-fuchsia-100', text: 'text-fuchsia-900', tag: 'bg-fuchsia-100/50 text-fuchsia-700' };
-  if (a.includes('verified') || a.includes('completed') || a.includes('signed off') || a.includes('approved')) return { bg: 'bg-emerald-50/50', border: 'border-emerald-100', text: 'text-emerald-900', tag: 'bg-emerald-100/50 text-emerald-700' };
-  if (a.includes('buffer')) return { bg: 'bg-amber-50/50', border: 'border-amber-100', text: 'text-amber-900', tag: 'bg-amber-100/50 text-amber-700' };
-  if (a.includes('reset') || a.includes('overridden') || a.includes('rejected') || a.includes('deleted')) return { bg: 'bg-rose-50/50', border: 'border-rose-100', text: 'text-rose-900', tag: 'bg-rose-100/50 text-rose-700' };
-  return { bg: 'bg-slate-50/50', border: 'border-slate-200', text: 'text-slate-900', tag: 'bg-slate-100 text-slate-600' };
+  if (a.includes('scheduled')) return { bg: 'bg-indigo-50/50 dark:bg-indigo-950/30', border: 'border-indigo-100 dark:border-indigo-900', text: 'text-indigo-900 dark:text-indigo-200', tag: 'bg-indigo-100/50 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300' };
+  if (a.includes('drainage')) return { bg: 'bg-cyan-50/50 dark:bg-cyan-950/30', border: 'border-cyan-100 dark:border-cyan-900', text: 'text-cyan-900 dark:text-cyan-200', tag: 'bg-cyan-100/50 dark:bg-cyan-900/50 text-cyan-700 dark:text-cyan-300' };
+  if (a.includes('check-in') || a.includes('selfie')) return { bg: 'bg-sky-50/50 dark:bg-sky-950/30', border: 'border-sky-100 dark:border-sky-900', text: 'text-sky-900 dark:text-sky-200', tag: 'bg-sky-100/50 dark:bg-sky-900/50 text-sky-700 dark:text-sky-300' };
+  if (a.includes('whatsapp') || a.includes('document')) return { bg: 'bg-fuchsia-50/50 dark:bg-fuchsia-950/30', border: 'border-fuchsia-100 dark:border-fuchsia-900', text: 'text-fuchsia-900 dark:text-fuchsia-200', tag: 'bg-fuchsia-100/50 dark:bg-fuchsia-900/50 text-fuchsia-700 dark:text-fuchsia-300' };
+  if (a.includes('verified') || a.includes('completed') || a.includes('signed off') || a.includes('approved')) return { bg: 'bg-emerald-50/50 dark:bg-emerald-950/30', border: 'border-emerald-100 dark:border-emerald-900', text: 'text-emerald-900 dark:text-emerald-200', tag: 'bg-emerald-100/50 dark:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300' };
+  if (a.includes('buffer')) return { bg: 'bg-amber-50/50 dark:bg-amber-950/30', border: 'border-amber-100 dark:border-amber-900', text: 'text-amber-900 dark:text-amber-200', tag: 'bg-amber-100/50 dark:bg-amber-900/50 text-amber-700 dark:text-amber-300' };
+  if (a.includes('reset') || a.includes('overridden') || a.includes('rejected') || a.includes('deleted')) return { bg: 'bg-rose-50/50 dark:bg-rose-950/30', border: 'border-rose-100 dark:border-rose-900', text: 'text-rose-900 dark:text-rose-200', tag: 'bg-rose-100/50 dark:bg-rose-900/50 text-rose-700 dark:text-rose-300' };
+  return { bg: 'bg-slate-50/50 dark:bg-slate-800/50', border: 'border-slate-200 dark:border-slate-700', text: 'text-slate-900 dark:text-slate-200', tag: 'bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300' };
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -115,11 +130,10 @@ function AuthLogo({ src }: { src: string }) {
 function AuthMsg({ msg }: { msg: { type: 'error' | 'success'; text: string } | null }) {
   if (!msg) return null;
   return (
-    <div className={`mb-6 p-4 text-sm font-bold rounded-2xl text-center border ${
-      msg.type === 'error'
+    <div className={`mb-6 p-4 text-sm font-bold rounded-2xl text-center border ${msg.type === 'error'
         ? 'bg-rose-500/10 text-rose-400 border-rose-500/20'
         : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
-    }`}>
+      }`}>
       {msg.text}
     </div>
   );
@@ -178,6 +192,15 @@ export default function App() {
     window.history.pushState({}, '', `/${moduleId}`);
   };
 
+  // Warm up every module chunk once the user is inside a workspace, during idle time
+  useEffect(() => {
+    if (!profile || !activeAssignment) return;
+    const run = () => MODULE_PRELOADERS.forEach((load, i) => setTimeout(() => { load().catch(() => { }); }, i * 150));
+    const ric = (window as any).requestIdleCallback;
+    const id = ric ? ric(run, { timeout: 2000 }) : setTimeout(run, 800);
+    return () => { const cic = (window as any).cancelIdleCallback; ric && cic ? cic(id) : clearTimeout(id); };
+  }, [profile?.uid, activeAssignment?.id]);
+
   useEffect(() => {
     const handlePopState = () => {
       const path = window.location.pathname.replace('/', '');
@@ -199,7 +222,7 @@ export default function App() {
   // --- LOG & NOTIFICATION DRAWER STATE ---
   const [isActivityOpen, setIsActivityOpen] = useState(false);
   const [drawerTab, setDrawerTab] = useState<'alerts' | 'activity'>('alerts');
-  
+
   const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
   const [notifications, setNotifications] = useState<any[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
@@ -295,7 +318,7 @@ export default function App() {
 
   useEffect(() => {
     if (!user || !profile || !activeAssignment) return;
-    
+
     const isPrivileged = ['superadmin', 'admin', 'ho'].includes(profile.role);
 
     const fetchLogs = async () => {
@@ -307,14 +330,14 @@ export default function App() {
         .order('timestamp', { ascending: false })
         .limit(200);
       if (data) {
-        const filteredLogs = (data as ActivityLog[]).filter(log => 
-          !log.action.toLowerCase().includes('logged in') && 
+        const filteredLogs = (data as ActivityLog[]).filter(log =>
+          !log.action.toLowerCase().includes('logged in') &&
           !log.action.toLowerCase().includes('logged out')
         );
         setActivityLogs(filteredLogs);
       }
     };
-    
+
     if (isPrivileged) fetchLogs();
 
     const fetchNotifications = async () => {
@@ -341,9 +364,9 @@ export default function App() {
     const channel2 = supabase.channel(`personal-notifications-${activeAssignment.id}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications', filter: `recipient_id=eq.${user.id}` }, fetchNotifications).subscribe();
 
-    return () => { 
-      if (channel1) supabase.removeChannel(channel1); 
-      supabase.removeChannel(channel2); 
+    return () => {
+      if (channel1) supabase.removeChannel(channel1);
+      supabase.removeChannel(channel2);
     };
   }, [user, profile, activeAssignment?.id]);
 
@@ -377,7 +400,7 @@ export default function App() {
       }
 
       const searchLower = logSearch.toLowerCase().trim();
-      const matchesSearch = searchLower === '' || 
+      const matchesSearch = searchLower === '' ||
         (log.details && log.details.toLowerCase().includes(searchLower)) ||
         (log.action && log.action.toLowerCase().includes(searchLower)) ||
         (log.userName && log.userName.toLowerCase().includes(searchLower));
@@ -385,9 +408,9 @@ export default function App() {
       let matchesRole = true;
       if (logRoleFilter !== 'all') {
         if (logRoleFilter === 'admin') {
-           matchesRole = ['superadmin', 'admin', 'ho'].includes(log.userRole.toLowerCase());
+          matchesRole = ['superadmin', 'admin', 'ho'].includes(log.userRole.toLowerCase());
         } else {
-           matchesRole = log.userRole.toLowerCase() === logRoleFilter.toLowerCase();
+          matchesRole = log.userRole.toLowerCase() === logRoleFilter.toLowerCase();
         }
       }
 
@@ -459,7 +482,7 @@ export default function App() {
   const fetchProfile = async (authUser: User) => {
     try {
       let { data } = await supabase.from('users').select('*').eq('uid', authUser.id).maybeSingle();
-      
+
       if (!data && authUser.email) {
         const { data: emailMatch } = await supabase.from('users').select('*').eq('email', authUser.email).maybeSingle();
         if (emailMatch) {
@@ -474,14 +497,14 @@ export default function App() {
         setLoading(false);
         return;
       }
-      
+
       if (!data.active) {
         await supabase.auth.signOut();
         setAuthError("Your account has been deactivated. Contact Admin.");
         setLoading(false);
         return;
       }
-      
+
       // If the DB row still has password_setup_required, show the setup screen.
       if (data.active === true && data.password_setup_required === true) {
         setNeedsPasswordSetup(true);
@@ -801,7 +824,7 @@ export default function App() {
                       const arr = forgotOtp.split('');
                       arr[idx] = val.slice(-1);
                       const next = arr.join('').slice(0, 6);
-                      setForgotOtp(next.padEnd(forgotOtp.length < next.length ? next.length : forgotOtp.length, '').slice(0,6));
+                      setForgotOtp(next.padEnd(forgotOtp.length < next.length ? next.length : forgotOtp.length, '').slice(0, 6));
                       setForgotMsg(null);
                       // Auto-advance to next box
                       if (val && idx < 5) {
@@ -831,7 +854,7 @@ export default function App() {
               <p className="text-[11px] text-slate-500 mt-3 ml-1">Code expires in 10 minutes. Check your spam folder if not received.</p>
             </div>
 
-            <button type="submit" disabled={forgotLoading || forgotOtp.replace(/\s/g,'').length < 6}
+            <button type="submit" disabled={forgotLoading || forgotOtp.replace(/\s/g, '').length < 6}
               className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-bold hover:bg-indigo-500 transition-all shadow-lg shadow-indigo-600/30 active:scale-[0.98] disabled:opacity-60 flex justify-center items-center gap-2">
               {forgotLoading ? <Loader2 size={20} className="animate-spin" /> : 'Verify Code'}
             </button>
@@ -896,7 +919,7 @@ export default function App() {
               </div>
               {forgotNewPw.length > 0 && (
                 <div className="flex gap-1 mt-2 px-1">
-                  {[1,2,3,4].map(n => (
+                  {[1, 2, 3, 4].map(n => (
                     <div key={n} className={cn('h-1 flex-1 rounded-full transition-all',
                       forgotNewPw.length >= n * 3
                         ? forgotNewPw.length >= 12 ? 'bg-emerald-500' : forgotNewPw.length >= 8 ? 'bg-amber-400' : 'bg-rose-500'
@@ -949,7 +972,7 @@ export default function App() {
     );
   }
 
-    const renderModule = () => {
+  const renderModule = () => {
     switch (activeModuleState) {
       case 'dashboard': return <DashboardModule />;
       case 'today': return <TodayAssignmentsModule />;
@@ -964,361 +987,429 @@ export default function App() {
   };
 
   return (
-    <AuthContext.Provider value={{ user, profile, activeAssignment, setActiveAssignment, signOut }}>
-      <div className="min-h-screen bg-slate-50 flex flex-col w-full overflow-x-hidden font-sans text-slate-900">
-        
-        {/* --- DESKTOP SIDEBAR --- */}
-        <aside className="hidden lg:flex flex-col w-[280px] bg-white border-r border-slate-200 fixed h-full z-40 shadow-sm">
-          <div className="p-8 pb-4 flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border border-slate-100 p-1.5 bg-slate-50 shadow-sm">
-              <img src={logo} alt="Logo" className="w-full h-full object-contain" />
-            </div>
-            <div>
-              <h1 className="font-black text-xl tracking-tight leading-none text-slate-900">Reliance</h1>
-              <span className="text-xs font-bold tracking-widest uppercase text-slate-400">Audit System</span>
-            </div>
-          </div>
+    <MotionConfig reducedMotion={IS_COMPACT_DEVICE ? 'always' : 'never'}>
+      <AuthContext.Provider value={{ user, profile, activeAssignment, setActiveAssignment, signOut }}>
+        <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col w-full overflow-x-hidden font-sans text-slate-900 dark:text-slate-100 transition-colors">
 
-          {/* Active Assignment Switcher Pill */}
-          <div className="px-4 mb-2">
-            <div className="p-3 bg-indigo-50/70 border border-indigo-100 rounded-2xl flex items-center justify-between gap-2">
-              <div className="min-w-0">
-                <p className="text-[9px] font-black uppercase tracking-widest text-indigo-500 truncate">
-                  {activeAssignment.company_name}
-                </p>
-                <p className="text-xs font-black text-indigo-950 truncate mt-0.5">
-                  {activeAssignment.name}
+          {/* --- DESKTOP SIDEBAR --- */}
+          <aside className="hidden lg:flex flex-col w-[280px] bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 fixed h-full z-40 shadow-sm transition-colors">
+            <div className="p-8 pb-4 flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border border-slate-100 dark:border-slate-700 p-1.5 bg-slate-50 dark:bg-slate-800 shadow-sm">
+                <img src={logo} alt="Logo" className="w-full h-full object-contain" />
+              </div>
+              <div>
+                <h1 className="font-black text-xl tracking-tight leading-none text-slate-900 dark:text-white">Reliance</h1>
+                <span className="text-xs font-bold tracking-widest uppercase text-slate-400 dark:text-slate-500">Audit System</span>
+              </div>
+            </div>
+
+            {/* Active Assignment Switcher Pill */}
+            <div className="px-4 mb-2">
+              <div className="p-3 bg-indigo-50/70 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900 rounded-2xl flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="text-[9px] font-black uppercase tracking-widest text-indigo-500 dark:text-indigo-400 truncate">
+                    {activeAssignment.company_name}
+                  </p>
+                  <p className="text-xs font-black text-indigo-950 dark:text-indigo-200 truncate mt-0.5">
+                    {activeAssignment.name}
+                  </p>
+                </div>
+                <button
+                  onClick={() => setActiveAssignment(null)}
+                  title="Switch Assignment"
+                  className="px-2.5 py-1.5 bg-white dark:bg-slate-800 hover:bg-indigo-600 dark:hover:bg-indigo-600 text-indigo-700 dark:text-indigo-300 hover:text-white border border-indigo-200 dark:border-indigo-800 rounded-xl text-[10px] font-bold transition-all shrink-0 flex items-center gap-1 shadow-sm"
+                >
+                  <ArrowLeftRight size={12} /> Switch
+                </button>
+              </div>
+            </div>
+
+            <nav className="flex-1 px-4 space-y-1.5 overflow-y-auto custom-scrollbar mt-2">
+              <div className="px-4 mb-3 text-[10px] font-bold text-slate-400 dark:text-slate-600 uppercase tracking-widest">Main Menu</div>
+              {allowedNavItems.map(item => {
+                const Icon = item.icon;
+                const isActive = activeModuleState === item.id;
+                return (
+                  <button key={item.id} onClick={() => setActiveModule(item.id)} className={cn(
+                    "w-full flex items-center gap-3 px-4 py-3 rounded-[14px] font-semibold text-sm transition-all group relative overflow-hidden",
+                    isActive ? "bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 shadow-sm border border-indigo-100/50 dark:border-indigo-900/50" : "text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white border border-transparent"
+                  )}>
+                    <Icon size={18} strokeWidth={isActive ? 2.5 : 2} className={cn("z-10 transition-colors", isActive ? "text-indigo-600 dark:text-indigo-400" : "text-slate-400 dark:text-slate-500 group-hover:text-slate-600 dark:group-hover:text-slate-300")} />
+                    <span className="z-10">{item.label}</span>
+                  </button>
+                );
+              })}
+            </nav>
+
+            <div className="p-6 border-t border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50">
+              <div className="bg-white dark:bg-slate-800 p-4 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm mb-3">
+                <p className="font-bold text-sm text-slate-900 dark:text-white truncate">{profile.name}</p>
+                <p className={cn("text-[9px] font-black uppercase tracking-wider mt-1.5 w-fit px-2 py-0.5 rounded-md", profile.role === 'superadmin' ? "bg-fuchsia-100 dark:bg-fuchsia-950/60 text-fuchsia-700 dark:text-fuchsia-300" : "bg-indigo-100 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300")}>
+                  {profile.role.replace('_', ' ')}
                 </p>
               </div>
-              <button
-                onClick={() => setActiveAssignment(null)}
-                title="Switch Assignment"
-                className="px-2.5 py-1.5 bg-white hover:bg-indigo-600 text-indigo-700 hover:text-white border border-indigo-200 rounded-xl text-[10px] font-bold transition-all shrink-0 flex items-center gap-1 shadow-sm"
-              >
-                <ArrowLeftRight size={12} /> Switch
-              </button>
-            </div>
-          </div>
-          
-          <nav className="flex-1 px-4 space-y-1.5 overflow-y-auto custom-scrollbar mt-2">
-            <div className="px-4 mb-3 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Main Menu</div>
-            {allowedNavItems.map(item => {
-              const Icon = item.icon;
-              const isActive = activeModuleState === item.id;
-              return (
-                <button key={item.id} onClick={() => setActiveModule(item.id)} className={cn(
-                  "w-full flex items-center gap-3 px-4 py-3 rounded-[14px] font-semibold text-sm transition-all group relative overflow-hidden",
-                  isActive ? "bg-indigo-50 text-indigo-700 shadow-sm border border-indigo-100/50" : "text-slate-500 hover:bg-slate-50 hover:text-slate-900 border border-transparent"
-                )}>
-                  <Icon size={18} strokeWidth={isActive ? 2.5 : 2} className={cn("z-10 transition-colors", isActive ? "text-indigo-600" : "text-slate-400 group-hover:text-slate-600")} />
-                  <span className="z-10">{item.label}</span>
+              <div className="flex items-center gap-2">
+                <button onClick={signOut} className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 border border-slate-200 dark:border-slate-700 hover:border-rose-200 dark:hover:border-rose-900 font-bold text-sm rounded-xl transition-all shadow-sm active:scale-95">
+                  <LogOut size={16} /> Sign Out
                 </button>
-              );
-            })}
-          </nav>
-
-          <div className="p-6 border-t border-slate-100 bg-slate-50/50">
-            <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm mb-3">
-              <p className="font-bold text-sm text-slate-900 truncate">{profile.name}</p>
-              <p className={cn("text-[9px] font-black uppercase tracking-wider mt-1.5 w-fit px-2 py-0.5 rounded-md", profile.role === 'superadmin' ? "bg-fuchsia-100 text-fuchsia-700" : "bg-indigo-100 text-indigo-700")}>
-                {profile.role.replace('_', ' ')}
-              </p>
+              </div>
             </div>
-            <button onClick={signOut} className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-white text-slate-600 hover:text-rose-600 hover:bg-rose-50 border border-slate-200 hover:border-rose-200 font-bold text-sm rounded-xl transition-all shadow-sm active:scale-95">
-              <LogOut size={16} /> Sign Out
-            </button>
-          </div>
-        </aside>
+          </aside>
 
-        {/* MOBILE HEADER */}
-        <div className="lg:hidden fixed top-0 w-full bg-white/90 backdrop-blur-xl border-b border-slate-200 z-40 px-4 py-3 flex items-center justify-between shadow-sm">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 border border-slate-100 p-1 bg-slate-50 shadow-sm">
-               <img src={logo} alt="Logo" className="w-full h-full object-contain" />
+          {/* MOBILE HEADER */}
+          <div className="lg:hidden fixed top-0 w-full bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border-b border-slate-200 dark:border-slate-800 z-40 px-3 h-14 flex items-center justify-between gap-2 shadow-sm transition-colors" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
+            <div className="flex items-center gap-2 min-w-0">
+              <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 border border-slate-100 dark:border-slate-700 p-1 bg-slate-50 dark:bg-slate-800 shadow-sm">
+                <img src={logo} alt="Logo" className="w-full h-full object-contain" />
+              </div>
+              <div className="min-w-0 leading-tight">
+                <p className="font-black text-[15px] tracking-tight text-slate-900 dark:text-white truncate capitalize">
+                  {allowedNavItems.find(i => i.id === activeModuleState)?.label || activeModuleState.replace('_', ' ')}
+                </p>
+                <button onClick={() => setActiveAssignment(null)} className="flex items-center gap-1 text-[10px] font-bold text-indigo-600 dark:text-indigo-400 truncate max-w-[180px]">
+                  <FolderKanban size={10} className="shrink-0" />
+                  <span className="truncate">{activeAssignment.name}</span>
+                  <ArrowLeftRight size={9} className="shrink-0 opacity-70" />
+                </button>
+              </div>
             </div>
-            <span className="font-black text-lg tracking-tight">Reliance<span className="text-indigo-600">Audit</span></span>
-          </div>
-          
-          <div className="flex items-center gap-2 sm:gap-3">
-            <button onClick={() => setIsActivityOpen(true)} className="p-2 text-slate-600 hover:bg-slate-100 rounded-xl relative transition-all">
-              <Bell size={20} />
-              {unreadCount > 0 && (
-                <span className="absolute top-1 right-1 w-4 h-4 bg-rose-500 rounded-full border-2 border-white flex items-center justify-center text-[9px] font-bold text-white">
-                  {unreadCount > 9 ? '9+' : unreadCount}
-                </span>
-              )}
-            </button>
-            <button onClick={() => setIsMobileMenuOpen(true)} className="p-2 text-slate-600 hover:bg-slate-100 rounded-xl transition-all"><Menu size={20} /></button>
-          </div>
-        </div>
 
-        {/* MOBILE SLIDE-OUT MENU */}
-        <AnimatePresence>
-          {isMobileMenuOpen && (
-            <>
-              <motion.div 
-                initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} 
-                onClick={() => setIsMobileMenuOpen(false)} 
-                className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 lg:hidden" 
-              />
-              <motion.div 
-                initial={{ x: '-100%' }} animate={{ x: 0 }} exit={{ x: '-100%' }} 
-                transition={{ type: 'spring', damping: 25, stiffness: 200 }} 
-                className="fixed top-0 left-0 w-[85%] max-w-[340px] h-full bg-white shadow-2xl z-50 flex flex-col lg:hidden border-r border-slate-200"
+            <div className="flex items-center gap-1 shrink-0">
+              <button onClick={() => setIsActivityOpen(true)} className="p-2 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl relative transition-all">
+                <Bell size={20} />
+                {unreadCount > 0 && (
+                  <span className="absolute top-1 right-1 w-4 h-4 bg-rose-500 rounded-full border-2 border-white dark:border-slate-900 flex items-center justify-center text-[9px] font-bold text-white">
+                    {unreadCount > 9 ? '9+' : unreadCount}
+                  </span>
+                )}
+              </button>
+              <button onClick={() => setIsMobileMenuOpen(true)} className="p-2 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-all"><Menu size={20} /></button>
+            </div>
+          </div>
+
+          {/* MOBILE SLIDE-OUT MENU */}
+          <AnimatePresence>
+            {isMobileMenuOpen && (
+              <>
+                <motion.div
+                  initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                  onClick={() => setIsMobileMenuOpen(false)}
+                  className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 lg:hidden"
+                />
+                <motion.div
+                  initial={{ x: '-100%' }} animate={{ x: 0 }} exit={{ x: '-100%' }}
+                  transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+                  className="fixed top-0 left-0 w-[85%] max-w-[340px] h-full bg-white dark:bg-slate-900 shadow-2xl z-50 flex flex-col lg:hidden border-r border-slate-200 dark:border-slate-800"
+                >
+                  <div className="p-6 flex items-center justify-between border-b border-slate-100 dark:border-slate-800">
+                    <div className="flex items-center gap-2">
+                      <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 border border-slate-100 dark:border-slate-700 p-1 bg-slate-50 dark:bg-slate-800">
+                        <img src={logo} alt="Logo" className="w-full h-full object-contain" />
+                      </div>
+                      <span className="font-black text-lg tracking-tight text-slate-900 dark:text-white">RelianceAudit</span>
+                    </div>
+                    <button onClick={() => setIsMobileMenuOpen(false)} className="p-2 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-700"><X size={20} /></button>
+                  </div>
+
+                  {/* Mobile Active Assignment Switcher */}
+                  <div className="px-4 pt-4">
+                    <div className="p-3 bg-indigo-50/70 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900 rounded-2xl flex items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-[9px] font-black uppercase tracking-widest text-indigo-500 dark:text-indigo-400 truncate">
+                          {activeAssignment.company_name}
+                        </p>
+                        <p className="text-xs font-black text-indigo-950 dark:text-indigo-200 truncate mt-0.5">
+                          {activeAssignment.name}
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => { setIsMobileMenuOpen(false); setActiveAssignment(null); }}
+                        className="px-2.5 py-1.5 bg-white dark:bg-slate-800 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 rounded-xl text-[10px] font-bold shrink-0 flex items-center gap-1 shadow-sm"
+                      >
+                        <ArrowLeftRight size={12} /> Switch
+                      </button>
+                    </div>
+                  </div>
+
+                  <nav className="flex-1 px-4 py-6 space-y-2 overflow-y-auto custom-scrollbar">
+                    <div className="px-4 mb-3 text-[10px] font-bold text-slate-400 dark:text-slate-600 uppercase tracking-widest">Main Menu</div>
+                    {allowedNavItems.map(item => {
+                      const Icon = item.icon;
+                      const isActive = activeModuleState === item.id;
+                      return (
+                        <button
+                          key={item.id}
+                          onClick={() => { setActiveModule(item.id); setIsMobileMenuOpen(false); }}
+                          className={cn(
+                            "w-full flex items-center gap-3 px-4 py-4 rounded-[14px] font-semibold text-sm transition-all",
+                            isActive ? "bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 border border-indigo-100 dark:border-indigo-900 shadow-sm" : "text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white border border-transparent"
+                          )}
+                        >
+                          <Icon size={18} className={isActive ? "text-indigo-600 dark:text-indigo-400" : "text-slate-400 dark:text-slate-500"} />
+                          {item.label}
+                        </button>
+                      );
+                    })}
+                  </nav>
+
+                  <div className="p-6 border-t border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50">
+                    <div className="bg-white dark:bg-slate-800 p-4 rounded-2xl border border-slate-100 dark:border-slate-700 shadow-sm mb-4">
+                      <p className="font-bold text-sm text-slate-900 dark:text-white truncate">{profile.name}</p>
+                      <p className={cn("text-[9px] font-black uppercase tracking-wider mt-1 w-fit px-2 py-0.5 rounded-md", profile.role === 'superadmin' ? "bg-fuchsia-100 dark:bg-fuchsia-950/60 text-fuchsia-700 dark:text-fuchsia-300" : "bg-indigo-100 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-300")}>{profile.role}</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button onClick={signOut} className="flex-1 flex items-center justify-center gap-2 px-4 py-3.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:text-rose-600 dark:hover:text-rose-400 hover:border-rose-200 dark:hover:border-rose-900 hover:bg-rose-50 dark:hover:bg-rose-950/30 font-bold text-sm rounded-xl shadow-sm active:scale-95 transition-all"><LogOut size={16} /> Sign Out</button>
+                    </div>
+                  </div>
+                </motion.div>
+              </>
+            )}
+          </AnimatePresence>
+
+          {/* MAIN CONTENT AREA */}
+          <main className="flex-1 lg:pl-[280px] flex flex-col min-h-screen pt-14 pb-[calc(4.25rem+env(safe-area-inset-bottom))] lg:pt-0 lg:pb-0 w-full">
+
+            <header className="hidden lg:flex bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl border-b border-slate-200 dark:border-slate-800 sticky top-0 z-30 px-8 py-4 items-center justify-between w-full shadow-sm transition-colors">
+              <div>
+                <h2 className="text-2xl font-black tracking-tight text-slate-900 dark:text-white capitalize">{activeModuleState.replace('_', ' ')}</h2>
+                <p className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 mt-0.5 uppercase tracking-widest">
+                  {activeAssignment.company_name} · <span className="text-indigo-600 dark:text-indigo-400 font-bold">{activeAssignment.name}</span>
+                </p>
+              </div>
+              <div className="flex items-center gap-4">
+                <button
+                  onClick={() => setActiveAssignment(null)}
+                  className="flex items-center gap-2 px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 text-slate-700 dark:text-slate-300 hover:text-indigo-700 dark:hover:text-indigo-300 border border-slate-200 dark:border-slate-700 hover:border-indigo-200 dark:hover:border-indigo-800 rounded-xl text-xs font-bold transition-all shadow-sm"
+                  title="Change Assignment Workspace"
+                >
+                  <FolderKanban size={15} className="text-indigo-600 dark:text-indigo-400" />
+                  <span>{activeAssignment.name}</span>
+                  <ArrowLeftRight size={13} className="text-slate-400 dark:text-slate-500 ml-0.5" />
+                </button>
+                <button onClick={() => setIsActivityOpen(true)} className="relative p-3 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-indigo-300 dark:hover:border-indigo-700 hover:bg-indigo-50 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 hover:text-indigo-600 dark:hover:text-indigo-400 rounded-[14px] transition-all shadow-sm" title="Notifications & Activity">
+                  <Bell size={20} />
+                  {unreadCount > 0 && (
+                    <span className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-rose-500 rounded-full border-2 border-white dark:border-slate-900 flex items-center justify-center text-[10px] font-bold text-white shadow-sm">
+                      {unreadCount > 9 ? '9+' : unreadCount}
+                    </span>
+                  )}
+                </button>
+
+                <div className="flex items-center gap-3 bg-white dark:bg-slate-800 pl-2.5 pr-4 py-2 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm">
+                  <div className={cn("w-9 h-9 rounded-[10px] flex items-center justify-center font-black text-sm shrink-0", profile.role === 'superadmin' ? "bg-fuchsia-100 dark:bg-fuchsia-950/60 text-fuchsia-700 dark:text-fuchsia-300" : "bg-indigo-100 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300")}>{profile.name.charAt(0)}</div>
+                  <div className="hidden sm:block">
+                    <p className="text-sm font-bold text-slate-900 dark:text-white leading-none truncate max-w-[150px]">{profile.name}</p>
+                    <p className="text-[9px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest mt-1">{profile.role.replace('_', ' ')}</p>
+                  </div>
+                </div>
+              </div>
+            </header>
+
+            <div className="flex-1 px-2.5 py-3 sm:p-6 md:p-8 max-w-7xl mx-auto w-full min-w-0 mobile-compact">
+              <React.Suspense fallback={<div className="h-64 flex items-center justify-center"><Loader2 className="animate-spin text-indigo-600 dark:text-indigo-400" size={28} /></div>}>
+                {renderModule()}
+              </React.Suspense>
+            </div>
+          </main>
+
+          {/* --- MOBILE BOTTOM NAVIGATION --- */}
+          {(() => {
+            const MAX_TABS = 5;
+            const needsMore = allowedNavItems.length > MAX_TABS;
+            const primary = needsMore ? allowedNavItems.slice(0, MAX_TABS - 1) : allowedNavItems;
+            // If the active module is hidden behind "More", swap it into the last visible slot
+            const activeHidden = needsMore && !primary.some(i => i.id === activeModuleState);
+            const tabs = activeHidden
+              ? [...primary.slice(0, -1), allowedNavItems.find(i => i.id === activeModuleState)!]
+              : primary;
+            return (
+              <nav
+                className="lg:hidden fixed bottom-0 inset-x-0 z-40 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border-t border-slate-200 dark:border-slate-800 shadow-[0_-4px_16px_rgba(15,23,42,0.06)]"
+                style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
               >
-                <div className="p-6 flex items-center justify-between border-b border-slate-100">
-                  <div className="flex items-center gap-2">
-                    <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 border border-slate-100 p-1 bg-slate-50">
-                       <img src={logo} alt="Logo" className="w-full h-full object-contain" />
-                    </div>
-                    <span className="font-black text-lg tracking-tight">RelianceAudit</span>
-                  </div>
-                  <button onClick={() => setIsMobileMenuOpen(false)} className="p-2 bg-slate-100 text-slate-600 rounded-xl hover:bg-slate-200"><X size={20} /></button>
-                </div>
-
-                {/* Mobile Active Assignment Switcher */}
-                <div className="px-4 pt-4">
-                  <div className="p-3 bg-indigo-50/70 border border-indigo-100 rounded-2xl flex items-center justify-between gap-2">
-                    <div className="min-w-0">
-                      <p className="text-[9px] font-black uppercase tracking-widest text-indigo-500 truncate">
-                        {activeAssignment.company_name}
-                      </p>
-                      <p className="text-xs font-black text-indigo-950 truncate mt-0.5">
-                        {activeAssignment.name}
-                      </p>
-                    </div>
-                    <button
-                      onClick={() => { setIsMobileMenuOpen(false); setActiveAssignment(null); }}
-                      className="px-2.5 py-1.5 bg-white text-indigo-700 border border-indigo-200 rounded-xl text-[10px] font-bold shrink-0 flex items-center gap-1 shadow-sm"
-                    >
-                      <ArrowLeftRight size={12} /> Switch
-                    </button>
-                  </div>
-                </div>
-                
-                <nav className="flex-1 px-4 py-6 space-y-2 overflow-y-auto custom-scrollbar">
-                  <div className="px-4 mb-3 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Main Menu</div>
-                  {allowedNavItems.map(item => {
+                <div className="flex items-stretch justify-around h-[4.25rem] px-1">
+                  {tabs.map(item => {
                     const Icon = item.icon;
                     const isActive = activeModuleState === item.id;
                     return (
-                      <button 
-                        key={item.id} 
-                        onClick={() => { setActiveModule(item.id); setIsMobileMenuOpen(false); }} 
-                        className={cn(
-                          "w-full flex items-center gap-3 px-4 py-4 rounded-[14px] font-semibold text-sm transition-all",
-                          isActive ? "bg-indigo-50 text-indigo-700 border border-indigo-100 shadow-sm" : "text-slate-500 hover:bg-slate-50 hover:text-slate-900 border border-transparent"
-                        )}
+                      <button
+                        key={item.id}
+                        onClick={() => { setActiveModule(item.id); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
+                        className="flex-1 flex flex-col items-center justify-center gap-1 min-w-0 relative active:scale-95 transition-transform"
                       >
-                        <Icon size={18} className={isActive ? "text-indigo-600" : "text-slate-400"} />
-                        {item.label}
+                        {isActive && <span className="absolute top-0 left-1/2 -translate-x-1/2 w-8 h-[3px] rounded-b-full bg-indigo-600" />}
+                        <span className={cn(
+                          "flex items-center justify-center w-11 h-7 rounded-full transition-colors",
+                          isActive ? "bg-indigo-100 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300" : "text-slate-500 dark:text-slate-400"
+                        )}>
+                          <Icon size={19} strokeWidth={isActive ? 2.5 : 2} />
+                        </span>
+                        <span className={cn(
+                          "text-[10px] leading-none truncate max-w-full px-0.5",
+                          isActive ? "font-black text-indigo-700 dark:text-indigo-300" : "font-semibold text-slate-500 dark:text-slate-400"
+                        )}>
+                          {item.label.replace("Today's Audits", 'Today').replace('Data Masters', 'Masters')}
+                        </span>
                       </button>
                     );
                   })}
-                </nav>
+                  {needsMore && (
+                    <button
+                      onClick={() => setIsMobileMenuOpen(true)}
+                      className="flex-1 flex flex-col items-center justify-center gap-1 min-w-0 active:scale-95 transition-transform"
+                    >
+                      <span className="flex items-center justify-center w-11 h-7 rounded-full text-slate-500 dark:text-slate-400">
+                        <Menu size={19} />
+                      </span>
+                      <span className="text-[10px] leading-none font-semibold text-slate-500 dark:text-slate-400">More</span>
+                    </button>
+                  )}
+                </div>
+              </nav>
+            );
+          })()}
+        </div>
 
-                <div className="p-6 border-t border-slate-100 bg-slate-50/50">
-                  <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm mb-4">
-                    <p className="font-bold text-sm text-slate-900 truncate">{profile.name}</p>
-                    <p className={cn("text-[9px] font-black uppercase tracking-wider mt-1 w-fit px-2 py-0.5 rounded-md", profile.role === 'superadmin' ? "bg-fuchsia-100 text-fuchsia-700" : "bg-indigo-100 text-indigo-600")}>{profile.role}</p>
+        {/* --- NOTIFICATIONS & ACTIVITY DRAWER --- */}
+        <AnimatePresence>
+          {isActivityOpen && (
+            <>
+              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsActivityOpen(false)} className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50" />
+              <motion.div
+                initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }}
+                transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+                className="fixed top-0 right-0 w-full sm:w-[480px] max-w-[100vw] h-full bg-white dark:bg-slate-900 shadow-2xl z-50 border-l border-slate-200 dark:border-slate-800 flex flex-col"
+              >
+                <div className="p-4 sm:p-6 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between shrink-0 bg-slate-50 dark:bg-slate-900">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-indigo-600 text-white rounded-[14px] flex items-center justify-center shadow-md shadow-indigo-600/20 shrink-0"><Bell size={20} /></div>
+                    <div><h3 className="font-bold text-base sm:text-lg text-slate-900 dark:text-white">Notifications</h3><p className="text-[10px] sm:text-xs font-medium text-slate-500 dark:text-slate-400">Alerts and System Activity</p></div>
                   </div>
-                  <button onClick={signOut} className="w-full flex items-center justify-center gap-2 px-4 py-3.5 bg-white border border-slate-200 text-slate-600 hover:text-rose-600 hover:border-rose-200 hover:bg-rose-50 font-bold text-sm rounded-xl shadow-sm active:scale-95 transition-all"><LogOut size={16} /> Sign Out</button>
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => setIsActivityOpen(false)} className="p-2 text-slate-400 dark:text-slate-500 hover:bg-slate-200 dark:hover:bg-slate-800 hover:text-slate-700 dark:hover:text-slate-200 rounded-xl transition-colors"><X size={20} /></button>
+                  </div>
+                </div>
+
+                <div className="flex px-4 pt-4 border-b border-slate-200 dark:border-slate-800 shrink-0 bg-slate-50/50 dark:bg-slate-900/50">
+                  <button
+                    onClick={() => setDrawerTab('alerts')}
+                    className={cn(
+                      "pb-3 text-sm font-bold border-b-2 transition-all relative flex items-center justify-center gap-2",
+                      drawerTab === 'alerts' ? "border-indigo-600 text-indigo-700 dark:text-indigo-400" : "border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200",
+                      isAdminOrHO ? "flex-1" : "w-full"
+                    )}
+                  >
+                    {isAdminOrHO ? 'My Alerts' : 'My Activity & Alerts'}
+                    {unreadCount > 0 && <span className="px-1.5 py-0.5 bg-rose-500 text-white rounded-md text-[10px]">{unreadCount}</span>}
+                  </button>
+
+                  {isAdminOrHO && (
+                    <button
+                      onClick={() => setDrawerTab('activity')}
+                      className={cn("flex-1 pb-3 text-sm font-bold border-b-2 transition-all", drawerTab === 'activity' ? "border-indigo-600 text-indigo-700 dark:text-indigo-400" : "border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200")}
+                    >
+                      Global Activity
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex-1 overflow-y-auto custom-scrollbar bg-white dark:bg-slate-900 flex flex-col">
+                  {drawerTab === 'alerts' ? (
+                    <div className="p-4 space-y-3">
+                      {unreadCount > 0 && (
+                        <div className="flex justify-end mb-2">
+                          <button onClick={markAllAsRead} className="text-xs font-bold text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1"><CheckCheck size={14} /> Mark all read</button>
+                        </div>
+                      )}
+                      {notifications.length === 0 ? (
+                        <div className="text-center py-16 text-slate-400 dark:text-slate-500 flex flex-col items-center"><Bell size={32} className="mb-3 opacity-20" /><p className="font-bold">All caught up!</p><p className="text-xs mt-1">You have no personal alerts.</p></div>
+                      ) : (
+                        notifications.map(n => (
+                          <div key={n.id} onClick={() => markAsRead(n.id)} className={cn("p-4 rounded-[1rem] border transition-all cursor-pointer", n.is_read ? "bg-slate-50 dark:bg-slate-800/50 border-slate-200 dark:border-slate-700 opacity-70" : "bg-indigo-50/50 dark:bg-indigo-950/30 border-indigo-200 dark:border-indigo-900 shadow-sm")}>
+                            <div className="flex justify-between items-start mb-1">
+                              <h4 className={cn("font-bold text-sm", n.is_read ? "text-slate-700 dark:text-slate-300" : "text-indigo-900 dark:text-indigo-200")}>{n.title}</h4>
+                              {!n.is_read && <span className="w-2 h-2 rounded-full bg-indigo-600 mt-1 shrink-0 shadow-sm"></span>}
+                            </div>
+                            <p className={cn("text-xs leading-relaxed mt-1.5", n.is_read ? "text-slate-500 dark:text-slate-400" : "text-indigo-800 dark:text-indigo-300")}>{n.message}</p>
+                            <p className="text-[10px] font-bold text-slate-400 dark:text-slate-500 mt-3">{new Date(n.created_at).toLocaleString()}</p>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  ) : (
+                    <div className="flex flex-col h-full">
+                      <div className="p-4 border-b border-slate-200 dark:border-slate-800 space-y-3 bg-slate-50/80 dark:bg-slate-900/80 shrink-0">
+                        <div className="flex justify-between items-center mb-1">
+                          <h4 className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Filter Logs</h4>
+                          <button onClick={downloadLogsCSV} className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 text-white text-[11px] font-bold rounded-[10px] hover:bg-emerald-700 transition-colors shadow-sm active:scale-95">
+                            <Download size={14} /> Export CSV
+                          </button>
+                        </div>
+
+                        <div className="relative">
+                          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-slate-500" size={16} />
+                          <input type="text" placeholder="Search distributors, users, details..." className="w-full pl-9 pr-3 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all shadow-sm" value={logSearch} onChange={(e) => setLogSearch(e.target.value)} />
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2">
+                          <select className="w-full p-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-semibold focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all cursor-pointer text-slate-700 dark:text-slate-200 shadow-sm" value={logTimeFilter} onChange={(e) => setLogTimeFilter(e.target.value as any)}>
+                            <option value="all">All Time</option>
+                            <option value="today">Today</option>
+                            <option value="week">This Week</option>
+                            <option value="month">This Month</option>
+                          </select>
+
+                          <select className="w-full p-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-semibold focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all cursor-pointer text-slate-700 dark:text-slate-200 shadow-sm" value={logRoleFilter} onChange={(e) => setLogRoleFilter(e.target.value)}>
+                            <option value="all">All Roles</option>
+                            <option value="ase">ASE</option>
+                            <option value="auditor">Auditor</option>
+                            <option value="admin">Admin / Head Office</option>
+                          </select>
+                        </div>
+
+                        <select className="w-full p-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-semibold focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all cursor-pointer text-slate-700 dark:text-slate-200 shadow-sm" value={logActionFilter} onChange={(e) => setLogActionFilter(e.target.value)}>
+                          <option value="all">All Statuses / Actions</option>
+                          {uniqueActions.map(action => <option key={action} value={action}>{action}</option>)}
+                        </select>
+                      </div>
+
+                      <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar bg-slate-50/30 dark:bg-slate-950/30">
+                        {filteredLogs.length === 0 ? (
+                          <div className="text-center py-16 text-slate-400 dark:text-slate-500 flex flex-col items-center"><Bell size={32} className="mb-3 opacity-20" /><p className="font-bold">No activity matches your filters.</p></div>
+                        ) : (
+                          filteredLogs.map(log => {
+                            const style = getLogStyle(log.action);
+                            return (
+                              <div key={log.id} className={cn("p-4 rounded-[1rem] border transition-all shadow-sm", style.bg, style.border)}>
+                                <div className="flex items-start justify-between mb-2 gap-3 sm:gap-4">
+                                  <div className="min-w-0 flex-1">
+                                    <p className={cn("text-xs sm:text-sm leading-snug break-words", style.text)}>
+                                      <span className="font-black block text-sm mb-0.5 tracking-tight">{log.action}</span>
+                                      <span className="font-semibold text-slate-600 dark:text-slate-400">{log.userName}</span>
+                                    </p>
+                                    {log.details && <p className={cn("text-[10px] sm:text-xs mt-2 font-medium opacity-80 break-words leading-relaxed", style.text)}>"{log.details}"</p>}
+                                  </div>
+                                  {profile.role === 'superadmin' && (
+                                    <button onClick={() => deleteActivityLog(log.id)} className="text-slate-400 dark:text-slate-500 hover:text-rose-500 bg-white/50 dark:bg-slate-800/50 hover:bg-rose-100 dark:hover:bg-rose-950/50 p-1.5 rounded-lg transition-colors shrink-0 border border-transparent hover:border-rose-200 dark:hover:border-rose-900"><Trash2 size={14} /></button>
+                                  )}
+                                </div>
+                                <div className="flex flex-wrap items-center gap-2 mt-3 text-[9px] font-bold uppercase tracking-wider">
+                                  <span className={cn("px-2 py-0.5 rounded-md", style.tag)}>{log.userRole.replace('_', ' ')}</span>
+                                  <span className={cn("opacity-70 font-medium", style.text)}>{new Date(log.timestamp).toLocaleString()}</span>
+                                </div>
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </motion.div>
             </>
           )}
         </AnimatePresence>
-
-        {/* MAIN CONTENT AREA */}
-        <main className="flex-1 lg:pl-[280px] flex flex-col min-h-screen pt-16 lg:pt-0 w-full">
-          
-          <header className="hidden lg:flex bg-white/80 backdrop-blur-xl border-b border-slate-200 sticky top-0 z-30 px-8 py-4 items-center justify-between w-full shadow-sm">
-            <div>
-              <h2 className="text-2xl font-black tracking-tight text-slate-900 capitalize">{activeModuleState.replace('_', ' ')}</h2>
-              <p className="text-[11px] font-semibold text-slate-500 mt-0.5 uppercase tracking-widest">
-                {activeAssignment.company_name} · <span className="text-indigo-600 font-bold">{activeAssignment.name}</span>
-              </p>
-            </div>
-            <div className="flex items-center gap-4">
-              <button
-                onClick={() => setActiveAssignment(null)}
-                className="flex items-center gap-2 px-3.5 py-2.5 bg-slate-50 hover:bg-indigo-50 text-slate-700 hover:text-indigo-700 border border-slate-200 hover:border-indigo-200 rounded-xl text-xs font-bold transition-all shadow-sm"
-                title="Change Assignment Workspace"
-              >
-                <FolderKanban size={15} className="text-indigo-600" />
-                <span>{activeAssignment.name}</span>
-                <ArrowLeftRight size={13} className="text-slate-400 ml-0.5" />
-              </button>
-              <button onClick={() => setIsActivityOpen(true)} className="relative p-3 bg-white border border-slate-200 hover:border-indigo-300 hover:bg-indigo-50 text-slate-600 hover:text-indigo-600 rounded-[14px] transition-all shadow-sm" title="Notifications & Activity">
-                <Bell size={20} />
-                {unreadCount > 0 && (
-                  <span className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-rose-500 rounded-full border-2 border-white flex items-center justify-center text-[10px] font-bold text-white shadow-sm">
-                    {unreadCount > 9 ? '9+' : unreadCount}
-                  </span>
-                )}
-              </button>
-
-              <div className="flex items-center gap-3 bg-white pl-2.5 pr-4 py-2 rounded-2xl border border-slate-200 shadow-sm">
-                <div className={cn("w-9 h-9 rounded-[10px] flex items-center justify-center font-black text-sm shrink-0", profile.role === 'superadmin' ? "bg-fuchsia-100 text-fuchsia-700" : "bg-indigo-100 text-indigo-700")}>{profile.name.charAt(0)}</div>
-                <div className="hidden sm:block">
-                  <p className="text-sm font-bold text-slate-900 leading-none truncate max-w-[150px]">{profile.name}</p>
-                  <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mt-1">{profile.role.replace('_', ' ')}</p>
-                </div>
-              </div>
-            </div>
-          </header>
-
-          <div className="flex-1 p-4 sm:p-6 md:p-8 max-w-7xl mx-auto w-full min-w-0">
-            <div className="lg:hidden mb-6 mt-2">
-              <h2 className="text-2xl font-black tracking-tight text-slate-900 capitalize">{activeModuleState.replace('_', ' ')}</h2>
-              <p className="text-[10px] font-bold text-slate-500 mt-1 uppercase tracking-widest">Enterprise Portal</p>
-            </div>
-            <React.Suspense fallback={<div className="h-64 flex items-center justify-center"><Loader2 className="animate-spin text-indigo-600" size={28} /></div>}>
-              {renderModule()}
-            </React.Suspense>
-          </div>
-        </main>
-      </div>
-
-      {/* --- NOTIFICATIONS & ACTIVITY DRAWER --- */}
-      <AnimatePresence>
-        {isActivityOpen && (
-          <>
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsActivityOpen(false)} className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50" />
-            <motion.div 
-              initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }} 
-              transition={{ type: 'spring', damping: 25, stiffness: 200 }} 
-              className="fixed top-0 right-0 w-full sm:w-[480px] max-w-[100vw] h-full bg-white shadow-2xl z-50 border-l border-slate-200 flex flex-col"
-            >
-              <div className="p-4 sm:p-6 border-b border-slate-100 flex items-center justify-between shrink-0 bg-slate-50">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 bg-indigo-600 text-white rounded-[14px] flex items-center justify-center shadow-md shadow-indigo-600/20 shrink-0"><Bell size={20} /></div>
-                  <div><h3 className="font-bold text-base sm:text-lg text-slate-900">Notifications</h3><p className="text-[10px] sm:text-xs font-medium text-slate-500">Alerts and System Activity</p></div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <button onClick={() => setIsActivityOpen(false)} className="p-2 text-slate-400 hover:bg-slate-200 hover:text-slate-700 rounded-xl transition-colors"><X size={20} /></button>
-                </div>
-              </div>
-
-              <div className="flex px-4 pt-4 border-b border-slate-200 shrink-0 bg-slate-50/50">
-                <button 
-                  onClick={() => setDrawerTab('alerts')} 
-                  className={cn(
-                    "pb-3 text-sm font-bold border-b-2 transition-all relative flex items-center justify-center gap-2", 
-                    drawerTab === 'alerts' ? "border-indigo-600 text-indigo-700" : "border-transparent text-slate-500 hover:text-slate-700",
-                    isAdminOrHO ? "flex-1" : "w-full"
-                  )}
-                >
-                  {isAdminOrHO ? 'My Alerts' : 'My Activity & Alerts'}
-                  {unreadCount > 0 && <span className="px-1.5 py-0.5 bg-rose-500 text-white rounded-md text-[10px]">{unreadCount}</span>}
-                </button>
-                
-                {isAdminOrHO && (
-                  <button 
-                    onClick={() => setDrawerTab('activity')} 
-                    className={cn("flex-1 pb-3 text-sm font-bold border-b-2 transition-all", drawerTab === 'activity' ? "border-indigo-600 text-indigo-700" : "border-transparent text-slate-500 hover:text-slate-700")}
-                  >
-                    Global Activity
-                  </button>
-                )}
-              </div>
-
-              <div className="flex-1 overflow-y-auto custom-scrollbar bg-white flex flex-col">
-                {drawerTab === 'alerts' ? (
-                  <div className="p-4 space-y-3">
-                    {unreadCount > 0 && (
-                      <div className="flex justify-end mb-2">
-                        <button onClick={markAllAsRead} className="text-xs font-bold text-indigo-600 hover:underline flex items-center gap-1"><CheckCheck size={14}/> Mark all read</button>
-                      </div>
-                    )}
-                    {notifications.length === 0 ? (
-                      <div className="text-center py-16 text-slate-400 flex flex-col items-center"><Bell size={32} className="mb-3 opacity-20" /><p className="font-bold">All caught up!</p><p className="text-xs mt-1">You have no personal alerts.</p></div>
-                    ) : (
-                      notifications.map(n => (
-                        <div key={n.id} onClick={() => markAsRead(n.id)} className={cn("p-4 rounded-[1rem] border transition-all cursor-pointer", n.is_read ? "bg-slate-50 border-slate-200 opacity-70" : "bg-indigo-50/50 border-indigo-200 shadow-sm")}>
-                          <div className="flex justify-between items-start mb-1">
-                            <h4 className={cn("font-bold text-sm", n.is_read ? "text-slate-700" : "text-indigo-900")}>{n.title}</h4>
-                            {!n.is_read && <span className="w-2 h-2 rounded-full bg-indigo-600 mt-1 shrink-0 shadow-sm"></span>}
-                          </div>
-                          <p className={cn("text-xs leading-relaxed mt-1.5", n.is_read ? "text-slate-500" : "text-indigo-800")}>{n.message}</p>
-                          <p className="text-[10px] font-bold text-slate-400 mt-3">{new Date(n.created_at).toLocaleString()}</p>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                ) : (
-                  <div className="flex flex-col h-full">
-                    <div className="p-4 border-b border-slate-200 space-y-3 bg-slate-50/80 shrink-0">
-                      <div className="flex justify-between items-center mb-1">
-                        <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Filter Logs</h4>
-                        <button onClick={downloadLogsCSV} className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 text-white text-[11px] font-bold rounded-[10px] hover:bg-emerald-700 transition-colors shadow-sm active:scale-95">
-                          <Download size={14}/> Export CSV
-                        </button>
-                      </div>
-
-                      <div className="relative">
-                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-                        <input type="text" placeholder="Search distributors, users, details..." className="w-full pl-9 pr-3 py-2.5 bg-white border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all shadow-sm" value={logSearch} onChange={(e) => setLogSearch(e.target.value)} />
-                      </div>
-                      
-                      <div className="grid grid-cols-2 gap-2">
-                        <select className="w-full p-2.5 bg-white border border-slate-200 rounded-xl text-xs font-semibold focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all cursor-pointer text-slate-700 shadow-sm" value={logTimeFilter} onChange={(e) => setLogTimeFilter(e.target.value as any)}>
-                          <option value="all">All Time</option>
-                          <option value="today">Today</option>
-                          <option value="week">This Week</option>
-                          <option value="month">This Month</option>
-                        </select>
-
-                        <select className="w-full p-2.5 bg-white border border-slate-200 rounded-xl text-xs font-semibold focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all cursor-pointer text-slate-700 shadow-sm" value={logRoleFilter} onChange={(e) => setLogRoleFilter(e.target.value)}>
-                          <option value="all">All Roles</option>
-                          <option value="ase">ASE</option>
-                          <option value="auditor">Auditor</option>
-                          <option value="admin">Admin / Head Office</option>
-                        </select>
-                      </div>
-
-                      <select className="w-full p-2.5 bg-white border border-slate-200 rounded-xl text-xs font-semibold focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all cursor-pointer text-slate-700 shadow-sm" value={logActionFilter} onChange={(e) => setLogActionFilter(e.target.value)}>
-                         <option value="all">All Statuses / Actions</option>
-                         {uniqueActions.map(action => <option key={action} value={action}>{action}</option>)}
-                      </select>
-                    </div>
-
-                    <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar bg-slate-50/30">
-                      {filteredLogs.length === 0 ? (
-                        <div className="text-center py-16 text-slate-400 flex flex-col items-center"><Bell size={32} className="mb-3 opacity-20" /><p className="font-bold">No activity matches your filters.</p></div>
-                      ) : (
-                        filteredLogs.map(log => {
-                          const style = getLogStyle(log.action);
-                          return (
-                            <div key={log.id} className={cn("p-4 rounded-[1rem] border transition-all shadow-sm", style.bg, style.border)}>
-                              <div className="flex items-start justify-between mb-2 gap-3 sm:gap-4">
-                                <div className="min-w-0 flex-1">
-                                  <p className={cn("text-xs sm:text-sm leading-snug break-words", style.text)}>
-                                    <span className="font-black block text-sm mb-0.5 tracking-tight">{log.action}</span>
-                                    <span className="font-semibold text-slate-600">{log.userName}</span>
-                                  </p>
-                                  {log.details && <p className={cn("text-[10px] sm:text-xs mt-2 font-medium opacity-80 break-words leading-relaxed", style.text)}>"{log.details}"</p>}
-                                </div>
-                                {profile.role === 'superadmin' && (
-                                  <button onClick={() => deleteActivityLog(log.id)} className="text-slate-400 hover:text-rose-500 bg-white/50 hover:bg-rose-100 p-1.5 rounded-lg transition-colors shrink-0 border border-transparent hover:border-rose-200"><Trash2 size={14} /></button>
-                                )}
-                              </div>
-                              <div className="flex flex-wrap items-center gap-2 mt-3 text-[9px] font-bold uppercase tracking-wider">
-                                <span className={cn("px-2 py-0.5 rounded-md", style.tag)}>{log.userRole.replace('_', ' ')}</span>
-                                <span className={cn("opacity-70 font-medium", style.text)}>{new Date(log.timestamp).toLocaleString()}</span>
-                              </div>
-                            </div>
-                          );
-                        })
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </motion.div>
-          </>
-        )}
-      </AnimatePresence>
-    </AuthContext.Provider>
+      </AuthContext.Provider>
+    </MotionConfig>
   );
 }

@@ -1,5 +1,10 @@
 @import "tailwindcss";
 
+/* Manual (class-based) dark mode — toggled by adding/removing `.dark` on
+   <html> from the theme toggle, instead of Tailwind v4's default
+   prefers-color-scheme media-query variant. */
+@custom-variant dark (&:where(.dark, .dark *));
+
 @layer base {
   :root {
     --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -18,11 +23,22 @@
     background-color: #f8fafc;
     color: #0f172a;
     selection-background-color: #e0e7ff;
+    transition: background-color 0.2s ease, color 0.2s ease;
+  }
+
+  .dark body {
+    background-color: #0b1120;
+    color: #e2e8f0;
   }
 
   ::selection {
     background-color: rgba(79, 70, 229, 0.14);
     color: #312e81;
+  }
+
+  .dark ::selection {
+    background-color: rgba(129, 140, 248, 0.25);
+    color: #e0e7ff;
   }
 }
 
@@ -52,19 +68,210 @@
 /* Subtle Architectural Grid Background */
 .bg-enterprise-grid {
   background-size: 32px 32px;
-  background-image: 
+  background-image:
     linear-gradient(to right, rgba(226, 232, 240, 0.45) 1px, transparent 1px),
     linear-gradient(to bottom, rgba(226, 232, 240, 0.45) 1px, transparent 1px);
 }
 
 .bg-dark-grid {
   background-size: 36px 36px;
-  background-image: 
+  background-image:
     linear-gradient(to right, rgba(255, 255, 255, 0.03) 1px, transparent 1px),
     linear-gradient(to bottom, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
 }
 
 /* Smooth Micro-Transitions on Interactive Controls */
-button, a, input, select, textarea {
+button,
+a,
+input,
+select,
+textarea {
   transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* =============================================================================
+   PHONE UI — compact density (< 640px)
+   Scales the rem base so every Tailwind size (spacing, text, icons in rem)
+   shrinks ~12% across the whole app, then tightens oversized desktop-style
+   paddings/gaps/radii inside module content so more fits on screen.
+   ============================================================================= */
+@media (max-width: 639px) {
+  html {
+    font-size: 14px;
+  }
+
+  /* Large paddings → compact */
+  .mobile-compact .p-10,
+  .mobile-compact .p-8 {
+    padding: 1rem;
+  }
+
+  .mobile-compact .p-7,
+  .mobile-compact .p-6 {
+    padding: 0.875rem;
+  }
+
+  .mobile-compact .p-5 {
+    padding: 0.75rem;
+  }
+
+  .mobile-compact .px-8,
+  .mobile-compact .px-6 {
+    padding-left: 0.875rem;
+    padding-right: 0.875rem;
+  }
+
+  .mobile-compact .py-8,
+  .mobile-compact .py-6 {
+    padding-top: 0.875rem;
+    padding-bottom: 0.875rem;
+  }
+
+  .mobile-compact .py-16 {
+    padding-top: 2.5rem;
+    padding-bottom: 2.5rem;
+  }
+
+  /* Gaps & vertical rhythm */
+  .mobile-compact .gap-8,
+  .mobile-compact .gap-6 {
+    gap: 0.75rem;
+  }
+
+  .mobile-compact .gap-5 {
+    gap: 0.625rem;
+  }
+
+  .mobile-compact .space-y-8> :not(:last-child),
+  .mobile-compact .space-y-6> :not(:last-child) {
+    margin-bottom: 0.875rem;
+  }
+
+  .mobile-compact .space-y-5> :not(:last-child) {
+    margin-bottom: 0.75rem;
+  }
+
+  .mobile-compact .mb-8 {
+    margin-bottom: 1rem;
+  }
+
+  .mobile-compact .mb-6 {
+    margin-bottom: 0.875rem;
+  }
+
+  .mobile-compact .mt-8 {
+    margin-top: 1rem;
+  }
+
+  /* Oversized radii eat corners on small cards */
+  .mobile-compact .rounded-\[2\.5rem\],
+  .mobile-compact .rounded-\[2rem\] {
+    border-radius: 1.25rem;
+  }
+
+  .mobile-compact .rounded-3xl {
+    border-radius: 1.125rem;
+  }
+
+  /* Headings */
+  .mobile-compact .text-4xl {
+    font-size: 1.6rem;
+    line-height: 2rem;
+  }
+
+  .mobile-compact .text-3xl {
+    font-size: 1.4rem;
+    line-height: 1.8rem;
+  }
+
+  .mobile-compact .text-2xl {
+    font-size: 1.25rem;
+    line-height: 1.65rem;
+  }
+
+  /* Tables: denser cells, horizontal scroll stays smooth */
+  .mobile-compact table th,
+  .mobile-compact table td {
+    padding: 0.5rem 0.6rem;
+  }
+
+  .mobile-compact .overflow-x-auto {
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Modals: use more of the screen height on phones */
+  .mobile-compact .max-h-\[85vh\],
+  .mobile-compact .max-h-\[90vh\] {
+    max-height: 92vh;
+  }
+
+  /* Bigger, easier tap targets without visual bulk */
+  button,
+  [role="button"],
+  select {
+    touch-action: manipulation;
+  }
+}
+
+/* Hide scrollbar on horizontally-scrolling chip/tab rows on touch devices */
+@media (hover: none) {
+  .overflow-x-auto::-webkit-scrollbar {
+    height: 0;
+  }
+}
+
+/* =============================================================================
+   PHONE PERFORMANCE — smoother scrolling & instant-feeling taps
+   ============================================================================= */
+html {
+  -webkit-tap-highlight-color: transparent;
+}
+
+@media (max-width: 1023px) {
+
+  /* backdrop-filter forces a full re-blur of everything underneath on every
+     scroll frame — the #1 cause of jank on mid-range phones. The fixed bars
+     already use ~95% opaque backgrounds, so dropping the blur is invisible. */
+  .backdrop-blur-xs,
+  .backdrop-blur-sm,
+  .backdrop-blur,
+  .backdrop-blur-md,
+  .backdrop-blur-lg,
+  .backdrop-blur-xl,
+  .backdrop-blur-2xl,
+  .backdrop-blur-3xl {
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+
+  /* No rubber-band bounce bleeding into the fixed bars; contain scroll chaining
+     inside drawers/modals so the page behind doesn't scroll. */
+  body {
+    overscroll-behavior-y: none;
+  }
+
+  .overflow-y-auto {
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Promote the fixed chrome to its own layer so scrolling doesn't repaint it. */
+  nav.fixed,
+  .fixed.top-0 {
+    transform: translateZ(0);
+    will-change: transform;
+  }
+}
+
+/* Respect users who turned on "reduce motion" at the OS level */
+@media (prefers-reduced-motion: reduce) {
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

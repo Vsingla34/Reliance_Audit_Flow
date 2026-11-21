@@ -6,17 +6,17 @@ import { cn } from '../../App';
 import { motion } from 'motion/react';
 
 interface ChatModalProps {
-  isOpen:       boolean;
-  onClose:      () => void;
+  isOpen: boolean;
+  onClose: () => void;
   activeTicket: AuditTicket;
-  user:         any;
-  profile:      any;
+  user: any;
+  profile: any;
 }
 
 export function ChatModal({ isOpen, onClose, activeTicket, user, profile }: ChatModalProps) {
-  const [chatMessage, setChatMessage]   = useState('');
-  const [isSending, setIsSending]       = useState(false);
-  const bottomRef                       = useRef<HTMLDivElement>(null);
+  const [chatMessage, setChatMessage] = useState('');
+  const [isSending, setIsSending] = useState(false);
+  const bottomRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll to bottom when new messages appear
   useEffect(() => {
@@ -34,11 +34,11 @@ export function ChatModal({ isOpen, onClose, activeTicket, user, profile }: Chat
     setIsSending(true);
     try {
       const newComment: AuditComment = {
-        id:        Math.random().toString(36).substring(7),
-        userId:    user.id,
-        userName:  profile.name,
-        userRole:  profile.role,
-        message:   chatMessage.trim(),
+        id: Math.random().toString(36).substring(7),
+        userId: user.id,
+        userName: profile.name,
+        userRole: profile.role,
+        message: chatMessage.trim(),
         timestamp: new Date().toISOString(),
       };
 
@@ -71,34 +71,34 @@ export function ChatModal({ isOpen, onClose, activeTicket, user, profile }: Chat
       />
       <motion.div
         initial={{ opacity: 0, x: 100 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 100 }}
-        className="relative w-full max-w-md bg-white rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col h-full"
+        className="relative w-full max-w-md bg-white dark:bg-slate-900 rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col h-full"
       >
         {/* Header */}
-        <div className="p-6 border-b border-zinc-100 flex items-center justify-between shrink-0 bg-white">
+        <div className="p-6 border-b border-zinc-100 dark:border-slate-800 flex items-center justify-between shrink-0 bg-white dark:bg-slate-900">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-blue-50 rounded-2xl flex items-center justify-center border border-blue-100">
-              <MessageSquare size={18} className="text-blue-600" />
+            <div className="w-10 h-10 bg-blue-50 dark:bg-blue-950/40 rounded-2xl flex items-center justify-center border border-blue-100 dark:border-blue-900">
+              <MessageSquare size={18} className="text-blue-600 dark:text-blue-400" />
             </div>
             <div>
-              <h3 className="text-lg font-bold text-slate-900">Discussion</h3>
-              <p className="text-[11px] text-slate-400 font-medium">
+              <h3 className="text-lg font-bold text-slate-900 dark:text-white">Discussion</h3>
+              <p className="text-[11px] text-slate-400 dark:text-slate-500 font-medium">
                 {activeTicket.comments?.length || 0} message{(activeTicket.comments?.length || 0) !== 1 ? 's' : ''}
                 {' · '}All assigned users notified
               </p>
             </div>
           </div>
-          <button onClick={onClose} className="p-2 hover:bg-zinc-100 rounded-xl transition-colors">
+          <button onClick={onClose} className="p-2 text-slate-500 dark:text-slate-400 hover:bg-zinc-100 dark:hover:bg-slate-800 rounded-xl transition-colors">
             <X size={20} />
           </button>
         </div>
 
         {/* Messages */}
-        <div className="p-5 overflow-y-auto flex-1 bg-zinc-50/50 space-y-4 custom-scrollbar">
+        <div className="p-5 overflow-y-auto flex-1 bg-zinc-50/50 dark:bg-slate-950/40 space-y-4 custom-scrollbar">
           {(!activeTicket.comments || activeTicket.comments.length === 0) ? (
-            <div className="text-center py-16 text-zinc-400 flex flex-col items-center">
+            <div className="text-center py-16 text-zinc-400 dark:text-slate-500 flex flex-col items-center">
               <MessageSquare size={32} className="mx-auto mb-3 opacity-30" />
-              <p className="text-sm font-bold text-zinc-500">No messages yet</p>
-              <p className="text-xs mt-1 text-zinc-400">Send a message — all assigned users will be notified.</p>
+              <p className="text-sm font-bold text-zinc-500 dark:text-slate-400">No messages yet</p>
+              <p className="text-xs mt-1 text-zinc-400 dark:text-slate-500">Send a message — all assigned users will be notified.</p>
             </div>
           ) : (
             activeTicket.comments.map((comment) => {
@@ -106,18 +106,18 @@ export function ChatModal({ isOpen, onClose, activeTicket, user, profile }: Chat
               return (
                 <div key={comment.id} className={cn('flex flex-col', isMe ? 'items-end' : 'items-start')}>
                   <div className={cn('flex items-center gap-2 mb-1', isMe ? 'flex-row-reverse' : 'flex-row')}>
-                    <span className="text-[10px] font-bold text-zinc-500">{comment.userName}</span>
-                    <span className="text-[8px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded bg-zinc-200 text-zinc-700">
+                    <span className="text-[10px] font-bold text-zinc-500 dark:text-slate-400">{comment.userName}</span>
+                    <span className="text-[8px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded bg-zinc-200 dark:bg-slate-700 text-zinc-700 dark:text-slate-200">
                       {comment.userRole}
                     </span>
                   </div>
                   <div className={cn(
                     'px-4 py-3 rounded-2xl max-w-[85%] text-sm shadow-sm',
-                    isMe ? 'rounded-tr-sm bg-blue-500 text-white' : 'rounded-tl-sm bg-zinc-600 text-white'
+                    isMe ? 'rounded-tr-sm bg-blue-500 dark:bg-blue-600 text-white' : 'rounded-tl-sm bg-zinc-600 dark:bg-slate-700 text-white'
                   )}>
                     {comment.message}
                   </div>
-                  <span className="text-[9px] text-zinc-400 mt-1 px-1">
+                  <span className="text-[9px] text-zinc-400 dark:text-slate-500 mt-1 px-1">
                     {new Date(comment.timestamp).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
                     {' · '}
                     {new Date(comment.timestamp).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
@@ -130,12 +130,12 @@ export function ChatModal({ isOpen, onClose, activeTicket, user, profile }: Chat
         </div>
 
         {/* Input */}
-        <div className="p-4 border-t border-zinc-100 bg-white shrink-0">
+        <div className="p-4 border-t border-zinc-100 dark:border-slate-800 bg-white dark:bg-slate-900 shrink-0">
           <form onSubmit={sendComment} className="flex items-center gap-2">
             <input
               type="text"
               placeholder="Type a message…"
-              className="flex-1 pl-4 pr-3 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-sm outline-none"
+              className="flex-1 pl-4 pr-3 py-3 bg-zinc-50 dark:bg-slate-800 border border-zinc-200 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 outline-none"
               value={chatMessage}
               onChange={e => setChatMessage(e.target.value)}
               disabled={isSending}
@@ -148,7 +148,7 @@ export function ChatModal({ isOpen, onClose, activeTicket, user, profile }: Chat
               {isSending ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
             </button>
           </form>
-          <p className="text-[10px] text-zinc-400 mt-2 text-center font-medium">
+          <p className="text-[10px] text-zinc-400 dark:text-slate-500 mt-2 text-center font-medium">
             All HO, DM, SM, ASM, ASE and Auditors assigned to this audit will receive a notification.
           </p>
         </div>
@@ -162,8 +162,8 @@ export function ChatModal({ isOpen, onClose, activeTicket, user, profile }: Chat
 // auditorIds on the ticket. Skips the sender so they don't notify themselves.
 // ─────────────────────────────────────────────────────────────────────────────
 async function notifyDiscussionParticipants(
-  ticket:  AuditTicket,
-  sender:  { uid: string; name: string; role: string },
+  ticket: AuditTicket,
+  sender: { uid: string; name: string; role: string },
   message: string,
 ) {
   try {
@@ -200,9 +200,9 @@ async function notifyDiscussionParticipants(
     const notifications = Array.from(recipientSet).map(uid => ({
       recipient_id: uid,
       assignment_id: assignmentId,
-      title:        `New message in discussion`,
-      message:      `${sender.name} (${sender.role.toUpperCase()}): "${message.length > 80 ? message.slice(0, 80) + '…' : message}"`,
-      is_read:      false,
+      title: `New message in discussion`,
+      message: `${sender.name} (${sender.role.toUpperCase()}): "${message.length > 80 ? message.slice(0, 80) + '…' : message}"`,
+      is_read: false,
     }));
 
     await supabase.from('notifications').insert(notifications);

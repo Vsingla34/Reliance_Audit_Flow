@@ -128,10 +128,10 @@ export function DashboardModule() {
           </div>
           <div className="h-10 w-40 bg-slate-200 rounded-2xl" />
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6 w-full">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-6 w-full">
           {[...Array(4)].map((_, i) => (
-            <div key={i} className="bg-white p-6 rounded-[2rem] border border-slate-200 shadow-sm h-[170px] flex flex-col justify-between">
-              <div className="w-12 h-12 bg-slate-200 rounded-2xl" />
+            <div key={i} className="bg-white p-3.5 sm:p-6 rounded-2xl sm:rounded-[2rem] border border-slate-200 shadow-sm h-[112px] sm:h-[170px] flex flex-col justify-between">
+              <div className="w-9 h-9 sm:w-12 sm:h-12 bg-slate-200 rounded-xl sm:rounded-2xl" />
               <div>
                 <div className="h-3 w-24 bg-slate-100 rounded mb-3" />
                 <div className="h-8 w-16 bg-slate-200 rounded-lg" />
@@ -285,63 +285,63 @@ export function DashboardModule() {
       )}
 
       {/* METRIC CARDS */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6 w-full">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-6 w-full">
 
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05, duration: 0.4 }}
-          className="bg-white p-6 rounded-[2rem] border border-slate-200 shadow-sm hover:shadow-md transition-shadow relative overflow-hidden group">
-          <div className="absolute top-0 right-0 p-6 opacity-20 group-hover:opacity-100 transition-opacity">
+          className="bg-white p-3.5 sm:p-6 rounded-2xl sm:rounded-[2rem] border border-slate-200 shadow-sm hover:shadow-md transition-shadow relative overflow-hidden group min-w-0">
+          <div className="hidden sm:block absolute top-0 right-0 p-6 opacity-20 group-hover:opacity-100 transition-opacity">
             <Activity size={48} className="text-indigo-500 translate-x-4 -translate-y-4" />
           </div>
-          <div className="w-12 h-12 bg-indigo-50/80 rounded-2xl flex items-center justify-center mb-4 border border-indigo-100/50">
-            <PlayCircle size={24} className="text-indigo-600" />
+          <div className="w-9 h-9 sm:w-12 sm:h-12 bg-indigo-50/80 rounded-xl sm:rounded-2xl flex items-center justify-center mb-2.5 sm:mb-4 border border-indigo-100/50">
+            <PlayCircle size={24} className="text-indigo-600 w-[18px] h-[18px] sm:w-6 sm:h-6" />
           </div>
-          <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Active Audits</p>
-          <div className="flex items-end gap-3 mt-1">
-            <h3 className="text-3xl font-black text-slate-900">{metrics.activeCount}</h3>
-            <span className="text-xs font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-md mb-1 border border-indigo-100/50">Ongoing</span>
+          <p className="text-[9.5px] sm:text-xs font-bold text-slate-400 uppercase tracking-wide sm:tracking-wider leading-tight truncate">Active Audits</p>
+          <div className="flex items-center sm:items-end gap-1.5 sm:gap-3 mt-0.5 sm:mt-1 flex-wrap">
+            <h3 className="text-xl sm:text-3xl font-black text-slate-900 leading-none">{metrics.activeCount}</h3>
+            <span className="text-[9px] sm:text-xs font-bold text-indigo-600 bg-indigo-50 px-1.5 sm:px-2 py-0.5 rounded-md sm:mb-1 border border-indigo-100/50">Ongoing</span>
           </div>
         </motion.div>
 
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1, duration: 0.4 }}
-          className="bg-white p-6 rounded-[2rem] border border-slate-200 shadow-sm hover:shadow-md transition-shadow relative overflow-hidden group">
-          <div className="absolute top-0 right-0 p-6 opacity-20 group-hover:opacity-100 transition-opacity">
+          className="bg-white p-3.5 sm:p-6 rounded-2xl sm:rounded-[2rem] border border-slate-200 shadow-sm hover:shadow-md transition-shadow relative overflow-hidden group min-w-0">
+          <div className="hidden sm:block absolute top-0 right-0 p-6 opacity-20 group-hover:opacity-100 transition-opacity">
             <AlertCircle size={48} className="text-amber-500 translate-x-4 -translate-y-4" />
           </div>
-          <div className="w-12 h-12 bg-amber-50/80 rounded-2xl flex items-center justify-center mb-4 border border-amber-100/50">
-            <Clock size={24} className="text-amber-600" />
+          <div className="w-9 h-9 sm:w-12 sm:h-12 bg-amber-50/80 rounded-xl sm:rounded-2xl flex items-center justify-center mb-2.5 sm:mb-4 border border-amber-100/50">
+            <Clock size={24} className="text-amber-600 w-[18px] h-[18px] sm:w-6 sm:h-6" />
           </div>
-          <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Needs Action</p>
-          <div className="flex items-end gap-3 mt-1">
-            <h3 className="text-3xl font-black text-slate-900">{metrics.actionCount}</h3>
-            <span className="text-xs font-bold text-amber-600 bg-amber-50 px-2 py-0.5 rounded-md mb-1 border border-amber-100/50">Pending</span>
+          <p className="text-[9.5px] sm:text-xs font-bold text-slate-400 uppercase tracking-wide sm:tracking-wider leading-tight truncate">Needs Action</p>
+          <div className="flex items-center sm:items-end gap-1.5 sm:gap-3 mt-0.5 sm:mt-1 flex-wrap">
+            <h3 className="text-xl sm:text-3xl font-black text-slate-900 leading-none">{metrics.actionCount}</h3>
+            <span className="text-[9px] sm:text-xs font-bold text-amber-600 bg-amber-50 px-1.5 sm:px-2 py-0.5 rounded-md sm:mb-1 border border-amber-100/50">Pending</span>
           </div>
         </motion.div>
 
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15, duration: 0.4 }}
-          className="bg-white p-6 rounded-[2rem] border border-slate-200 shadow-sm hover:shadow-md transition-shadow relative overflow-hidden group">
-          <div className="absolute top-0 right-0 p-6 opacity-20 group-hover:opacity-100 transition-opacity">
+          className="bg-white p-3.5 sm:p-6 rounded-2xl sm:rounded-[2rem] border border-slate-200 shadow-sm hover:shadow-md transition-shadow relative overflow-hidden group min-w-0">
+          <div className="hidden sm:block absolute top-0 right-0 p-6 opacity-20 group-hover:opacity-100 transition-opacity">
             <CheckCircle2 size={48} className="text-emerald-500 translate-x-4 -translate-y-4" />
           </div>
-          <div className="w-12 h-12 bg-emerald-50/80 rounded-2xl flex items-center justify-center mb-4 border border-emerald-100/50">
-            <CheckCircle2 size={24} className="text-emerald-600" />
+          <div className="w-9 h-9 sm:w-12 sm:h-12 bg-emerald-50/80 rounded-xl sm:rounded-2xl flex items-center justify-center mb-2.5 sm:mb-4 border border-emerald-100/50">
+            <CheckCircle2 size={24} className="text-emerald-600 w-[18px] h-[18px] sm:w-6 sm:h-6" />
           </div>
-          <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Completed (This Month)</p>
-          <div className="flex items-end gap-3 mt-1">
-            <h3 className="text-3xl font-black text-slate-900">{metrics.completedCount}</h3>
+          <p className="text-[9.5px] sm:text-xs font-bold text-slate-400 uppercase tracking-wide sm:tracking-wider leading-tight truncate">Completed (This Month)</p>
+          <div className="flex items-center sm:items-end gap-1.5 sm:gap-3 mt-0.5 sm:mt-1 flex-wrap">
+            <h3 className="text-xl sm:text-3xl font-black text-slate-900 leading-none">{metrics.completedCount}</h3>
           </div>
         </motion.div>
 
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2, duration: 0.4 }}
-          className="bg-white p-6 rounded-[2rem] border border-slate-200 shadow-sm hover:shadow-md transition-shadow relative overflow-hidden group">
-          <div className="absolute top-0 right-0 p-6 opacity-10 group-hover:opacity-40 transition-opacity">
+          className="bg-white p-3.5 sm:p-6 rounded-2xl sm:rounded-[2rem] border border-slate-200 shadow-sm hover:shadow-md transition-shadow relative overflow-hidden group min-w-0">
+          <div className="hidden sm:block absolute top-0 right-0 p-6 opacity-10 group-hover:opacity-40 transition-opacity">
             <TrendingUp size={64} className="text-cyan-500 translate-x-2 -translate-y-2" />
           </div>
-          <div className="w-12 h-12 bg-cyan-50/80 rounded-2xl flex items-center justify-center mb-4 border border-cyan-100/50">
-            <IndianRupee size={24} className="text-cyan-600" />
+          <div className="w-9 h-9 sm:w-12 sm:h-12 bg-cyan-50/80 rounded-xl sm:rounded-2xl flex items-center justify-center mb-2.5 sm:mb-4 border border-cyan-100/50">
+            <IndianRupee size={24} className="text-cyan-600 w-[18px] h-[18px] sm:w-6 sm:h-6" />
           </div>
-          <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Verified Value (Month)</p>
-          <div className="flex items-end gap-3 mt-1">
-            <h3 className="text-2xl sm:text-3xl font-black text-slate-900 truncate" title={`₹${metrics.totalValue.toLocaleString()}`}>
+          <p className="text-[9.5px] sm:text-xs font-bold text-slate-400 uppercase tracking-wide sm:tracking-wider leading-tight truncate">Verified Value (Month)</p>
+          <div className="flex items-center sm:items-end gap-1.5 sm:gap-3 mt-0.5 sm:mt-1 flex-wrap">
+            <h3 className="text-xl sm:text-3xl font-black text-slate-900 truncate leading-none" title={`₹${metrics.totalValue.toLocaleString()}`}>
               ₹{metrics.totalValue >= 100000 ? `${(metrics.totalValue / 100000).toFixed(2)}L` : metrics.totalValue.toLocaleString()}
             </h3>
           </div>

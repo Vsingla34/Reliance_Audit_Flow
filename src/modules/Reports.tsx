@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../supabase';
+import { activeCategoryKeys } from '../categoryPolicy';
 import { getCachedData, setCachedData, fetchCachedDistributors } from '../supabaseOptimized';
 import { AuditTicket, Distributor } from '../types';
 import {
@@ -13,46 +14,46 @@ import { cn, useAuth } from '../App';
 // ─────────────────────────────────────────────────────────────────────────────
 interface ReportRow {
   // Master details
-  serialNo:       string;
-  region:         string;
-  state:          string;
-  auditTeam:      string;
-  anchorCode:     string;
-  anchorName:     string;
-  distributorName:string;
-  articleCode:    string;
-  brandPack:      string;
-  category:       string;
-  rateInclGst:    number;
-  gstPct:         number;
-  standardPack:   string;
+  serialNo: string;
+  region: string;
+  state: string;
+  auditTeam: string;
+  anchorCode: string;
+  anchorName: string;
+  distributorName: string;
+  articleCode: string;
+  brandPack: string;
+  category: string;
+  rateInclGst: number;
+  gstPct: number;
+  standardPack: string;
   // Quantities
-  qtyDamaged:     number;
-  qtySampling:    number;
+  qtyDamaged: number;
+  qtySampling: number;
   qtyNonSaleable: number;
-  qtyBBD:         number;
-  qtyTotal:       number;
+  qtyBBD: number;
+  qtyTotal: number;
   // Values
-  valDamaged:     number;
-  valSampling:    number;
+  valDamaged: number;
+  valSampling: number;
   valNonSaleable: number;
-  valBBD:         number;
-  valTotalInclGst:number;
-  valTotalExclGst:number;
+  valBBD: number;
+  valTotalInclGst: number;
+  valTotalExclGst: number;
   // Dates
-  mfgDate:        string;
-  expDate:        string;
+  mfgDate: string;
+  expDate: string;
   productLifeMonths: number | string;
-  mfgQuarter:     string;
+  mfgQuarter: string;
   // Findings
-  issueDetail:    string;
+  issueDetail: string;
   auditorRemarks: string;
   // Extra context
-  scheduledDate:    string;
-  auditStatus:      string;
-  approvedValue:    number;
+  scheduledDate: string;
+  auditStatus: string;
+  approvedValue: number;
   drainageStartDate: string;
-  drainageEndDate:   string;
+  drainageEndDate: string;
 }
 
 export function ReportsModule() {
@@ -60,20 +61,20 @@ export function ReportsModule() {
   const assignmentId = activeAssignment?.id || 'assignment-1';
   const cacheKeyReport = `report-rows-${assignmentId}`;
 
-  const [tickets, setTickets]           = useState<AuditTicket[]>([]);
+  const [tickets, setTickets] = useState<AuditTicket[]>([]);
   const [distributors, setDistributors] = useState<Distributor[]>([]);
-  const [reportData, setReportData]     = useState<ReportRow[]>(() => getCachedData<ReportRow[]>(cacheKeyReport) || []);
-  const [loading, setLoading]           = useState(() => !getCachedData(cacheKeyReport));
-  const [isExporting, setIsExporting]   = useState(false);
+  const [reportData, setReportData] = useState<ReportRow[]>(() => getCachedData<ReportRow[]>(cacheKeyReport) || []);
+  const [loading, setLoading] = useState(() => !getCachedData(cacheKeyReport));
+  const [isExporting, setIsExporting] = useState(false);
 
   // ── Distributor filter state ──────────────────────────────────────────────
-  const [distSearch, setDistSearch]       = useState('');          // search box text
+  const [distSearch, setDistSearch] = useState('');          // search box text
   const [selectedDistId, setSelectedDistId] = useState<string>(''); // '' = all
-  const [regionFilter, setRegionFilter]   = useState<string>('');  // '' = all regions
-  const [statusFilter, setStatusFilter]   = useState<string>('');  // '' = all statuses
+  const [regionFilter, setRegionFilter] = useState<string>('');  // '' = all regions
+  const [statusFilter, setStatusFilter] = useState<string>('');  // '' = all statuses
 
   const allowedRoles = ['superadmin', 'admin', 'ho', 'dm', 'sm', 'asm'];
-  const hasAccess    = allowedRoles.includes(profile?.role || '');
+  const hasAccess = allowedRoles.includes(profile?.role || '');
 
   // ── Fetch base data ────────────────────────────────────────────────────────
   const fetchReportData = useCallback(async () => {
@@ -109,7 +110,7 @@ export function ReportsModule() {
         distributors.forEach(d => { distMap[d.id] = d; });
 
         // Paginated line items fetch
-        const ticketIds  = tickets.map(t => t.id);
+        const ticketIds = tickets.map(t => t.id);
         if (ticketIds.length === 0) { setReportData([]); return; }
 
         let allItems: any[] = [];
@@ -153,8 +154,8 @@ export function ReportsModule() {
             if (masterRows) {
               masterRows.forEach((m: any) => {
                 itemMasterMap[m.itemCode] = {
-                  category:     m.category     || '',
-                  gst:          Number(m.gst)  || 0,
+                  category: m.category || '',
+                  gst: Number(m.gst) || 0,
                   standardPack: m.standardPack || '',
                 };
               });
@@ -169,19 +170,19 @@ export function ReportsModule() {
           if (!dist) continue;
 
           sno++;
-          const uv      = item.unitValue || 0;
-          const master  = itemMasterMap[item.articleNumber] || {};
-          const gstPct  = master.gst          ?? item.gst          ?? 0;
-          const category     = master.category     || item.category     || '';
+          const uv = item.unitValue || 0;
+          const master = itemMasterMap[item.articleNumber] || {};
+          const gstPct = master.gst ?? item.gst ?? 0;
+          const category = master.category || item.category || '';
           const standardPack = master.standardPack || item.standardPack || '';
-          const gstMul  = 1 + gstPct / 100;
+          const gstMul = 1 + gstPct / 100;
 
-          const qTot    = (item.qtyDamaged || 0) + (item.qtyNonSaleable || 0) + (item.qtyBBD || 0);
-          const vDmg    = (item.qtyDamaged     || 0) * uv;
-          const vNs     = (item.qtyNonSaleable || 0) * uv;
-          const vBbd    = (item.qtyBBD         || 0) * uv;
-          const vTot    = qTot * uv;
-          const vExc    = gstMul > 1 ? vTot / gstMul : vTot;
+          const qTot = (item.qtyDamaged || 0) + (item.qtyNonSaleable || 0) + (item.qtyBBD || 0);
+          const vDmg = (item.qtyDamaged || 0) * uv;
+          const vNs = (item.qtyNonSaleable || 0) * uv;
+          const vBbd = (item.qtyBBD || 0) * uv;
+          const vTot = qTot * uv;
+          const vExc = gstMul > 1 ? vTot / gstMul : vTot;
 
           // Product life in months
           const lifeMonths = (() => {
@@ -198,50 +199,50 @@ export function ReportsModule() {
           const mfgQ = (() => {
             if (!item.mfgDate) return '';
             try {
-              const m  = new Date(item.mfgDate);
+              const m = new Date(item.mfgDate);
               if (isNaN(m.getTime())) return '';
               const fy = m.getMonth() >= 3 ? m.getFullYear() : m.getFullYear() - 1;
-              const q  = Math.floor(((m.getMonth() - 3 + 12) % 12) / 3) + 1;
+              const q = Math.floor(((m.getMonth() - 3 + 12) % 12) / 3) + 1;
               return `Q${q} FY ${String(fy).slice(2)}-${String(fy + 1).slice(2)}`;
             } catch { return ''; }
           })();
 
           rows.push({
-            serialNo:        (dist as any).assignment_serial_no || ticket.id || '',
-            region:          (dist as any).region     || '',
-            state:           (dist as any).state      || '',
-            auditTeam:       'Singla Vishal & Co.',
-            anchorCode:      (dist as any).code       || '',
-            anchorName:      (dist as any).anchorName || '',
-            distributorName: (dist as any).name       || '',
-            articleCode:     item.articleNumber        || '',
-            brandPack:       item.description          || '',
-            category:        category,
-            rateInclGst:     uv,
-            gstPct:          gstPct,
-            standardPack:    standardPack,
-            qtyDamaged:      item.qtyDamaged     || 0,
-            qtySampling:     0,
-            qtyNonSaleable:  item.qtyNonSaleable || 0,
-            qtyBBD:          item.qtyBBD         || 0,
-            qtyTotal:        qTot,
-            valDamaged:      vDmg,
-            valSampling:     0,
-            valNonSaleable:  vNs,
-            valBBD:          vBbd,
+            serialNo: (dist as any).assignment_serial_no || ticket.id || '',
+            region: (dist as any).region || '',
+            state: (dist as any).state || '',
+            auditTeam: 'Singla Vishal & Co.',
+            anchorCode: (dist as any).code || '',
+            anchorName: (dist as any).anchorName || '',
+            distributorName: (dist as any).name || '',
+            articleCode: item.articleNumber || '',
+            brandPack: item.description || '',
+            category: category,
+            rateInclGst: uv,
+            gstPct: gstPct,
+            standardPack: standardPack,
+            qtyDamaged: item.qtyDamaged || 0,
+            qtySampling: 0,
+            qtyNonSaleable: item.qtyNonSaleable || 0,
+            qtyBBD: item.qtyBBD || 0,
+            qtyTotal: qTot,
+            valDamaged: vDmg,
+            valSampling: 0,
+            valNonSaleable: vNs,
+            valBBD: vBbd,
             valTotalInclGst: vTot,
             valTotalExclGst: vExc,
-            mfgDate:         item.mfgDate   || '',
-            expDate:         item.expDate   || '',
+            mfgDate: item.mfgDate || '',
+            expDate: item.expDate || '',
             productLifeMonths: lifeMonths,
-            mfgQuarter:      mfgQ,
-            issueDetail:     item.reasonCode || '',
-            auditorRemarks:  item.remarks    || '',
-            scheduledDate:      ticket.scheduledDate || '',
-            drainageStartDate: ticket.signOffs?.drainageDate    || '',
-            drainageEndDate:   ticket.signOffs?.drainageEndDate || '',
-            auditStatus:     ticket.status   || '',
-            approvedValue:   ticket.approvedValue || (distMap[ticket.distributorId]?.approvedValue) || 0,
+            mfgQuarter: mfgQ,
+            issueDetail: item.reasonCode || '',
+            auditorRemarks: item.remarks || '',
+            scheduledDate: ticket.scheduledDate || '',
+            drainageStartDate: ticket.signOffs?.drainageDate || '',
+            drainageEndDate: ticket.signOffs?.drainageEndDate || '',
+            auditStatus: ticket.status || '',
+            approvedValue: ticket.approvedValue || (distMap[ticket.distributorId]?.approvedValue) || 0,
           });
         }
 
@@ -297,15 +298,15 @@ export function ReportsModule() {
   // ── Totals ─────────────────────────────────────────────────────────────────
   // Totals always reflect the filtered set
   const totals = {
-    qtyDamaged:      filteredReportData.reduce((s, r) => s + r.qtyDamaged,      0),
-    qtySampling:     filteredReportData.reduce((s, r) => s + r.qtySampling,     0),
-    qtyNonSaleable:  filteredReportData.reduce((s, r) => s + r.qtyNonSaleable,  0),
-    qtyBBD:          filteredReportData.reduce((s, r) => s + r.qtyBBD,          0),
-    qtyTotal:        filteredReportData.reduce((s, r) => s + r.qtyTotal,        0),
-    valDamaged:      filteredReportData.reduce((s, r) => s + r.valDamaged,      0),
-    valSampling:     filteredReportData.reduce((s, r) => s + r.valSampling,     0),
-    valNonSaleable:  filteredReportData.reduce((s, r) => s + r.valNonSaleable,  0),
-    valBBD:          filteredReportData.reduce((s, r) => s + r.valBBD,          0),
+    qtyDamaged: filteredReportData.reduce((s, r) => s + r.qtyDamaged, 0),
+    qtySampling: filteredReportData.reduce((s, r) => s + r.qtySampling, 0),
+    qtyNonSaleable: filteredReportData.reduce((s, r) => s + r.qtyNonSaleable, 0),
+    qtyBBD: filteredReportData.reduce((s, r) => s + r.qtyBBD, 0),
+    qtyTotal: filteredReportData.reduce((s, r) => s + r.qtyTotal, 0),
+    valDamaged: filteredReportData.reduce((s, r) => s + r.valDamaged, 0),
+    valSampling: filteredReportData.reduce((s, r) => s + r.valSampling, 0),
+    valNonSaleable: filteredReportData.reduce((s, r) => s + r.valNonSaleable, 0),
+    valBBD: filteredReportData.reduce((s, r) => s + r.valBBD, 0),
     valTotalInclGst: filteredReportData.reduce((s, r) => s + r.valTotalInclGst, 0),
     valTotalExclGst: filteredReportData.reduce((s, r) => s + r.valTotalExclGst, 0),
   };
@@ -333,17 +334,29 @@ export function ReportsModule() {
         6, 16, 12, 12, 16, 14, 18, 18, 14, 28, 14, 10, 14, 8, 10,
         10, 12, 18, 10, 10, 14, 14, 18, 12, 14, 14, 14, 12, 14, 14, 24, 18,
       ];
-      ws.columns = colWidths.map(w => ({ width: w }));
+      // Only categories with quantity in the exported rows get columns; with a single
+      // category the "Total" columns repeat it and are dropped. Every logical column
+      // (1-32) is remapped to its new physical position.
+      const keys = activeCategoryKeys(exportData);
+      const single = keys.length === 1;
+      const nsOnly = single && keys[0] === 'nonSaleable';
+      const DROP = new Set<number>();
+      (['damage', 'sampling', 'nonSaleable', 'bbd'] as const).forEach((k, i) => { if (!keys.includes(k)) { DROP.add(16 + i); DROP.add(21 + i); } });
+      if (single) { DROP.add(20); DROP.add(25); }
+      const phys = (c: number) => c - [...DROP].filter(d => d < c).length;
+      const lastLogical = (c2: number) => { let c = c2; while (c > 1 && DROP.has(c)) c--; return c; };
+      const firstLogical = (c1: number) => { let c = c1; while (DROP.has(c)) c++; return c; };
+      ws.columns = colWidths.filter((_, i) => !DROP.has(i + 1)).map(w => ({ width: w }));
 
       // ── Colour palette ────────────────────────────────────────────────────
       const C = {
-        MASTER:  'FFD9E1F2',
-        QTY:     'FFBDD7EE',
-        VAL:     'FFE2EFDA',
-        MFD:     'FFFFF2CC',
-        AUD:     'FFD9D9D9',
-        TOTAL:   'FFFFD966',
-        WHITE:   'FFFFFFFF',
+        MASTER: 'FFD9E1F2',
+        QTY: 'FFBDD7EE',
+        VAL: 'FFE2EFDA',
+        MFD: 'FFFFF2CC',
+        AUD: 'FFD9D9D9',
+        TOTAL: 'FFFFD966',
+        WHITE: 'FFFFFFFF',
       };
       const fill = (argb: string): ExcelJS.Fill =>
         ({ type: 'pattern', pattern: 'solid', fgColor: { argb } });
@@ -352,27 +365,32 @@ export function ReportsModule() {
       const aFont = (bold = false, size = 9): Partial<ExcelJS.Font> =>
         ({ name: 'Arial', bold, size, color: { argb: 'FF000000' } });
       const setCell = (
-        row: number, col: number, value: ExcelJS.CellValue,
-        opts: { bold?: boolean; size?: number; fill?: string;
+        row: number, logicalCol: number, value: ExcelJS.CellValue,
+        opts: {
+          bold?: boolean; size?: number; fill?: string;
           hAlign?: ExcelJS.Alignment['horizontal'];
           vAlign?: ExcelJS.Alignment['vertical'];
           wrap?: boolean; numFmt?: string;
-          border?: Partial<ExcelJS.Borders> | null; } = {}
+          border?: Partial<ExcelJS.Borders> | null;
+        } = {}
       ) => {
-        const cell = ws.getRow(row).getCell(col);
-        cell.value     = value;
-        cell.font      = aFont(opts.bold, opts.size ?? 9);
+        if (DROP.has(logicalCol)) return;
+        const cell = ws.getRow(row).getCell(phys(logicalCol));
+        cell.value = value;
+        cell.font = aFont(opts.bold, opts.size ?? 9);
         cell.alignment = {
           horizontal: opts.hAlign ?? 'center',
-          vertical:   opts.vAlign ?? 'middle',
-          wrapText:   opts.wrap   ?? true,
+          vertical: opts.vAlign ?? 'middle',
+          wrapText: opts.wrap ?? true,
         };
-        if (opts.fill)   cell.fill   = fill(opts.fill);
+        if (opts.fill) cell.fill = fill(opts.fill);
         if (opts.border !== null) cell.border = opts.border ?? border;
         if (opts.numFmt) cell.numFmt = opts.numFmt;
       };
       const merge = (r1: number, c1: number, r2: number, c2: number) => {
-        try { ws.mergeCells(r1, c1, r2, c2); } catch { /* already merged */ }
+        const a = phys(firstLogical(c1)), b = phys(lastLogical(c2));
+        if (b <= a && r1 === r2) return;
+        try { ws.mergeCells(r1, a, r2, b); } catch { /* already merged */ }
       };
 
       // ── ROW 1: Report title ───────────────────────────────────────────────
@@ -394,52 +412,52 @@ export function ReportsModule() {
       // ── ROW 3: Section group headers ──────────────────────────────────────
       ws.getRow(3).height = 20;
       const sections: [number, number, string, string][] = [
-        [1,  15, 'Master Details',                C.MASTER],
-        [16, 20, 'Quantity Detail',               C.QTY],
-        [21, 26, 'Value Details - Including GST', C.VAL],
-        [27, 30, 'MFD & Expiry Date',             C.MFD],
-        [31, 32, 'Auditor Findings',              C.AUD],
+        [1, 15, 'Master Details', C.MASTER],
+        [16, 20, single ? 'Quantity' : 'Quantity Detail', C.QTY],
+        [21, 26, single ? 'Value Details' : 'Value Details - Including GST', C.VAL],
+        [27, 30, 'MFD & Expiry Date', C.MFD],
+        [31, 32, 'Auditor Findings', C.AUD],
       ];
       for (const [c1, c2, text, fc] of sections) {
         merge(3, c1, 3, c2);
-        setCell(3, c1, text, { bold: true, size: 10, fill: fc, hAlign: 'center', border });
+        setCell(3, firstLogical(c1), text, { bold: true, size: 10, fill: fc, hAlign: 'center', border });
       }
 
       // ── ROW 4: Column headers (height 150 matching ALF) ───────────────────
       ws.getRow(4).height = 150;
       const colHeaders: [number, string, string][] = [
-        [1,  'Sr No',                                                                                    C.MASTER],
-        [2,  'Std. Serial No.',                                                                          C.MASTER],
-        [3,  'Region',                                                                                   C.MASTER],
-        [4,  'State',                                                                                    C.MASTER],
-        [5,  'Audit Team',                                                                               C.MASTER],
-        [6,  'Anchor Code',                                                                              C.MASTER],
-        [7,  'Anchor Name',                                                                              C.MASTER],
-        [8,  'Distributor name',                                                                         C.MASTER],
-        [9,  'Article Code',                                                                             C.MASTER],
-        [10, 'Brand Pack',                                                                               C.MASTER],
-        [11, 'Category (CSD, Still, Water, Energy)',                                                     C.MASTER],
-        [12, 'NPI / NON - NPI',                                                                         C.MASTER],
-        [13, "Rate Including GST\n(As per Waitage Avg of Primary from Apr'25 to Jan'26)",               C.MASTER],
-        [14, 'GST %',                                                                                    C.MASTER],
-        [15, 'Standard Pack',                                                                            C.MASTER],
-        [16, 'Primary Damage\n(Pcs)',                                                                    C.QTY],
-        [17, 'Sampling/Liquidation/\nFOC (PCS)',                                                         C.QTY],
-        [18, 'Non-Saleable product and Non-manufacturing Defect (Pcs)',                                  C.QTY],
-        [19, 'BBD Stock\n(Pcs)',                                                                         C.QTY],
-        [20, 'Total Verified\nQuantity (Pcs)',                                                           C.QTY],
-        [21, 'Primary Damage\n(INR)',                                                                    C.VAL],
-        [22, 'Sampling/Liquidation/\nFOC (INR)',                                                         C.VAL],
-        [23, 'Non-Saleable product and Non-manufacturing Defect (INR)',                                  C.VAL],
-        [24, 'BBD Stock\n(INR)',                                                                         C.VAL],
-        [25, 'Total Audited Value\n(Including GST)',                                                     C.VAL],
-        [26, 'Total Audited Value\n(Excluding GST)',                                                     C.VAL],
-        [27, 'Manufacturing Date',                                                                       C.MFD],
-        [28, 'Expiry Date',                                                                              C.MFD],
-        [29, 'Product life in Months',                                                                   C.MFD],
-        [30, 'Manufacturing Quarter',                                                                    C.MFD],
-        [31, 'Issue in Product in detail',                                                               C.AUD],
-        [32, 'Auditor Remarks',                                                                          C.AUD],
+        [1, 'Sr No', C.MASTER],
+        [2, 'Std. Serial No.', C.MASTER],
+        [3, 'Region', C.MASTER],
+        [4, 'State', C.MASTER],
+        [5, 'Audit Team', C.MASTER],
+        [6, 'Anchor Code', C.MASTER],
+        [7, 'Anchor Name', C.MASTER],
+        [8, 'Distributor name', C.MASTER],
+        [9, 'Article Code', C.MASTER],
+        [10, 'Brand Pack', C.MASTER],
+        [11, 'Category (CSD, Still, Water, Energy)', C.MASTER],
+        [12, 'NPI / NON - NPI', C.MASTER],
+        [13, "Rate Including GST\n(As per Waitage Avg of Primary from Apr'25 to Jan'26)", C.MASTER],
+        [14, 'GST %', C.MASTER],
+        [15, 'Standard Pack', C.MASTER],
+        [16, 'Primary Damage\n(Pcs)', C.QTY],
+        [17, 'Sampling/Liquidation/\nFOC (PCS)', C.QTY],
+        [18, 'Non-Saleable product and Non-manufacturing Defect (Pcs)', C.QTY],
+        [19, 'BBD Stock\n(Pcs)', C.QTY],
+        [20, 'Total Verified\nQuantity (Pcs)', C.QTY],
+        [21, single ? 'Primary Damage (INR) ( Including GST)' : 'Primary Damage\n(INR)', C.VAL],
+        [22, single ? 'Sampling/Liquidation/FOC (INR) ( Including GST)' : 'Sampling/Liquidation/\nFOC (INR)', C.VAL],
+        [23, nsOnly ? 'Non-Saleable product and Non-manufacturing Defect (INR) ( Including GST)' : 'Non-Saleable product and Non-manufacturing Defect (INR)', C.VAL],
+        [24, single ? 'BBD Stock (INR) ( Including GST)' : 'BBD Stock\n(INR)', C.VAL],
+        [25, 'Total Audited Value\n(Including GST)', C.VAL],
+        [26, single ? `${({ damage: 'Primary Damage', sampling: 'Sampling/Liquidation/FOC', nonSaleable: 'Non-Saleable product and Non-manufacturing Defect', bbd: 'BBD Stock' })[keys[0]]} (INR) ( Excluding GST)` : 'Total Audited Value\n(Excluding GST)', C.VAL],
+        [27, 'Manufacturing Date', C.MFD],
+        [28, 'Expiry Date', C.MFD],
+        [29, 'Product life in Months', C.MFD],
+        [30, 'Manufacturing Quarter', C.MFD],
+        [31, 'Issue in Product in detail', C.AUD],
+        [32, 'Auditor Remarks', C.AUD],
       ];
       for (const [col, text, fc] of colHeaders) {
         setCell(4, col, text, { bold: true, size: 9, fill: fc, hAlign: 'center', vAlign: 'middle', wrap: true, border });
@@ -449,46 +467,46 @@ export function ReportsModule() {
       ws.views = [{ state: 'frozen', xSplit: 1, ySplit: 4, topLeftCell: 'B5' }];
 
       // ── DATA ROWS ─────────────────────────────────────────────────────────
-      const INR  = '[$₹-en-IN]#,##0.00';
-      const QTY  = '#,##0';
+      const INR = '[$₹-en-IN]#,##0.00';
+      const QTY = '#,##0';
 
       exportData.forEach((row, i) => {
         const rowNum = i + 5;
         ws.getRow(rowNum).height = 15;
 
         const cells: [number, ExcelJS.CellValue, string?][] = [
-          [1,  i + 1,               QTY],
-          [2,  row.serialNo,        undefined],
-          [3,  row.region,          undefined],
-          [4,  row.state,           undefined],
-          [5,  row.auditTeam,       undefined],
-          [6,  row.anchorCode,      undefined],
-          [7,  row.anchorName,      undefined],
-          [8,  row.distributorName, undefined],
-          [9,  row.articleCode,     undefined],
-          [10, row.brandPack,       undefined],
-          [11, row.category,        undefined],
-          [12, '',                  undefined],
-          [13, row.rateInclGst,     INR],
+          [1, i + 1, QTY],
+          [2, row.serialNo, undefined],
+          [3, row.region, undefined],
+          [4, row.state, undefined],
+          [5, row.auditTeam, undefined],
+          [6, row.anchorCode, undefined],
+          [7, row.anchorName, undefined],
+          [8, row.distributorName, undefined],
+          [9, row.articleCode, undefined],
+          [10, row.brandPack, undefined],
+          [11, row.category, undefined],
+          [12, '', undefined],
+          [13, row.rateInclGst, INR],
           [14, row.gstPct > 0 ? row.gstPct : '', row.gstPct > 0 ? '0.00"%"' : undefined],
-          [15, row.standardPack,    undefined],
-          [16, row.qtyDamaged     || 0, QTY],
-          [17, row.qtySampling    || 0, QTY],
+          [15, row.standardPack, undefined],
+          [16, row.qtyDamaged || 0, QTY],
+          [17, row.qtySampling || 0, QTY],
           [18, row.qtyNonSaleable || 0, QTY],
-          [19, row.qtyBBD         || 0, QTY],
-          [20, row.qtyTotal       || 0, QTY],
-          [21, row.valDamaged     || 0, INR],
-          [22, row.valSampling    || 0, INR],
+          [19, row.qtyBBD || 0, QTY],
+          [20, row.qtyTotal || 0, QTY],
+          [21, row.valDamaged || 0, INR],
+          [22, row.valSampling || 0, INR],
           [23, row.valNonSaleable || 0, INR],
-          [24, row.valBBD         || 0, INR],
-          [25, row.valTotalInclGst,     INR],
-          [26, row.valTotalExclGst,     INR],
-          [27, row.mfgDate,         undefined],
-          [28, row.expDate,         undefined],
-          [29, row.productLifeMonths,   undefined],
-          [30, row.mfgQuarter,      undefined],
-          [31, row.issueDetail,     undefined],
-          [32, row.auditorRemarks,  undefined],
+          [24, row.valBBD || 0, INR],
+          [25, row.valTotalInclGst, INR],
+          [26, row.valTotalExclGst, INR],
+          [27, row.mfgDate, undefined],
+          [28, row.expDate, undefined],
+          [29, row.productLifeMonths, undefined],
+          [30, row.mfgQuarter, undefined],
+          [31, row.issueDetail, undefined],
+          [32, row.auditorRemarks, undefined],
         ];
 
         // Alternating row shading for readability
@@ -496,11 +514,11 @@ export function ReportsModule() {
 
         for (const [col, val, fmt] of cells) {
           setCell(rowNum, col, val, {
-            size:   9,
+            size: 9,
             hAlign: col <= 2 ? 'center' : col <= 12 ? 'left' : 'center',
             vAlign: 'middle',
-            wrap:   false,
-            fill:   rowFill,
+            wrap: false,
+            fill: rowFill,
             numFmt: fmt,
             border,
           });
@@ -516,15 +534,15 @@ export function ReportsModule() {
       for (let c = 10; c <= 15; c++) setCell(totRow, c, '', { fill: C.TOTAL, border });
 
       const totCells: [number, number, string][] = [
-        [16, totals.qtyDamaged,      QTY],
-        [17, totals.qtySampling,     QTY],
-        [18, totals.qtyNonSaleable,  QTY],
-        [19, totals.qtyBBD,          QTY],
-        [20, totals.qtyTotal,        QTY],
-        [21, totals.valDamaged,      INR],
-        [22, totals.valSampling,     INR],
-        [23, totals.valNonSaleable,  INR],
-        [24, totals.valBBD,          INR],
+        [16, totals.qtyDamaged, QTY],
+        [17, totals.qtySampling, QTY],
+        [18, totals.qtyNonSaleable, QTY],
+        [19, totals.qtyBBD, QTY],
+        [20, totals.qtyTotal, QTY],
+        [21, totals.valDamaged, INR],
+        [22, totals.valSampling, INR],
+        [23, totals.valNonSaleable, INR],
+        [24, totals.valBBD, INR],
         [25, totals.valTotalInclGst, INR],
         [26, totals.valTotalExclGst, INR],
       ];
@@ -534,11 +552,11 @@ export function ReportsModule() {
       for (let c = 27; c <= 32; c++) setCell(totRow, c, '', { fill: C.TOTAL, border });
 
       // ── Download ──────────────────────────────────────────────────────────
-      const buf  = await wb.xlsx.writeBuffer();
+      const buf = await wb.xlsx.writeBuffer();
       const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-      const url  = URL.createObjectURL(blob);
+      const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
-      link.href     = url;
+      link.href = url;
       link.download = `CombinedAuditReport_${new Date().toISOString().split('T')[0]}.xlsx`;
       document.body.appendChild(link);
       link.click();
@@ -568,6 +586,17 @@ export function ReportsModule() {
   }
 
   // ── UI ─────────────────────────────────────────────────────────────────────
+  // Table columns follow the same rule as the exports: only categories with quantity.
+  const TABLE_CAT_DEFS = [
+    { key: 'damage' as const, short: 'Dmg', qty: 'qtyDamaged', val: 'valDamaged', color: 'text-indigo-700' },
+    { key: 'nonSaleable' as const, short: 'NS', qty: 'qtyNonSaleable', val: 'valNonSaleable', color: 'text-rose-700' },
+    { key: 'bbd' as const, short: 'BBD', qty: 'qtyBBD', val: 'valBBD', color: 'text-amber-700' },
+  ];
+  const tableKeys = activeCategoryKeys(filteredReportData);
+  const tableCats = TABLE_CAT_DEFS.filter(c => tableKeys.includes(c.key));
+  const tableSingle = tableCats.length <= 1;
+  if (tableCats.length === 0) tableCats.push(TABLE_CAT_DEFS[1]);
+
   return (
     <div className="space-y-8 pb-12">
 
@@ -726,36 +755,36 @@ export function ReportsModule() {
       </div>
 
       {/* Summary cards — reflect filtered totals */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
-        <div className="bg-white p-6 rounded-[2rem] border border-slate-200 shadow-sm flex items-center gap-4">
-          <div className="w-12 h-12 bg-slate-100 rounded-2xl flex items-center justify-center shrink-0">
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 sm:gap-5">
+        <div className="col-span-2 sm:col-span-1 bg-white p-3.5 sm:p-6 rounded-2xl sm:rounded-[2rem] border border-slate-200 shadow-sm flex items-center gap-2.5 sm:gap-4 min-w-0">
+          <div className="w-9 h-9 sm:w-12 sm:h-12 bg-slate-100 rounded-xl sm:rounded-2xl flex items-center justify-center shrink-0">
             <FileText className="text-slate-600" size={22} />
           </div>
           <div>
-            <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Total Line Items</p>
-            <p className="text-2xl font-black text-slate-900">{filteredReportData.length.toLocaleString('en-IN')}</p>
+            <p className="text-[9.5px] sm:text-xs font-bold text-slate-400 uppercase tracking-wide sm:tracking-wider leading-tight">Total Line Items</p>
+            <p className="text-lg sm:text-2xl font-black text-slate-900 truncate">{filteredReportData.length.toLocaleString('en-IN')}</p>
           </div>
         </div>
-        <div className="bg-white p-6 rounded-[2rem] border border-slate-200 shadow-sm flex items-center gap-4">
-          <div className="w-12 h-12 bg-blue-50 rounded-2xl flex items-center justify-center shrink-0">
+        <div className="bg-white p-3.5 sm:p-6 rounded-2xl sm:rounded-[2rem] border border-slate-200 shadow-sm flex items-center gap-2.5 sm:gap-4 min-w-0">
+          <div className="w-9 h-9 sm:w-12 sm:h-12 bg-blue-50 rounded-xl sm:rounded-2xl flex items-center justify-center shrink-0">
             <IndianRupee className="text-blue-600" size={22} />
           </div>
           <div>
-            <p className="text-xs font-bold text-blue-400 uppercase tracking-wider">Total Verified (Incl. GST)</p>
-            <p className="text-2xl font-black text-slate-900">
+            <p className="text-[9.5px] sm:text-xs font-bold text-blue-400 uppercase tracking-wide sm:tracking-wider leading-tight">Total Verified (Incl. GST)</p>
+            <p className="text-lg sm:text-2xl font-black text-slate-900 truncate">
               ₹{totals.valTotalInclGst >= 100000
                 ? `${(totals.valTotalInclGst / 100000).toFixed(2)}L`
                 : totals.valTotalInclGst.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
             </p>
           </div>
         </div>
-        <div className="bg-white p-6 rounded-[2rem] border border-slate-200 shadow-sm flex items-center gap-4">
-          <div className="w-12 h-12 bg-emerald-50 rounded-2xl flex items-center justify-center shrink-0">
+        <div className="bg-white p-3.5 sm:p-6 rounded-2xl sm:rounded-[2rem] border border-slate-200 shadow-sm flex items-center gap-2.5 sm:gap-4 min-w-0">
+          <div className="w-9 h-9 sm:w-12 sm:h-12 bg-emerald-50 rounded-xl sm:rounded-2xl flex items-center justify-center shrink-0">
             <IndianRupee className="text-emerald-600" size={22} />
           </div>
           <div>
-            <p className="text-xs font-bold text-emerald-500 uppercase tracking-wider">Total Verified (Excl. GST)</p>
-            <p className="text-2xl font-black text-slate-900">
+            <p className="text-[9.5px] sm:text-xs font-bold text-emerald-500 uppercase tracking-wide sm:tracking-wider leading-tight">Total Verified (Excl. GST)</p>
+            <p className="text-lg sm:text-2xl font-black text-slate-900 truncate">
               ₹{totals.valTotalExclGst >= 100000
                 ? `${(totals.valTotalExclGst / 100000).toFixed(2)}L`
                 : totals.valTotalExclGst.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
@@ -784,8 +813,12 @@ export function ReportsModule() {
                 {[
                   'Sr', 'Serial No', 'Region', 'Anchor Code', 'Distributor',
                   'Article Code', 'Brand Pack', 'Category',
-                  'Rate (₹)', 'Dmg Qty', 'NS Qty', 'BBD Qty', 'Total Qty',
-                  'Dmg Value', 'NS Value', 'BBD Value', 'Total (Incl GST)',
+                  'Rate (₹)',
+                  ...tableCats.map(c => `${c.short} Qty`),
+                  ...(tableSingle ? [] : ['Total Qty']),
+                  ...(tableSingle
+                    ? [`${tableCats[0].short} Value (Incl GST)`, `${tableCats[0].short} Value (Excl GST)`]
+                    : [...tableCats.map(c => `${c.short} Value`), 'Total (Incl GST)']),
                   'Mfg Date', 'Exp Date', 'Issue', 'Remarks',
                 ].map(h => (
                   <th key={h} className="px-3 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider whitespace-nowrap text-left">
@@ -797,7 +830,7 @@ export function ReportsModule() {
             <tbody className="divide-y divide-slate-50">
               {reportData.length === 0 && !loading ? (
                 <tr>
-                  <td colSpan={21} className="px-6 py-12 text-center text-slate-400">
+                  <td colSpan={12 + tableCats.length * 2 + (tableSingle ? 1 : 2)} className="px-6 py-12 text-center text-slate-400">
                     <BarChart3 size={32} className="mx-auto mb-3 opacity-20" />
                     <p className="font-bold text-sm">No report data available.</p>
                     <p className="text-xs mt-1">There are no signed or closed audits to report on.</p>
@@ -815,14 +848,15 @@ export function ReportsModule() {
                     <td className="px-3 py-2 max-w-[140px] truncate text-slate-700">{row.brandPack}</td>
                     <td className="px-3 py-2 text-slate-500">{row.category || '—'}</td>
                     <td className="px-3 py-2 text-right font-bold text-slate-800">₹{row.rateInclGst.toFixed(2)}</td>
-                    <td className="px-3 py-2 text-center text-indigo-700 font-bold">{row.qtyDamaged || 0}</td>
-                    <td className="px-3 py-2 text-center text-rose-700 font-bold">{row.qtyNonSaleable || 0}</td>
-                    <td className="px-3 py-2 text-center text-amber-700 font-bold">{row.qtyBBD || 0}</td>
-                    <td className="px-3 py-2 text-center font-black text-slate-900">{row.qtyTotal}</td>
-                    <td className="px-3 py-2 text-right text-slate-700">₹{row.valDamaged.toFixed(0)}</td>
-                    <td className="px-3 py-2 text-right text-slate-700">₹{row.valNonSaleable.toFixed(0)}</td>
-                    <td className="px-3 py-2 text-right text-slate-700">₹{row.valBBD.toFixed(0)}</td>
+                    {tableCats.map(c => (
+                      <td key={c.key} className={cn('px-3 py-2 text-center font-bold', c.color)}>{(row as any)[c.qty] || 0}</td>
+                    ))}
+                    {!tableSingle && <td className="px-3 py-2 text-center font-black text-slate-900">{row.qtyTotal}</td>}
+                    {!tableSingle && tableCats.map(c => (
+                      <td key={c.key} className="px-3 py-2 text-right text-slate-700">₹{((row as any)[c.val] || 0).toFixed(0)}</td>
+                    ))}
                     <td className="px-3 py-2 text-right font-black text-emerald-700">₹{row.valTotalInclGst.toFixed(0)}</td>
+                    {tableSingle && <td className="px-3 py-2 text-right text-slate-700">₹{row.valTotalExclGst.toFixed(0)}</td>}
                     <td className="px-3 py-2 text-slate-500 whitespace-nowrap">{row.mfgDate || '—'}</td>
                     <td className="px-3 py-2 text-slate-500 whitespace-nowrap">{row.expDate || '—'}</td>
                     <td className="px-3 py-2 max-w-[120px] truncate text-slate-600">{row.issueDetail || '—'}</td>

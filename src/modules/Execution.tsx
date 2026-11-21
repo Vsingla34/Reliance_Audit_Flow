@@ -11,14 +11,14 @@ import { AddItemModal } from '../components/Execution/AddItemModal';
 import { ChatModal } from '../components/Execution/ChatModal';
 import { saveQueue, getCachedData, setCachedData, fetchCachedDistributors, fetchCachedUsers } from '../supabaseOptimized';
 
-const BUCKET_NAME = 'audit-media'; 
+const BUCKET_NAME = 'audit-media';
 
-export interface AuditTicket extends BaseTicket { 
+export interface AuditTicket extends BaseTicket {
   signOffs?: Record<string, any>;
 }
 
-export interface AuditLineItem extends BaseItem { 
-  qtyDrained?: number; 
+export interface AuditLineItem extends BaseItem {
+  qtyDrained?: number;
   bbdApprovalStatus?: 'none' | 'pending' | 'approved' | 'rejected';
 }
 
@@ -56,22 +56,22 @@ export function ExecutionModule() {
   const cacheKeyTickets = `exec-tickets-${assignmentId}-${profile?.uid || 'anon'}`;
 
   const [tickets, setTickets] = useState<AuditTicket[]>(() => getCachedData<AuditTicket[]>(cacheKeyTickets) || []);
-  const [distributors, setDistributors] = useState<any[]>(() => getCachedData<any[]>(cacheKeyDist) || []); 
+  const [distributors, setDistributors] = useState<any[]>(() => getCachedData<any[]>(cacheKeyDist) || []);
   const [activeTicket, setActiveTicket] = useState<AuditTicket | null>(null);
   const [ticketUsers, setTicketUsers] = useState<{ id: string; name: string; role: string; phone?: string; email?: string }[]>([]);
-  
+
   const [items, setItems] = useState<AuditLineItem[]>([]);
   const itemsRef = useRef<AuditLineItem[]>([]);
   useEffect(() => { itemsRef.current = items; }, [items]);
   const latestEditsRef = useRef<Record<string, AuditLineItem>>({});
-  
+
   const [availableDumpItems, setAvailableDumpItems] = useState<CombinedDumpItem[]>([]);
   const [itemSearchQuery, setItemSearchQuery] = useState('');
-  
+
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isStatusExporting, setIsStatusExporting] = useState(false);
-  const [isBulkUploading, setIsBulkUploading]     = useState(false);
-  const [bulkUploadResult, setBulkUploadResult]   = useState<{ inserted: number; skipped: number; errors: string[] } | null>(null);
+  const [isBulkUploading, setIsBulkUploading] = useState(false);
+  const [bulkUploadResult, setBulkUploadResult] = useState<{ inserted: number; skipped: number; errors: string[] } | null>(null);
   const bulkUploadRef = useRef<HTMLInputElement>(null);
   const [listSearch, setListSearch] = useState('');
   const [isChatOpen, setIsChatOpen] = useState(false);
@@ -82,7 +82,7 @@ export function ExecutionModule() {
   const [isManagingDays, setIsManagingDays] = useState(false);
   const [isDrainageSelfieUploading, setIsDrainageSelfieUploading] = useState(false);
   const drainageSelfieRef = useRef<HTMLInputElement>(null);
-  
+
   const [isUploadingSignoff, setIsUploadingSignoff] = useState(false);
   const signoffFileRef = useRef<HTMLInputElement>(null);
 
@@ -143,7 +143,7 @@ export function ExecutionModule() {
         'Drainage start date', 'Drainage end date', 'Audit Sharing Date', 'Audit Planned Date',
         'Direct/ Indirect Customer', 'ASM Name',
       ];
-      const colWidths = [16,14,16,14,14,10,12,16,18,20,16,16,16,14,14,18,14,16,22,14,14,18,14,14,14];
+      const colWidths = [16, 14, 16, 14, 14, 10, 12, 16, 18, 20, 16, 16, 16, 14, 14, 18, 14, 16, 22, 14, 14, 18, 14, 14, 14];
       ws.columns = colWidths.map(w => ({ width: w }));
       ws.getRow(1).height = 40;
       headers.forEach((h, i) => {
@@ -172,8 +172,8 @@ export function ExecutionModule() {
           d.setDate(d.getDate() + auditDays - 1);
           endDate = d.toISOString().split('T')[0];
         }
-        const verifiedVal   = ticket.verifiedTotal || 0;
-        const approvedVal   = ticket.approvedValue || dist.approvedValue || 0;
+        const verifiedVal = ticket.verifiedTotal || 0;
+        const approvedVal = ticket.approvedValue || dist.approvedValue || 0;
         const diff = verifiedVal - approvedVal;
         const row = [
           dist.assignment_serial_no || '',
@@ -195,8 +195,8 @@ export function ExecutionModule() {
           approvedVal ? (approvedVal / 10000000) : 0,
           ticket.scheduledDate ? new Date(ticket.scheduledDate) : '',
           endDate ? new Date(endDate) : '',
-          (ticket as any).signOffs?.drainageDate    ? new Date((ticket as any).signOffs.drainageDate)    : '',
-          (ticket as any).signOffs?.drainageEndDate  ? new Date((ticket as any).signOffs.drainageEndDate) : '',
+          (ticket as any).signOffs?.drainageDate ? new Date((ticket as any).signOffs.drainageDate) : '',
+          (ticket as any).signOffs?.drainageEndDate ? new Date((ticket as any).signOffs.drainageEndDate) : '',
           '',
           ticket.scheduledDate ? new Date(ticket.scheduledDate) : '',
           'Direct',
@@ -316,12 +316,12 @@ export function ExecutionModule() {
 
     // Sum exactly like Excel — read stored totalValue, sum in paise to avoid JS float drift
     const totalPaise = (data as AuditLineItem[]).reduce((s, i) => s + Math.round((i.totalValue || 0) * 100), 0);
-    const trueTotal  = totalPaise / 100;
+    const trueTotal = totalPaise / 100;
     setActiveTicket(prev => {
       if (!prev) return prev;
       // Only fire DB update if stored verifiedTotal drifted
       if (Math.abs((prev.verifiedTotal || 0) - trueTotal) > 0.01) {
-        supabase.from('auditTickets').update({ verifiedTotal: trueTotal, updatedAt: new Date().toISOString() }).eq('id', ticketId).then(() => {});
+        supabase.from('auditTickets').update({ verifiedTotal: trueTotal, updatedAt: new Date().toISOString() }).eq('id', ticketId).then(() => { });
       }
       return { ...prev, verifiedTotal: trueTotal };
     });
@@ -346,12 +346,12 @@ export function ExecutionModule() {
         const combined = dump.map(d => {
           // Strip commas/spaces before parsing — DB may have stored "472,145.17" as string
           const parseNum = (v: any) => parseFloat(String(v ?? '').replace(/[^0-9.]/g, '')) || 0;
-          const qty  = parseNum(d.quantity);
-          const tv   = parseNum(d.totalValue);
+          const qty = parseNum(d.quantity);
+          const tv = parseNum(d.totalValue);
           // Rate = totalValue ÷ quantity. Falls back to stored d.rate if either is 0.
           const storedRate = parseNum(d.rate);
           const rate = qty > 0 && tv > 0 ? tv / qty : storedRate;
-          return { 
+          return {
             id: d.id, itemCode: d.itemCode, itemName: d.itemName || 'Unknown Item',
             expectedQty: qty, rate, category: d.category || 'Uncategorized',
             billingDate: d.billingDate, plant: d.plant, billingDoc: d.billingDoc,
@@ -373,11 +373,11 @@ export function ExecutionModule() {
 
       // Fetch ASE + auditor + ASM/SM/DM/HO details for this ticket (for email button)
       const dist = distMap[activeTicket.distributorId];
-      const aseIds: string[]     = dist?.aseIds     || [];
-      const asmIds: string[]     = dist?.asmIds     || [];
-      const smIds:  string[]     = dist?.smIds      || [];
-      const dmIds:  string[]     = dist?.dmIds      || [];
-      const hoIds:  string[]     = dist?.hoIds      || [];
+      const aseIds: string[] = dist?.aseIds || [];
+      const asmIds: string[] = dist?.asmIds || [];
+      const smIds: string[] = dist?.smIds || [];
+      const dmIds: string[] = dist?.dmIds || [];
+      const hoIds: string[] = dist?.hoIds || [];
       const auditorIds: string[] = (activeTicket as any).auditorIds || [];
       const allIds = [...new Set([...aseIds, ...asmIds, ...smIds, ...dmIds, ...hoIds, ...auditorIds])].filter(Boolean);
       if (allIds.length > 0) {
@@ -447,7 +447,7 @@ export function ExecutionModule() {
     try {
       await supabase.from('auditTickets').update({ status: newStatus, updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
       setActiveTicket({ ...activeTicket, status: newStatus as any });
-      
+
       const dist = distMap[activeTicket.distributorId];
       logActivity(user, profile, "Status Overridden", `Super Admin manually changed status to ${newStatus.replace('_', ' ')} for ${dist?.name}`);
     } catch (error) {
@@ -457,7 +457,7 @@ export function ExecutionModule() {
 
   const resetAuditTicket = async () => {
     if (!activeTicket) return;
-    
+
     if (!isSuperAdmin) {
       alert("Action Denied: Only Super Admins can reset and completely clear an audit ticket.");
       return;
@@ -467,10 +467,10 @@ export function ExecutionModule() {
 
     try {
       await supabase.from('auditLineItems').delete().eq('ticketId', activeTicket.id);
-      await supabase.from('auditTickets').update({ 
+      await supabase.from('auditTickets').update({
         status: 'tentative', scheduledDate: null as any, signOffs: {}, auditorId: null as any, auditorIds: [], presenceLogs: [], media: [], comments: [], dateProposals: [], verifiedTotal: 0, updatedAt: new Date().toISOString()
       }).eq('id', activeTicket.id);
-      
+
       const dist = distMap[activeTicket.distributorId];
       logActivity(user, profile, "Audit Reset", `Super Admin reset the audit for ${dist?.name} back to Scheduler`);
 
@@ -483,11 +483,11 @@ export function ExecutionModule() {
     if (!activeTicket || !user || !profile) return;
     const newStatus = !activeTicket.signOffs?.whatsappMediaApproved;
     const newSignOffs = { ...(activeTicket.signOffs || {}), whatsappMediaApproved: newStatus };
-    
+
     try {
       await supabase.from('auditTickets').update({ signOffs: newSignOffs, updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
       setActiveTicket({ ...activeTicket, signOffs: newSignOffs });
-      
+
       const dist = distMap[activeTicket.distributorId];
       logActivity(user, profile, "WhatsApp Media Confirmed", `Admin marked WhatsApp audit evidence as ${newStatus ? 'Approved' : 'Pending'} for ${dist?.name}`);
     } catch (error) { console.error("Failed to update WhatsApp approval:", error); }
@@ -498,11 +498,11 @@ export function ExecutionModule() {
     if (!activeTicket || !user || !profile) return;
     const newStatus = !activeTicket.signOffs?.addItemApprovalGranted;
     const newSignOffs = { ...(activeTicket.signOffs || {}), addItemApprovalGranted: newStatus };
-    
+
     try {
       await supabase.from('auditTickets').update({ signOffs: newSignOffs, updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
       setActiveTicket({ ...activeTicket, signOffs: newSignOffs });
-      
+
       const dist = distMap[activeTicket.distributorId];
       logActivity(user, profile, newStatus ? "Add Item Approved" : "Add Item Revoked", `Admin ${newStatus ? 'granted' : 'revoked'} Add Item permission for ${dist?.name}`);
     } catch (error) { console.error("Failed to update Add Item approval:", error); }
@@ -512,11 +512,11 @@ export function ExecutionModule() {
     if (!activeTicket || !user || !profile) return;
     const newStatus = !activeTicket.signOffs?.drainageMediaApproved;
     const newSignOffs = { ...(activeTicket.signOffs || {}), drainageMediaApproved: newStatus };
-    
+
     try {
       await supabase.from('auditTickets').update({ signOffs: newSignOffs, updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
       setActiveTicket({ ...activeTicket, signOffs: newSignOffs });
-      
+
       const dist = distMap[activeTicket.distributorId];
       logActivity(user, profile, "Drainage Media Confirmed", `Admin marked Drainage evidence as ${newStatus ? 'Approved' : 'Pending'} for ${dist?.name}`);
     } catch (error) { console.error("Failed to update Drainage Media approval:", error); }
@@ -530,7 +530,7 @@ export function ExecutionModule() {
       const fileExt = file.name.split('.').pop();
       const fileName = `${activeTicket.id}-signoff-${Date.now()}.${fileExt}`;
       const filePath = `signoffs/${fileName}`;
-      
+
       const { error: uploadError } = await supabase.storage.from(BUCKET_NAME).upload(filePath, file, { upsert: true });
       if (uploadError) throw new Error(uploadError.message);
       const { data: { publicUrl } } = supabase.storage.from(BUCKET_NAME).getPublicUrl(filePath);
@@ -538,7 +538,7 @@ export function ExecutionModule() {
       const newSignOffs = { ...(activeTicket.signOffs || {}), signoffDocumentUrl: publicUrl };
       await supabase.from('auditTickets').update({ signOffs: newSignOffs, updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
       setActiveTicket({ ...activeTicket, signOffs: newSignOffs });
-    } catch (error: any) { alert(`Upload failed: ${error.message}`); } 
+    } catch (error: any) { alert(`Upload failed: ${error.message}`); }
     finally { setIsUploadingSignoff(false); if (signoffFileRef.current) signoffFileRef.current.value = ''; }
   };
 
@@ -546,11 +546,11 @@ export function ExecutionModule() {
     if (!activeTicket || !user || !profile) return;
     const newStatus = !activeTicket.signOffs?.signoffDocumentApproved;
     const newSignOffs = { ...(activeTicket.signOffs || {}), signoffDocumentApproved: newStatus };
-    
+
     try {
       await supabase.from('auditTickets').update({ signOffs: newSignOffs, updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
       setActiveTicket({ ...activeTicket, signOffs: newSignOffs });
-      
+
       const dist = distMap[activeTicket.distributorId];
       logActivity(user, profile, "Sign-off Document Confirmed", `Admin marked physical sign-off sheet as ${newStatus ? 'Approved' : 'Pending'} for ${dist?.name}`);
     } catch (error) { console.error("Failed to update Sign-off approval:", error); }
@@ -558,12 +558,12 @@ export function ExecutionModule() {
 
   const rejectSignoffDocument = async () => {
     if (!activeTicket || !user || !profile) return;
-    
+
     const reason = window.prompt("Please provide a reason for rejecting this sign-off document (this will be logged in the Discussion board):");
-    if (reason === null) return; 
+    if (reason === null) return;
     if (!reason.trim()) {
-       alert("Cancellation aborted: A reason is required to reject the document.");
-       return;
+      alert("Cancellation aborted: A reason is required to reject the document.");
+      return;
     }
 
     try {
@@ -575,32 +575,32 @@ export function ExecutionModule() {
         role: profile.role,
         text: rejectionMessage,
         message: rejectionMessage,
-        content: rejectionMessage, 
+        content: rejectionMessage,
         timestamp: new Date().toISOString()
       };
 
       const newSignOffs = { ...(activeTicket.signOffs || {}), signoffDocumentUrl: null, signoffDocumentApproved: false };
       const updatedComments = [...(activeTicket.comments || []), newComment];
 
-      await supabase.from('auditTickets').update({ 
+      await supabase.from('auditTickets').update({
         signOffs: newSignOffs,
         comments: updatedComments,
-        updatedAt: new Date().toISOString() 
+        updatedAt: new Date().toISOString()
       }).eq('id', activeTicket.id);
-      
-      setActiveTicket({ 
-        ...activeTicket, 
+
+      setActiveTicket({
+        ...activeTicket,
         signOffs: newSignOffs,
-        comments: updatedComments 
+        comments: updatedComments
       });
-      
+
       const dist = distMap[activeTicket.distributorId];
       logActivity(user, profile, "Sign-off Rejected", `Admin rejected physical sign-off sheet for ${dist?.name}. Reason: "${reason}"`);
       notifyLinkedUsers(activeTicket.distributorId, "Sign-off Rejected", `The Sign-off Document for ${dist?.name} was rejected. Reason: "${reason}". Please upload a new copy.`);
-      
+
       alert("Document rejected successfully. The reason has been posted to the discussion board.");
-    } catch (error) { 
-      console.error("Failed to reject Sign-off document:", error); 
+    } catch (error) {
+      console.error("Failed to reject Sign-off document:", error);
       alert("Failed to reject the document.");
     }
   };
@@ -648,70 +648,70 @@ export function ExecutionModule() {
     const updatedItem = { ...oldItem, [field]: value };
 
     if (['qtyNonSaleable', 'qtyBBD', 'qtyDamaged'].includes(field)) {
-       updatedItem.quantity   = (Number(updatedItem.qtyNonSaleable) || 0) + (Number(updatedItem.qtyBBD) || 0) + (Number(updatedItem.qtyDamaged) || 0);
-       updatedItem.totalValue = Math.round(updatedItem.quantity * (updatedItem.unitValue || 0) * 100) / 100;
+      updatedItem.quantity = (Number(updatedItem.qtyNonSaleable) || 0) + (Number(updatedItem.qtyBBD) || 0) + (Number(updatedItem.qtyDamaged) || 0);
+      updatedItem.totalValue = Math.round(updatedItem.quantity * (updatedItem.unitValue || 0) * 100) / 100;
     }
 
     if (field === 'unitValue') {
-       const newRate = Number(value) || 0;
-       updatedItem.unitValue  = newRate;
-       // Always recompute qty from individual components to avoid stale quantity field
-       const trueQty = (Number(updatedItem.qtyNonSaleable) || 0) + (Number(updatedItem.qtyBBD) || 0) + (Number(updatedItem.qtyDamaged) || 0)
-                    || (Number(updatedItem.quantity) || 0);
-       updatedItem.quantity   = trueQty;
-       updatedItem.totalValue = Math.round(trueQty * newRate * 100) / 100;
+      const newRate = Number(value) || 0;
+      updatedItem.unitValue = newRate;
+      // Always recompute qty from individual components to avoid stale quantity field
+      const trueQty = (Number(updatedItem.qtyNonSaleable) || 0) + (Number(updatedItem.qtyBBD) || 0) + (Number(updatedItem.qtyDamaged) || 0)
+        || (Number(updatedItem.quantity) || 0);
+      updatedItem.quantity = trueQty;
+      updatedItem.totalValue = Math.round(trueQty * newRate * 100) / 100;
     }
 
     if (field === 'mfgDate' || field === 'expDate') {
-       if (updatedItem.mfgDate && updatedItem.expDate) {
-         const m = new Date(updatedItem.mfgDate);
-         const eDate = new Date(updatedItem.expDate);
-         if (!isNaN(m.getTime()) && !isNaN(eDate.getTime())) {
-           const diffDays = Math.ceil((eDate.getTime() - m.getTime()) / (1000 * 60 * 60 * 24));
-           updatedItem.productLife = `${diffDays} Days`;
-         } else { updatedItem.productLife = '-'; }
-       } else { updatedItem.productLife = '-'; }
+      if (updatedItem.mfgDate && updatedItem.expDate) {
+        const m = new Date(updatedItem.mfgDate);
+        const eDate = new Date(updatedItem.expDate);
+        if (!isNaN(m.getTime()) && !isNaN(eDate.getTime())) {
+          const diffDays = Math.ceil((eDate.getTime() - m.getTime()) / (1000 * 60 * 60 * 24));
+          updatedItem.productLife = `${diffDays} Days`;
+        } else { updatedItem.productLife = '-'; }
+      } else { updatedItem.productLife = '-'; }
     }
-    
+
     if (field === 'mfgDate' && value && activeTicket?.scheduledDate && !isAdminOrSuperadmin) {
-        const mfgDateObj = new Date(value);
-        const auditDateObj = new Date(activeTicket.scheduledDate);
-        mfgDateObj.setHours(0,0,0,0);
-        auditDateObj.setHours(0,0,0,0);
-        if (mfgDateObj > auditDateObj) {
-            alert("Manufacturing Date cannot be in the future.");
-            if (e && e.target) e.target.value = oldItem[field] || ''; 
-            return;
-        }
+      const mfgDateObj = new Date(value);
+      const auditDateObj = new Date(activeTicket.scheduledDate);
+      mfgDateObj.setHours(0, 0, 0, 0);
+      auditDateObj.setHours(0, 0, 0, 0);
+      if (mfgDateObj > auditDateObj) {
+        alert("Manufacturing Date cannot be in the future.");
+        if (e && e.target) e.target.value = oldItem[field] || '';
+        return;
+      }
     }
     // NOTE: exp/mfg date cross-validation moved to saveInlineEdit (onBlur)
     // so it doesn't fire mid-keystroke and revert a partially-typed date.
 
     const currentExp = field === 'expDate' ? value : updatedItem.expDate;
     if (currentExp && activeTicket?.scheduledDate) {
-        const expDateObj = new Date(currentExp);
-        const auditDateObj = new Date(activeTicket.scheduledDate);
-        expDateObj.setHours(0,0,0,0);
-        auditDateObj.setHours(0,0,0,0);
-        
-        if (expDateObj > auditDateObj) {
-            if (isAdminOrSuperadmin) {
-              updatedItem.bbdApprovalStatus = 'approved';
-            } else if (oldItem.bbdApprovalStatus !== 'pending' && oldItem.bbdApprovalStatus !== 'approved') {
-              const confirmMsg = `WARNING: You selected a date (${currentExp}) that is BEYOND the scheduled audit date.\n\nFuture dates cannot be recorded without Admin Approval.\n\nDo you want to request special Admin Approval to allow this exception? Click OK to request, or Cancel to revert.`;
-              if (!window.confirm(confirmMsg)) {
-                 if (e && e.target) e.target.value = oldItem[field] || ''; 
-                 return;
-              }
-              updatedItem.bbdApprovalStatus = 'pending';
-            } else {
-               updatedItem.bbdApprovalStatus = oldItem.bbdApprovalStatus;
-            }
+      const expDateObj = new Date(currentExp);
+      const auditDateObj = new Date(activeTicket.scheduledDate);
+      expDateObj.setHours(0, 0, 0, 0);
+      auditDateObj.setHours(0, 0, 0, 0);
+
+      if (expDateObj > auditDateObj) {
+        if (isAdminOrSuperadmin) {
+          updatedItem.bbdApprovalStatus = 'approved';
+        } else if (oldItem.bbdApprovalStatus !== 'pending' && oldItem.bbdApprovalStatus !== 'approved') {
+          const confirmMsg = `WARNING: You selected a date (${currentExp}) that is BEYOND the scheduled audit date.\n\nFuture dates cannot be recorded without Admin Approval.\n\nDo you want to request special Admin Approval to allow this exception? Click OK to request, or Cancel to revert.`;
+          if (!window.confirm(confirmMsg)) {
+            if (e && e.target) e.target.value = oldItem[field] || '';
+            return;
+          }
+          updatedItem.bbdApprovalStatus = 'pending';
         } else {
-            updatedItem.bbdApprovalStatus = 'none';
+          updatedItem.bbdApprovalStatus = oldItem.bbdApprovalStatus;
         }
-    } else {
+      } else {
         updatedItem.bbdApprovalStatus = 'none';
+      }
+    } else {
+      updatedItem.bbdApprovalStatus = 'none';
     }
 
     latestEditsRef.current[id] = updatedItem;
@@ -729,27 +729,27 @@ export function ExecutionModule() {
   // saveQueue also guards against realtime echoes overwriting in-progress edits.
   const saveInlineEdit = useCallback(async (id: string) => {
     if (!activeTicket) return;
-    
+
     const itemToSave = latestEditsRef.current[id] || itemsRef.current.find(i => i.id === id);
     if (!itemToSave) return;
 
     // ── Date validation on blur (after user finishes typing) ──────────────
     if (itemToSave.expDate && itemToSave.mfgDate && itemToSave.expDate < itemToSave.mfgDate) {
-        alert(`Expiry date (${itemToSave.expDate}) cannot be before Manufacturing date (${itemToSave.mfgDate}). Please correct it.`);
-        return; // don't save — let user fix the date, value stays as typed
+      alert(`Expiry date (${itemToSave.expDate}) cannot be before Manufacturing date (${itemToSave.mfgDate}). Please correct it.`);
+      return; // don't save — let user fix the date, value stays as typed
     }
 
     // Always recompute qty and totalValue from source fields before saving
     // This prevents stale values going to DB when only rate was changed
     const trueQty = (Number(itemToSave.qtyNonSaleable) || 0)
-                  + (Number(itemToSave.qtyBBD)          || 0)
-                  + (Number(itemToSave.qtyDamaged)       || 0)
-                  || (Number(itemToSave.quantity)         || 0);
-    const trueRate  = Number(itemToSave.unitValue) || 0;
+      + (Number(itemToSave.qtyBBD) || 0)
+      + (Number(itemToSave.qtyDamaged) || 0)
+      || (Number(itemToSave.quantity) || 0);
+    const trueRate = Number(itemToSave.unitValue) || 0;
     const trueValue = Math.round(trueQty * trueRate * 100) / 100;
 
     // Patch itemToSave with corrected values
-    itemToSave.quantity   = trueQty;
+    itemToSave.quantity = trueQty;
     itemToSave.totalValue = trueValue;
 
     const newVerifiedTotal = itemsRef.current.reduce(
@@ -762,16 +762,16 @@ export function ExecutionModule() {
 
     try {
       // Schedule via queue — merges burst edits, defers until 600ms after last change
-      await saveQueue.schedule(id, { 
-        quantity:          trueQty, 
-        qtyNonSaleable:    itemToSave.qtyNonSaleable,
-        qtyBBD:            itemToSave.qtyBBD,
-        qtyDamaged:        itemToSave.qtyDamaged,
-        totalValue:        trueValue,
-        unitValue:         trueRate,
-        mfgDate:           itemToSave.mfgDate,
-        expDate:           itemToSave.expDate,
-        productLife:       itemToSave.productLife,
+      await saveQueue.schedule(id, {
+        quantity: trueQty,
+        qtyNonSaleable: itemToSave.qtyNonSaleable,
+        qtyBBD: itemToSave.qtyBBD,
+        qtyDamaged: itemToSave.qtyDamaged,
+        totalValue: trueValue,
+        unitValue: trueRate,
+        mfgDate: itemToSave.mfgDate,
+        expDate: itemToSave.expDate,
+        productLife: itemToSave.productLife,
         bbdApprovalStatus: itemToSave.bbdApprovalStatus || 'none',
       });
     } catch (error) { console.error(error); }
@@ -783,9 +783,9 @@ export function ExecutionModule() {
 
     let val: number | string = parseInt(value);
     if (isNaN(val)) val = '';
-    else if (val > oldItem.quantity) val = oldItem.quantity; 
+    else if (val > oldItem.quantity) val = oldItem.quantity;
     else if (val < 0) val = 0;
-    
+
     const updatedItem = { ...oldItem, qtyDrained: val as number };
     latestEditsRef.current[id] = updatedItem;
 
@@ -821,13 +821,13 @@ export function ExecutionModule() {
       const newTotalQty = (Number(item.qtyNonSaleable) || 0) + 0 + (Number(item.qtyDamaged) || 0);
       const newTotalValue = newTotalQty * item.unitValue;
 
-      await supabase.from('auditLineItems').update({ 
-        qtyBBD: 0, 
-        quantity: newTotalQty, 
-        totalValue: newTotalValue, 
-        bbdApprovalStatus: 'rejected' 
+      await supabase.from('auditLineItems').update({
+        qtyBBD: 0,
+        quantity: newTotalQty,
+        totalValue: newTotalValue,
+        bbdApprovalStatus: 'rejected'
       }).eq('id', item.id);
-      
+
       setItems(prev => prev.map(i => i.id === item.id ? { ...i, qtyBBD: 0, quantity: newTotalQty, totalValue: newTotalValue, bbdApprovalStatus: 'rejected' } : i));
       logActivity(user, profile, "Future Expiry Rejected", `Admin rejected exception for future expiry date on ${item.articleNumber}. BBD quantity reset to 0.`);
     } catch (e) { console.error(e); }
@@ -869,7 +869,7 @@ export function ExecutionModule() {
           if (h) tmp[h] = colNum;
         });
         // Check if this row contains an article-like column
-        const articleKeys = ['articleno','articlenumber','materialno','material','itemcode','article'];
+        const articleKeys = ['articleno', 'articlenumber', 'materialno', 'material', 'itemcode', 'article'];
         if (articleKeys.some(k => tmp[k] !== undefined)) {
           Object.assign(headers, tmp);
           headerRowNum = tryRow;
@@ -887,16 +887,16 @@ export function ExecutionModule() {
         return null;
       };
 
-      const articleCol   = col(['ArticleNo','ArticleNumber','MaterialNo','Material','ItemCode','Article']);
-      const soldToCol    = col(['SoldToParty','SoldTo','DistributorCode','Distributor']);
-      const dmgCol       = col(['PrimaryDamage','Damaged','Damage','Dmg','QtyDamaged']);
-      const nsCol        = col(['NonSaleable','NonSaleableProduct','NS','QtyNonSaleable','NonManufacturing']);
-      const bbdCol       = col(['BBD','BBDStock','Expired','QtyBBD','BBDQty']);
-      const mfgCol       = col(['MfgDate','ManufacturingDate','MFGDate','Mfg Date','Mfg']);
-      const expCol       = col(['ExpDate','ExpiryDate','EXPDate','BBDDate','Exp Date','Exp']);
-      const descCol      = col(['Description','BrandPack','ItemName','Name']);
-      const rateCol      = col(['Rate','UnitValue','Price']);
-      const remarksCol   = col(['Remarks','Remark','Comment','Note']);
+      const articleCol = col(['ArticleNo', 'ArticleNumber', 'MaterialNo', 'Material', 'ItemCode', 'Article']);
+      const soldToCol = col(['SoldToParty', 'SoldTo', 'DistributorCode', 'Distributor']);
+      const dmgCol = col(['PrimaryDamage', 'Damaged', 'Damage', 'Dmg', 'QtyDamaged']);
+      const nsCol = col(['NonSaleable', 'NonSaleableProduct', 'NS', 'QtyNonSaleable', 'NonManufacturing']);
+      const bbdCol = col(['BBD', 'BBDStock', 'Expired', 'QtyBBD', 'BBDQty']);
+      const mfgCol = col(['MfgDate', 'ManufacturingDate', 'MFGDate', 'Mfg Date', 'Mfg']);
+      const expCol = col(['ExpDate', 'ExpiryDate', 'EXPDate', 'BBDDate', 'Exp Date', 'Exp']);
+      const descCol = col(['Description', 'BrandPack', 'ItemName', 'Name']);
+      const rateCol = col(['Rate', 'UnitValue', 'Price']);
+      const remarksCol = col(['Remarks', 'Remark', 'Comment', 'Note']);
 
       if (!articleCol) throw new Error(`Column "ArticleNo" not found. Header row detected at row ${headerRowNum}. Found columns: ${Object.keys(headers).join(', ')}`);
 
@@ -905,9 +905,9 @@ export function ExecutionModule() {
       const distCode = dist?.code?.trim().toLowerCase() || '';
 
       let inserted = 0;
-      let skipped  = 0;
+      let skipped = 0;
       const errors: string[] = [];
-      const inserts: any[]   = [];
+      const inserts: any[] = [];
 
       ws.eachRow((row, rowNum) => {
         if (rowNum <= headerRowNum) return; // skip title, instructions, header rows
@@ -934,13 +934,13 @@ export function ExecutionModule() {
         }
 
         // Quantities — default 0
-        const qDmg  = Math.max(0, Math.round(Number(getCellVal(dmgCol)) || 0));
-        const qNs   = Math.max(0, Math.round(Number(getCellVal(nsCol))  || 0));
-        const qBbd  = Math.max(0, Math.round(Number(getCellVal(bbdCol)) || 0));
-        const qTot  = Math.max(0, Math.round(Number(getCellVal(col(['Quantity','TotalQuantity','Qty','Total']))) || 0));
+        const qDmg = Math.max(0, Math.round(Number(getCellVal(dmgCol)) || 0));
+        const qNs = Math.max(0, Math.round(Number(getCellVal(nsCol)) || 0));
+        const qBbd = Math.max(0, Math.round(Number(getCellVal(bbdCol)) || 0));
+        const qTot = Math.max(0, Math.round(Number(getCellVal(col(['Quantity', 'TotalQuantity', 'Qty', 'Total']))) || 0));
         // If split columns are all zero but a Total Quantity is given, treat it as Non-Saleable
         const splitTotal = qDmg + qNs + qBbd;
-        const effectiveNs  = splitTotal === 0 && qTot > 0 ? qTot : qNs;
+        const effectiveNs = splitTotal === 0 && qTot > 0 ? qTot : qNs;
         const total = qDmg + effectiveNs + qBbd;
 
         if (total === 0) { skipped++; return; } // nothing to insert
@@ -1120,25 +1120,25 @@ export function ExecutionModule() {
 
     // Column definitions
     ws.columns = [
-      { header: 'SoldToParty',   key: 'SoldToParty',   width: 16 },
-      { header: 'ArticleNo',     key: 'ArticleNo',      width: 18 },
-      { header: 'Description',   key: 'Description',    width: 32 },
-      { header: 'SystemQty',     key: 'SystemQty',      width: 14 },
-      { header: 'PrimaryDamage', key: 'PrimaryDamage',  width: 16 },
-      { header: 'NonSaleable',   key: 'NonSaleable',    width: 16 },
-      { header: 'BBD',           key: 'BBD',            width: 14 },
-      { header: 'MfgDate',       key: 'MfgDate',        width: 14 },
-      { header: 'ExpDate',       key: 'ExpDate',        width: 14 },
-      { header: 'Remarks',       key: 'Remarks',        width: 28 },
+      { header: 'SoldToParty', key: 'SoldToParty', width: 16 },
+      { header: 'ArticleNo', key: 'ArticleNo', width: 18 },
+      { header: 'Description', key: 'Description', width: 32 },
+      { header: 'SystemQty', key: 'SystemQty', width: 14 },
+      { header: 'PrimaryDamage', key: 'PrimaryDamage', width: 16 },
+      { header: 'NonSaleable', key: 'NonSaleable', width: 16 },
+      { header: 'BBD', key: 'BBD', width: 14 },
+      { header: 'MfgDate', key: 'MfgDate', width: 14 },
+      { header: 'ExpDate', key: 'ExpDate', width: 14 },
+      { header: 'Remarks', key: 'Remarks', width: 28 },
     ];
 
     // Cols 1-4 = locked, Cols 5-10 = editable (qty + dates + remarks)
-    const LOCKED_COLS   = new Set([1, 2, 3, 4]);
+    const LOCKED_COLS = new Set([1, 2, 3, 4]);
     const EDITABLE_COLS = new Set([5, 6, 7, 8, 9, 10]);
 
     // ── Header row (row 1) ─────────────────────────────────────────────────
     ws.getRow(1).eachCell((cell, colNum) => {
-      cell.font      = { bold: true };
+      cell.font = { bold: true };
       cell.protection = { locked: true };
       // Light green tint on editable header cols so user knows what to fill
       if (EDITABLE_COLS.has(colNum)) {
@@ -1151,33 +1151,33 @@ export function ExecutionModule() {
     // ── Data rows ───────────────────────────────────────────────────────────
     dumpRows.forEach(item => {
       const row = ws.addRow({
-        SoldToParty:   distCode,
-        ArticleNo:     item.itemCode,
-        Description:   item.itemName,
-        SystemQty:     item.expectedQty,
+        SoldToParty: distCode,
+        ArticleNo: item.itemCode,
+        Description: item.itemName,
+        SystemQty: item.expectedQty,
         PrimaryDamage: 0,
-        NonSaleable:   0,
-        BBD:           0,
-        MfgDate:       '',
-        ExpDate:       '',
-        Remarks:       '',
+        NonSaleable: 0,
+        BBD: 0,
+        MfgDate: '',
+        ExpDate: '',
+        Remarks: '',
       });
 
       const rowNum = row.number;
       const mfgCell = `H${rowNum}`;  // MfgDate col 8
       const expCell = `I${rowNum}`;  // ExpDate  col 9
       const dmgCell = `E${rowNum}`;  // PrimaryDamage col 5
-      const nsCell  = `F${rowNum}`;  // NonSaleable col 6
+      const nsCell = `F${rowNum}`;  // NonSaleable col 6
       const bbdCell = `G${rowNum}`;  // BBD col 7
 
       row.eachCell({ includeEmpty: true }, (cell, colNum) => {
         if (LOCKED_COLS.has(colNum)) {
           cell.protection = { locked: true };
-          cell.fill       = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF2F2F2' } };
-          cell.font       = { color: { argb: 'FF555555' } };
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF2F2F2' } };
+          cell.font = { color: { argb: 'FF555555' } };
         } else {
           cell.protection = { locked: false };
-          cell.fill       = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFFFF' } };
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFFFF' } };
         }
       });
 
@@ -1186,16 +1186,16 @@ export function ExecutionModule() {
       // Qty columns: must be whole numbers >= 0
       for (const cellAddr of [dmgCell, nsCell, bbdCell]) {
         ws.getCell(cellAddr).dataValidation = {
-          type:             'whole',
-          operator:         'greaterThanOrEqual',
-          formulae:         [0],
+          type: 'whole',
+          operator: 'greaterThanOrEqual',
+          formulae: [0],
           showErrorMessage: true,
-          errorStyle:       'stop',
-          errorTitle:       'Invalid Quantity',
-          error:            'Quantity must be a whole number 0 or greater.',
+          errorStyle: 'stop',
+          errorTitle: 'Invalid Quantity',
+          error: 'Quantity must be a whole number 0 or greater.',
           showInputMessage: true,
-          promptTitle:      cellAddr.startsWith('E') ? 'Primary Damage' : cellAddr.startsWith('F') ? 'Non-Saleable' : 'BBD / Expired',
-          prompt:           cellAddr.startsWith('G')
+          promptTitle: cellAddr.startsWith('E') ? 'Primary Damage' : cellAddr.startsWith('F') ? 'Non-Saleable' : 'BBD / Expired',
+          prompt: cellAddr.startsWith('G')
             ? 'BBD qty. Exp date must be on or before audit date.'
             : 'Enter verified quantity.',
         };
@@ -1204,16 +1204,16 @@ export function ExecutionModule() {
       // MfgDate: must be a valid date, must be before ExpDate
       // Excel formula: AND(ISNUMBER(H2), H2 < I2) — enforced via custom formula
       ws.getCell(mfgCell).dataValidation = {
-        type:             'date',
-        operator:         'lessThan',
-        formulae:         [new Date(activeTicket!.scheduledDate || new Date().toISOString())],
+        type: 'date',
+        operator: 'lessThan',
+        formulae: [new Date(activeTicket!.scheduledDate || new Date().toISOString())],
         showErrorMessage: true,
-        errorStyle:       'stop',
-        errorTitle:       'Invalid Mfg Date',
-        error:            'Manufacturing date must be before the audit date.',
+        errorStyle: 'stop',
+        errorTitle: 'Invalid Mfg Date',
+        error: 'Manufacturing date must be before the audit date.',
         showInputMessage: true,
-        promptTitle:      'Manufacturing Date',
-        prompt:           'Enter date in DD-MM-YYYY format. e.g. 15-03-2025',
+        promptTitle: 'Manufacturing Date',
+        prompt: 'Enter date in DD-MM-YYYY format. e.g. 15-03-2025',
       };
       ws.getCell(mfgCell).numFmt = 'DD-MM-YYYY';
 
@@ -1223,52 +1223,52 @@ export function ExecutionModule() {
       // =AND(I2>H2+60, IF(G2>0, I2<=auditDate, TRUE))
       const auditDateSerial = activeTicket?.scheduledDate
         ? (() => {
-            const d = new Date(activeTicket.scheduledDate);
-            // Excel date serial: days since 1900-01-01 (with 1900 leap year bug)
-            return Math.floor((d.getTime() - new Date('1899-12-30').getTime()) / 86400000);
-          })()
+          const d = new Date(activeTicket.scheduledDate);
+          // Excel date serial: days since 1900-01-01 (with 1900 leap year bug)
+          return Math.floor((d.getTime() - new Date('1899-12-30').getTime()) / 86400000);
+        })()
         : 47000;
 
       ws.getCell(expCell).dataValidation = {
-        type:             'custom',
-        formulae:         [`=AND(${expCell}>${mfgCell}+60,IF(${bbdCell}>0,${expCell}<=${auditDateSerial},TRUE))`],
+        type: 'custom',
+        formulae: [`=AND(${expCell}>${mfgCell}+60,IF(${bbdCell}>0,${expCell}<=${auditDateSerial},TRUE))`],
         showErrorMessage: true,
-        errorStyle:       'stop',
-        errorTitle:       'Invalid Expiry Date',
-        error:            `Expiry date must be:\n• More than 60 days after Mfg date\n• On or before audit date if BBD qty > 0\n• (Primary Damage & Non-Saleable may have future dates)`,
+        errorStyle: 'stop',
+        errorTitle: 'Invalid Expiry Date',
+        error: `Expiry date must be:\n• More than 60 days after Mfg date\n• On or before audit date if BBD qty > 0\n• (Primary Damage & Non-Saleable may have future dates)`,
         showInputMessage: true,
-        promptTitle:      'Expiry Date',
-        prompt:           'Must be 60+ days after Mfg date. BBD items: must be ≤ audit date. Primary Damage & Non-Saleable: future dates allowed. Format: DD-MM-YYYY e.g. 15-03-2026',
+        promptTitle: 'Expiry Date',
+        prompt: 'Must be 60+ days after Mfg date. BBD items: must be ≤ audit date. Primary Damage & Non-Saleable: future dates allowed. Format: DD-MM-YYYY e.g. 15-03-2026',
       };
       ws.getCell(expCell).numFmt = 'DD-MM-YYYY';
       // Remarks dropdown — Primary Damage: "Sending Invoice", Non-Saleable: damage reasons
       const remarkCell = `J${rowNum}`;
       ws.getCell(remarkCell).dataValidation = {
-        type:             'list',
-        formulae:         ['"Sending Invoice,Damaged Bottles/Cans,Label Damage,Packaging Defects,Leakage"'],
+        type: 'list',
+        formulae: ['"Sending Invoice,Damaged Bottles/Cans,Label Damage,Packaging Defects,Leakage"'],
         showErrorMessage: true,
-        errorStyle:       'warning',
-        errorTitle:       'Invalid Remark',
-        error:            'Please select from the dropdown list.',
+        errorStyle: 'warning',
+        errorTitle: 'Invalid Remark',
+        error: 'Please select from the dropdown list.',
         showInputMessage: true,
-        promptTitle:      'Remarks',
-        prompt:           'Primary Damage → "Sending Invoice". Non-Saleable → select damage reason.',
+        promptTitle: 'Remarks',
+        prompt: 'Primary Damage → "Sending Invoice". Non-Saleable → select damage reason.',
       };
       ws.getCell(remarkCell).protection = { locked: false };
-      ws.getCell(remarkCell).fill       = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF9F0' } };
+      ws.getCell(remarkCell).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF9F0' } };
     });
 
     // ── Protect the sheet — locked cells = read-only, unlocked = editable ──
     ws.protect('', {
-      selectLockedCells:   true,
+      selectLockedCells: true,
       selectUnlockedCells: true,
-      formatCells:         false,
-      formatColumns:       false,
-      formatRows:          false,
-      insertRows:          true,   // allow adding new rows
-      deleteRows:          false,
-      sort:                false,
-      autoFilter:          false,
+      formatCells: false,
+      formatColumns: false,
+      formatRows: false,
+      insertRows: true,   // allow adding new rows
+      deleteRows: false,
+      sort: false,
+      autoFilter: false,
     });
 
     // ── Add 20 blank editable rows at the bottom for manual new items ────────
@@ -1276,7 +1276,7 @@ export function ExecutionModule() {
       const blankRow = ws.addRow(['', '', '', '', 0, 0, 0, '', '', '']);
       blankRow.eachCell({ includeEmpty: true }, (cell, colNum) => {
         cell.protection = { locked: false };
-        cell.fill       = { type: 'pattern', pattern: 'solid', fgColor: { argb: colNum >= 5 ? 'FFFFF9F0' : 'FFFFFFFF' } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colNum >= 5 ? 'FFFFF9F0' : 'FFFFFFFF' } };
         if (colNum >= 5 && colNum <= 7) cell.numFmt = '#,##0';
         if (colNum >= 8) cell.numFmt = 'DD-MM-YYYY';
       });
@@ -1284,25 +1284,25 @@ export function ExecutionModule() {
 
     // ── Attendance Sheet (matches Sign-off "Mandays details" format + Check-in/out) ──
     const wsAtt = wb.addWorksheet('Attendance Sheet');
-    wsAtt.columns = [6,20,14,14,12,12,10,10,12].map(w => ({ width: w }));
+    wsAtt.columns = [6, 20, 14, 14, 12, 12, 10, 10, 12].map(w => ({ width: w }));
 
     const thinB = { top: { style: 'thin' as const }, bottom: { style: 'thin' as const }, left: { style: 'thin' as const }, right: { style: 'thin' as const } };
     const hdrFill = { type: 'pattern' as const, pattern: 'solid' as const, fgColor: { argb: 'FFD9E1F2' } };
 
     // Title row
     wsAtt.getRow(1).getCell(1).value = 'Mandays details (Do mention date wise/Auditor Wise details)';
-    wsAtt.getRow(1).getCell(1).font  = { name: 'Arial', bold: true, size: 10 };
+    wsAtt.getRow(1).getCell(1).font = { name: 'Arial', bold: true, size: 10 };
 
     // Header row — same as sign-off + Check-in / Check-out
     const attHeaders = ['Day', 'Name of Auditor', 'Auditor no.', 'Date of audit', 'Check-in Time', 'Check-out Time', 'In Time', 'Out Time', 'Total Mandays', 'Counting/Drainage'];
-    wsAtt.columns = [6,20,14,14,12,12,10,10,12,14].map(w => ({ width: w }));
+    wsAtt.columns = [6, 20, 14, 14, 12, 12, 10, 10, 12, 14].map(w => ({ width: w }));
     wsAtt.getRow(2).height = 25;
     attHeaders.forEach((h, i) => {
       const cell = wsAtt.getRow(2).getCell(i + 1);
-      cell.value     = h;
-      cell.font      = { name: 'Arial', bold: true, size: 9 };
-      cell.fill      = hdrFill;
-      cell.border    = thinB;
+      cell.value = h;
+      cell.font = { name: 'Arial', bold: true, size: 9 };
+      cell.fill = hdrFill;
+      cell.border = thinB;
       cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
     });
 
@@ -1313,13 +1313,13 @@ export function ExecutionModule() {
       wsAtt.getRow(r).height = 20;
       const cell1 = wsAtt.getRow(r).getCell(1);
       cell1.value = d;
-      cell1.font  = { name: 'Arial', size: 9 };
+      cell1.font = { name: 'Arial', size: 9 };
       cell1.alignment = { horizontal: 'center', vertical: 'middle' };
       cell1.border = thinB;
       for (let c = 2; c <= attHeaders.length; c++) {
         const cell = wsAtt.getRow(r).getCell(c);
         cell.value = '';
-        cell.font  = { name: 'Arial', size: 9 };
+        cell.font = { name: 'Arial', size: 9 };
         cell.border = thinB;
         cell.alignment = { horizontal: 'center', vertical: 'middle' };
       }
@@ -1327,18 +1327,18 @@ export function ExecutionModule() {
 
     // Footer labels
     const footerStart = 2 + totalDays + 2;
-    wsAtt.getRow(footerStart).getCell(1).value     = `Distributor: ${dist?.name || ''}`;
-    wsAtt.getRow(footerStart).getCell(1).font      = { name: 'Arial', bold: true, size: 10 };
+    wsAtt.getRow(footerStart).getCell(1).value = `Distributor: ${dist?.name || ''}`;
+    wsAtt.getRow(footerStart).getCell(1).font = { name: 'Arial', bold: true, size: 10 };
     wsAtt.getRow(footerStart + 1).getCell(1).value = 'Sales Team:';
-    wsAtt.getRow(footerStart + 1).getCell(1).font  = { name: 'Arial', size: 10 };
+    wsAtt.getRow(footerStart + 1).getCell(1).font = { name: 'Arial', size: 10 };
     wsAtt.getRow(footerStart + 2).getCell(1).value = 'Auditor:';
-    wsAtt.getRow(footerStart + 2).getCell(1).font  = { name: 'Arial', size: 10 };
+    wsAtt.getRow(footerStart + 2).getCell(1).font = { name: 'Arial', size: 10 };
 
-    const buf  = await wb.xlsx.writeBuffer();
+    const buf = await wb.xlsx.writeBuffer();
     const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement('a');
-    a.href     = url;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
     const safeDistName = (dist?.name || distCode || 'Audit').replace(/[\\/:*?"<>|]/g, '-');
     a.download = `AuditUpload_${safeDistName}_${activeTicket?.scheduledDate || 'draft'}.xlsx`;
     document.body.appendChild(a);
@@ -1349,26 +1349,26 @@ export function ExecutionModule() {
 
   const setDrainageDate = async () => {
     if (!activeTicket || !drainageDateInput) return;
-    
+
     const newSignOffs = { ...(activeTicket.signOffs || {}), drainageDate: drainageDateInput, ...(drainageEndDateInput ? { drainageEndDate: drainageEndDateInput } : {}) };
     await supabase.from('auditTickets').update({ signOffs: newSignOffs, updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
     setActiveTicket({ ...activeTicket, signOffs: newSignOffs });
-    
+
     const dist = distMap[activeTicket.distributorId];
     logActivity(user, profile, "Drainage Scheduled", `Drainage date set to ${drainageDateInput} for ${dist?.name}`);
-    
+
     alert("Drainage date saved successfully!");
   };
 
   const startAudit = async (ticket: AuditTicket) => {
     try {
-      const { error } = await supabase.from('auditTickets').update({ 
+      const { error } = await supabase.from('auditTickets').update({
         status: 'in_progress',
         updatedAt: new Date().toISOString()
       }).eq('id', ticket.id);
-      
+
       if (error) throw error;
-      
+
       logActivity(user, profile, "Audit Started", `Auditor started execution for ${distMap[ticket.distributorId]?.name}`);
       setActiveTicket({ ...ticket, status: 'in_progress' });
     } catch (error) {
@@ -1378,20 +1378,20 @@ export function ExecutionModule() {
 
   const submitByAuditor = async () => {
     if (!activeTicket) return;
-    
+
     const hasPendingItems = items.some(i => i.bbdApprovalStatus === 'pending');
     if (hasPendingItems) {
-       alert("You have items marked as Expired that have future expiry dates. An Admin must approve these exceptions before you can submit the audit.");
-       return;
+      alert("You have items marked as Expired that have future expiry dates. An Admin must approve these exceptions before you can submit the audit.");
+      return;
     }
 
     if (!activeTicket.signOffs?.whatsappMediaApproved || !activeTicket.signOffs?.signoffDocumentApproved) {
-       alert("WhatsApp Evidence and Physical Sign-off must be approved by an Admin before submitting.");
-       return;
+      alert("WhatsApp Evidence and Physical Sign-off must be approved by an Admin before submitting.");
+      return;
     }
 
     await supabase.from('auditTickets').update({ status: 'auditor_submitted', updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
-    
+
     const dist = distMap[activeTicket.distributorId];
     logActivity(user, profile, "Audit Count Completed", `Auditor submitted count for ${dist?.name}`);
 
@@ -1400,14 +1400,14 @@ export function ExecutionModule() {
 
   const rejectByASE = async () => {
     if (!activeTicket || !user || !profile) return;
-    
+
     const reason = window.prompt("Please provide a reason for rejecting this audit count (this will be logged in the Discussion):");
-    if (reason === null) return; 
+    if (reason === null) return;
     if (!reason.trim()) { alert("A reason is required to reject the audit."); return; }
 
     try {
       const rejectionMessage = `🚨 Audit Rejected: ${reason}`;
-      
+
       const newComment = {
         id: Math.random().toString(36).substring(7),
         userId: user.id,
@@ -1415,24 +1415,24 @@ export function ExecutionModule() {
         role: profile.role,
         text: rejectionMessage,
         message: rejectionMessage,
-        content: rejectionMessage, 
+        content: rejectionMessage,
         timestamp: new Date().toISOString()
       };
 
       const updatedComments = [...(activeTicket.comments || []), newComment];
 
-      await supabase.from('auditTickets').update({ 
-        status: 'in_progress', 
-        comments: updatedComments,
-        updatedAt: new Date().toISOString() 
-      }).eq('id', activeTicket.id);
-      
-      setActiveTicket({ 
-        ...activeTicket, 
+      await supabase.from('auditTickets').update({
         status: 'in_progress',
-        comments: updatedComments 
+        comments: updatedComments,
+        updatedAt: new Date().toISOString()
+      }).eq('id', activeTicket.id);
+
+      setActiveTicket({
+        ...activeTicket,
+        status: 'in_progress',
+        comments: updatedComments
       });
-      
+
       const dist = distMap[activeTicket.distributorId];
       logActivity(user, profile, "Audit Rejected", `${profile.role.toUpperCase()} rejected the audit count for ${dist?.name}. Reason: "${reason}"`);
 
@@ -1446,7 +1446,7 @@ export function ExecutionModule() {
   const submitByASE = async () => {
     if (!activeTicket) return;
     await supabase.from('auditTickets').update({ status: 'submitted', updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
-    
+
     const dist = distMap[activeTicket.distributorId];
     logActivity(user, profile, "Audit Verified", `${profile?.role.toUpperCase()} verified audit for ${dist?.name} and requested sign-offs`);
 
@@ -1455,16 +1455,16 @@ export function ExecutionModule() {
 
   const signOff = async (roleRequired: 'auditor' | 'ase' | 'distributor') => {
     if (!activeTicket || !user || !profile) return;
-    
-    if (profile.role !== roleRequired && !isAdminOrSuperadmin) { 
-      alert(`Action Denied: Must be an ${roleRequired.toUpperCase()} or Admin to sign.`); 
-      return; 
+
+    if (profile.role !== roleRequired && !isAdminOrSuperadmin) {
+      alert(`Action Denied: Must be an ${roleRequired.toUpperCase()} or Admin to sign.`);
+      return;
     }
-    
+
     const signOffData: SignOff = { userId: user.id, name: profile.name, timestamp: new Date().toISOString() };
     const signOffs = { ...(activeTicket.signOffs || {}), [roleRequired]: signOffData };
     const allSigned = signOffs.auditor && signOffs.ase && signOffs.distributor;
-    
+
     const newStatus = allSigned ? 'drainage_pending' : activeTicket.status;
 
     // Auto-set qtyDrained = quantity for all items when entering drainage phase
@@ -1478,7 +1478,7 @@ export function ExecutionModule() {
     }
 
     await supabase.from('auditTickets').update({ signOffs, status: newStatus, updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
-    
+
     const dist = distMap[activeTicket.distributorId];
     logActivity(user, profile, "Audit Signed Off", `${profile.role.toUpperCase()} signed off on behalf of ${roleRequired.toUpperCase()} for ${dist?.name}`);
 
@@ -1496,7 +1496,7 @@ export function ExecutionModule() {
     if (drainageSelfieRef.current) drainageSelfieRef.current.value = '';
     setIsDrainageSelfieUploading(true);
     try {
-      const ext  = file.name.split('.').pop();
+      const ext = file.name.split('.').pop();
       const path = `drainage/${activeTicket.id}/selfie-${Date.now()}.${ext}`;
       const { error: upErr } = await supabase.storage.from('audit-media').upload(path, file, { upsert: true });
       if (upErr) throw upErr;
@@ -1541,7 +1541,7 @@ export function ExecutionModule() {
   const filteredItems = useMemo(() => {
     if (!itemSearchQuery.trim()) return items;
     const lowerQuery = itemSearchQuery.toLowerCase();
-    return items.filter(item => 
+    return items.filter(item =>
       (item.articleNumber && item.articleNumber.toLowerCase().includes(lowerQuery)) ||
       (item.description && item.description.toLowerCase().includes(lowerQuery))
     );
@@ -1554,29 +1554,29 @@ export function ExecutionModule() {
     const d = distMap[activeTicket.distributorId];
     if (!d) return undefined;
     return {
-      id:                  d.id,
-      code:                d.code                || '',
-      name:                d.name                || '',
-      anchorName:          d.anchorName          || '',
-      address:             d.address             || '',
-      city:                d.city                || '',
-      state:               d.state               || '',
-      region:              d.region              || '',
-      approvedValue:       d.approvedValue       || 0,
+      id: d.id,
+      code: d.code || '',
+      name: d.name || '',
+      anchorName: d.anchorName || '',
+      address: d.address || '',
+      city: d.city || '',
+      state: d.state || '',
+      region: d.region || '',
+      approvedValue: d.approvedValue || 0,
       assignment_serial_no: d.assignment_serial_no || '',
-      aseIds:              d.aseIds              || [],
-      asmIds:              d.asmIds              || [],
-      smIds:               d.smIds               || [],
-      dmIds:               d.dmIds               || [],
-      hoIds:               d.hoIds               || [],
-      active:              d.active,
+      aseIds: d.aseIds || [],
+      asmIds: d.asmIds || [],
+      smIds: d.smIds || [],
+      dmIds: d.dmIds || [],
+      hoIds: d.hoIds || [],
+      active: d.active,
     };
   })() : undefined;
   const { exportSignOff, isExporting, exportClaimPDF, isExportingPDF, exportALFPDF, isExportingALF } = useSignOffExport({
     distributor: activeTicketDist,
     audit: {
-      id:            activeTicket?.id ?? '',
-      serialNo:      activeTicketDist?.assignment_serial_no || activeTicket?.signOffs?.auditSerialNo || activeTicket?.id || '',
+      id: activeTicket?.id ?? '',
+      serialNo: activeTicketDist?.assignment_serial_no || activeTicket?.signOffs?.auditSerialNo || activeTicket?.id || '',
       scheduledDate: activeTicket?.scheduledDate ?? null,
       // auditEndDate: last scheduled day (scheduledDate + auditDays - 1)
       auditEndDate: (() => {
@@ -1586,44 +1586,41 @@ export function ExecutionModule() {
         d.setDate(d.getDate() + days - 1);
         return d.toISOString().split('T')[0];
       })(),
-      drainageDate:    activeTicket?.signOffs?.drainageDate    ?? null,
+      drainageDate: activeTicket?.signOffs?.drainageDate ?? null,
       drainageEndDate: activeTicket?.signOffs?.drainageEndDate ?? null,
       approvedValue: activeTicket?.approvedValue || distMap[activeTicket?.distributorId || '']?.approvedValue || 0,
       verifiedTotal: activeTicket?.verifiedTotal ?? 0,
-      // Pull auditor name from the assigned auditors list
-      auditorName: (() => {
-        const ids = (activeTicket as any)?.auditorIds as string[] | undefined;
-        if (!ids || ids.length === 0) return 'Singla Vishal & Co.';
-        return 'Singla Vishal & Co.';
-      })(),
+      auditorName: 'Singla Vishal & Co.',
+      // Auditor user ids → names/mobile numbers on the Attendance + summary sheets
+      auditorIds: ((activeTicket as any)?.auditorIds as string[] | undefined) || ((activeTicket as any)?.auditorId ? [(activeTicket as any).auditorId] : []),
       asmName: activeTicketDist
         ? (() => {
-            // asmName not directly in ticket — leave blank for manual fill
-            return '';
-          })()
+          // asmName not directly in ticket — leave blank for manual fill
+          return '';
+        })()
         : '',
     },
     items: items.map(i => {
-      const qty   = (i.qtyDamaged || 0) + (i.qtyNonSaleable || 0) + (i.qtyBBD || 0) || i.quantity || 0;
+      const qty = (i.qtyDamaged || 0) + (i.qtyNonSaleable || 0) + (i.qtyBBD || 0) || i.quantity || 0;
       const total = qty * (i.unitValue || 0);
       return {
-        articleNumber:  i.articleNumber,
-        description:    i.description,
-        quantity:       qty,
-        totalValue:     i.totalValue || total,
-        qtyDamaged:     i.qtyDamaged     || 0,
+        articleNumber: i.articleNumber,
+        description: i.description,
+        quantity: qty,
+        totalValue: i.totalValue || total,
+        qtyDamaged: i.qtyDamaged || 0,
         qtyNonSaleable: i.qtyNonSaleable || 0,
-        qtyBBD:         i.qtyBBD         || 0,
-        qtySampling:    0,
-        unitValue:      i.unitValue       || 0,
-        mfgDate:        i.mfgDate    || '',
-        expDate:        i.expDate    || '',
-        productLife:    i.productLife || '',
-        reasonCode:     i.reasonCode  || '',
-        remarks:        i.remarks     || '',
-        gst:            (dumpItemMap[i.articleNumber] as any)?.gst          || 0,
-        standardPack:   (dumpItemMap[i.articleNumber] as any)?.standardPack || '',
-        category:       (dumpItemMap[i.articleNumber] as any)?.category      || i.category || '',
+        qtyBBD: i.qtyBBD || 0,
+        qtySampling: 0,
+        unitValue: i.unitValue || 0,
+        mfgDate: i.mfgDate || '',
+        expDate: i.expDate || '',
+        productLife: i.productLife || '',
+        reasonCode: i.reasonCode || '',
+        remarks: i.remarks || '',
+        gst: (dumpItemMap[i.articleNumber] as any)?.gst || 0,
+        standardPack: (dumpItemMap[i.articleNumber] as any)?.standardPack || '',
+        category: (dumpItemMap[i.articleNumber] as any)?.category || i.category || '',
       };
     }),
   });
@@ -1638,7 +1635,7 @@ export function ExecutionModule() {
 
     // addItemApprovalGranted gates only the manual/unlisted item path inside the modal
     const addItemApprovalGranted = activeTicket.signOffs?.addItemApprovalGranted === true;
-    
+
     // SuperAdmin has full edit access regardless of other gates
     const canEditItems = isSuperAdmin
       ? activeTicket.status === 'in_progress' && !isClosedPhase
@@ -1680,8 +1677,8 @@ export function ExecutionModule() {
 
     // Sends to the selected recipients
     const sendVarianceEmail = () => {
-      const approved  = effectiveApprovedValue;
-      const verified  = activeTicket.verifiedTotal || 0;
+      const approved = effectiveApprovedValue;
+      const verified = activeTicket.verifiedTotal || 0;
       const variancePct = approved > 0 ? ((verified - approved) / approved) * 100 : 0;
       const variancePctStr = variancePct.toFixed(2) + '%';
       const serialNo = (activeTicket as any).serialNo || (activeTicket as any).assignment_serial_no || dist?.assignment_serial_no || '';
@@ -1690,16 +1687,16 @@ export function ExecutionModule() {
 
       const subject = `Variance Between Audited Value and Approved Value-'${serialNo}-${distName}'`;
 
-      const bVariance    = toBoldUnicode(variancePctStr);
-      const bAuditedLbl  = toBoldUnicode('Audited Value');
-      const bAuditedVal  = toBoldUnicode('₹' + verified.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+      const bVariance = toBoldUnicode(variancePctStr);
+      const bAuditedLbl = toBoldUnicode('Audited Value');
+      const bAuditedVal = toBoldUnicode('₹' + verified.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
       const bApprovedLbl = toBoldUnicode('Approved Value');
       const bApprovedVal = toBoldUnicode('₹' + approved.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
-      const bDistInfo    = toBoldUnicode(`at ${distName} (Distributor Code`);
-      const bFirm        = toBoldUnicode('Singla Vishal & Co.');
+      const bDistInfo = toBoldUnicode(`at ${distName} (Distributor Code`);
+      const bFirm = toBoldUnicode('Singla Vishal & Co.');
 
       const body =
-`Dear Team,
+        `Dear Team,
 
 This is to inform you that a variance of ${bVariance} has been observed between the ${bAuditedLbl} (${bAuditedVal}) and the ${bApprovedLbl} (${bApprovedVal}) ${bDistInfo}: ${distCodeForMail}) during the audit process.
 
@@ -1714,10 +1711,10 @@ ${bFirm}`;
         .filter(u => selectedEmailUserIds.has(u.id) && u.email)
         .map(u => u.email as string);
 
-      const mailto   = `mailto:${uniqueEmails.join(',')}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+      const mailto = `mailto:${uniqueEmails.join(',')}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
       const gmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(uniqueEmails.join(','))}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 
-      navigator.clipboard?.writeText(`To: ${uniqueEmails.join(', ')}\nSubject: ${subject}\n\n${body}`).catch(() => {});
+      navigator.clipboard?.writeText(`To: ${uniqueEmails.join(', ')}\nSubject: ${subject}\n\n${body}`).catch(() => { });
 
       const a = document.createElement('a');
       a.href = mailto;
@@ -1741,7 +1738,7 @@ ${bFirm}`;
           <button onClick={handleCloseTicket} className="flex items-center gap-2 text-sm font-bold text-slate-500 hover:text-black transition-colors w-fit">
             <ArrowLeft size={16} /> Back to List
           </button>
-          
+
           <div className="flex flex-wrap items-center gap-2 sm:gap-3">
             {isAdminOrSuperadmin && (
               <div className="flex items-center gap-2 bg-white border border-slate-200 px-3 py-2 rounded-xl shadow-sm w-full sm:w-auto">
@@ -1852,7 +1849,7 @@ ${bFirm}`;
             {ticketUsers.length > 0 && (
               <div className="flex flex-col gap-2 bg-slate-50 border border-slate-200 rounded-2xl px-4 py-3 min-w-[180px] max-w-[260px]">
                 {(() => {
-                  const ases     = ticketUsers.filter(u => u.role === 'ase');
+                  const ases = ticketUsers.filter(u => u.role === 'ase');
                   const auditors = ticketUsers.filter(u => u.role === 'auditor');
                   const renderUser = (u: typeof ticketUsers[0], label: string, color: string) => (
                     <div key={u.id} className="flex flex-col">
@@ -1874,11 +1871,11 @@ ${bFirm}`;
                 })()}
               </div>
             )}
-            
+
             <div className="flex flex-col items-start md:items-end gap-2 w-full md:w-auto bg-slate-50 md:bg-transparent p-4 md:p-0 rounded-2xl md:rounded-none border md:border-none border-slate-100">
               <div className="text-left md:text-right w-full">
                 <p className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-slate-400 mb-1">Total Verified Value</p>
-                <p className="text-2xl sm:text-3xl font-black text-emerald-600">₹{(activeTicket.verifiedTotal || 0).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</p>
+                <p className="text-2xl sm:text-3xl font-black text-emerald-600">₹{(activeTicket.verifiedTotal || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
               </div>
               <div className="w-full max-w-full md:max-w-[200px] h-2 bg-slate-200 md:bg-slate-100 rounded-full overflow-hidden mt-1">
                 <div className={cn("h-full rounded-full transition-all", percentUsed > 100 ? "bg-rose-500" : percentUsed > 90 ? "bg-amber-500" : "bg-emerald-500")} style={{ width: `${Math.min(percentUsed, 100)}%` }} />
@@ -1911,7 +1908,7 @@ ${bFirm}`;
               <div><h4 className="font-bold text-indigo-900 text-sm sm:text-base">Awaiting ASE Review</h4><p className="text-xs sm:text-sm text-indigo-800 mt-1">The Auditor has completed their count. This audit is currently locked waiting for the ASE to review the counts.</p></div>
             </div>
           )}
-          
+
           {activeTicket.status === 'submitted' && !isClosedPhase && (
             <div className="mb-6 sm:mb-8 p-4 sm:p-5 bg-amber-50 border border-amber-100 rounded-xl sm:rounded-2xl flex items-start gap-3 sm:gap-4">
               <FileText className="text-amber-600 shrink-0 mt-0.5" size={20} />
@@ -1945,7 +1942,7 @@ ${bFirm}`;
                     {/* Drainage Selfie Upload — one box per drainage day */}
                     {(() => {
                       const startDate = activeTicket.signOffs?.drainageDate;
-                      const endDate   = activeTicket.signOffs?.drainageEndDate || startDate;
+                      const endDate = activeTicket.signOffs?.drainageEndDate || startDate;
                       if (!startDate) return null;
 
                       // Build list of all drainage days between start and end
@@ -1993,7 +1990,7 @@ ${bFirm}`;
                                       e.target.value = '';
                                       setIsDrainageSelfieUploading(true);
                                       try {
-                                        const ext  = file.name.split('.').pop();
+                                        const ext = file.name.split('.').pop();
                                         const path = `drainage/${activeTicket.id}/selfie-${day}-${Date.now()}.${ext}`;
                                         const { error: upErr } = await supabase.storage.from('audit-media').upload(path, file, { upsert: true });
                                         if (upErr) throw upErr;
@@ -2085,16 +2082,16 @@ ${bFirm}`;
 
           <div className="space-y-6 sm:space-y-8 w-full min-w-0">
             <div className="w-full min-w-0">
-              
+
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 md:gap-4 mb-4 w-full">
                 <h4 className="font-bold text-base sm:text-lg flex items-center gap-2 shrink-0 text-slate-900"><ClipboardCheck className="text-indigo-600" size={20} /> Audit Line Items</h4>
-                
+
                 <div className="flex flex-col sm:flex-row items-center gap-3 w-full md:w-auto flex-1 md:justify-end">
                   <div className="relative w-full sm:w-64 md:w-72">
                     <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-                    <input 
-                      type="text" 
-                      placeholder="Search article no or desc..." 
+                    <input
+                      type="text"
+                      placeholder="Search article no or desc..."
                       className="w-full pl-9 pr-3 py-2 sm:py-2.5 bg-white border border-slate-200 rounded-xl text-xs sm:text-sm font-medium focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all shadow-sm placeholder:text-slate-400"
                       value={itemSearchQuery}
                       onChange={(e) => setItemSearchQuery(e.target.value)}
@@ -2132,8 +2129,8 @@ ${bFirm}`;
                         }
                       </button>
                       {/* Manual Add */}
-                      <button 
-                        onClick={() => setIsAddModalOpen(true)} 
+                      <button
+                        onClick={() => setIsAddModalOpen(true)}
                         className="w-full sm:w-auto flex justify-center items-center gap-2 px-6 py-2.5 sm:py-2.5 rounded-xl text-sm font-bold transition-all shadow-md active:scale-95 whitespace-nowrap bg-slate-900 text-white hover:bg-slate-800"
                       >
                         <Plus size={18} /> Add Item
@@ -2142,7 +2139,7 @@ ${bFirm}`;
                   )}
                 </div>
               </div>
-              
+
               {/* Bulk upload result banner */}
               {bulkUploadResult && (
                 <div className={cn(
@@ -2159,7 +2156,7 @@ ${bFirm}`;
                     <div>
                       <p>
                         {bulkUploadResult.inserted > 0 && `✅ ${bulkUploadResult.inserted} articles inserted. `}
-                        {bulkUploadResult.skipped  > 0 && `⏭ ${bulkUploadResult.skipped} rows skipped (zero qty or different distributor). `}
+                        {bulkUploadResult.skipped > 0 && `⏭ ${bulkUploadResult.skipped} rows skipped (zero qty or different distributor). `}
                         {bulkUploadResult.errors.map((e, i) => <span key={i} className="text-rose-700">❌ {e}</span>)}
                       </p>
                     </div>
@@ -2204,7 +2201,7 @@ ${bFirm}`;
                               <p className="font-bold text-slate-900">{item.articleNumber}</p>
                               <p className="text-[9px] sm:text-[10px] text-slate-500 truncate max-w-[120px] sm:max-w-[150px] font-medium">{item.description}</p>
                             </td>
-                            
+
                             <td className="px-3 py-3 sm:py-4 text-center bg-slate-50/30 border-x border-slate-100">
                               {isFirstInstance ? (
                                 <span className="font-mono text-slate-500 font-semibold">{systemQty}</span>
@@ -2212,7 +2209,6 @@ ${bFirm}`;
                                 <span className="font-mono text-slate-300 font-bold" title="Split Row">↳</span>
                               )}
                             </td>
-                            
                             <td className="px-3 py-3 sm:py-4 text-center bg-indigo-50/10 border-r border-indigo-50">
                               {canEditItems ? <input type="number" min="0" value={item.qtyDamaged || ''} onChange={(e) => handleInlineChange(item.id, 'qtyDamaged', e.target.value, e)} onBlur={() => saveInlineEdit(item.id)} className="w-12 text-center bg-white border border-slate-200 text-xs font-bold rounded-lg px-1 py-2 sm:py-1.5 focus:ring-2 focus:ring-indigo-500 outline-none text-indigo-700 shadow-sm" placeholder="0" /> : <span className="font-bold text-indigo-700">{item.qtyDamaged}</span>}
                             </td>
@@ -2220,29 +2216,29 @@ ${bFirm}`;
                             <td className="px-3 py-3 sm:py-4 text-center bg-rose-50/10 border-r border-rose-50">
                               {canEditItems ? <input type="number" min="0" value={item.qtyNonSaleable || ''} onChange={(e) => handleInlineChange(item.id, 'qtyNonSaleable', e.target.value, e)} onBlur={() => saveInlineEdit(item.id)} className="w-12 text-center bg-white border border-slate-200 text-xs font-bold rounded-lg px-1 py-2 sm:py-1.5 focus:ring-2 focus:ring-rose-500 outline-none text-rose-700 shadow-sm" placeholder="0" /> : <span className="font-bold text-rose-700">{item.qtyNonSaleable}</span>}
                             </td>
-                            
+
                             <td className="px-3 py-3 sm:py-4 text-center bg-amber-50/10 border-r border-amber-50 relative align-top">
                               {canEditItems ? (
-                                 <input 
-                                    type="number" min="0" value={item.qtyBBD || ''} 
-                                    onChange={(e) => handleInlineChange(item.id, 'qtyBBD', e.target.value, e)} 
-                                    onBlur={() => saveInlineEdit(item.id)} 
-                                    className={cn("w-12 text-center bg-white border text-xs font-bold rounded-lg px-1 py-2 sm:py-1.5 focus:outline-none transition-colors shadow-sm", item.bbdApprovalStatus === 'pending' ? "border-rose-400 ring-2 ring-rose-400 text-rose-700" : "border-slate-200 focus:ring-2 focus:ring-amber-500 text-amber-700")} 
-                                    placeholder="0"
-                                 />
+                                <input
+                                  type="number" min="0" value={item.qtyBBD || ''}
+                                  onChange={(e) => handleInlineChange(item.id, 'qtyBBD', e.target.value, e)}
+                                  onBlur={() => saveInlineEdit(item.id)}
+                                  className={cn("w-12 text-center bg-white border text-xs font-bold rounded-lg px-1 py-2 sm:py-1.5 focus:outline-none transition-colors shadow-sm", item.bbdApprovalStatus === 'pending' ? "border-rose-400 ring-2 ring-rose-400 text-rose-700" : "border-slate-200 focus:ring-2 focus:ring-amber-500 text-amber-700")}
+                                  placeholder="0"
+                                />
                               ) : (
-                                 <span className="font-bold text-amber-700">{item.qtyBBD}</span>
+                                <span className="font-bold text-amber-700">{item.qtyBBD}</span>
                               )}
-                              
-                              {item.bbdApprovalStatus === 'pending' && <div className="mt-1.5 flex flex-col items-center justify-center gap-1 text-[9px] leading-tight text-rose-600 font-black uppercase tracking-wider"><AlertCircle size={10}/> Pending Admin</div>}
-                              {item.bbdApprovalStatus === 'rejected' && <div className="mt-1.5 flex items-center justify-center gap-1 text-[9px] text-rose-600 font-black uppercase tracking-wider"><X size={10}/> Rejected</div>}
-                              {item.bbdApprovalStatus === 'approved' && <div className="mt-1.5 flex items-center justify-center gap-1 text-[9px] text-emerald-600 font-black uppercase tracking-wider"><CheckCircle2 size={10}/> Approved</div>}
-                              
+
+                              {item.bbdApprovalStatus === 'pending' && <div className="mt-1.5 flex flex-col items-center justify-center gap-1 text-[9px] leading-tight text-rose-600 font-black uppercase tracking-wider"><AlertCircle size={10} /> Pending Admin</div>}
+                              {item.bbdApprovalStatus === 'rejected' && <div className="mt-1.5 flex items-center justify-center gap-1 text-[9px] text-rose-600 font-black uppercase tracking-wider"><X size={10} /> Rejected</div>}
+                              {item.bbdApprovalStatus === 'approved' && <div className="mt-1.5 flex items-center justify-center gap-1 text-[9px] text-emerald-600 font-black uppercase tracking-wider"><CheckCircle2 size={10} /> Approved</div>}
+
                               {isAdminOrSuperadmin && item.bbdApprovalStatus === 'pending' && !isClosedPhase && (
-                                 <div className="flex gap-1.5 justify-center mt-2.5">
-                                    <button onClick={() => approveBBDItem(item)} className="text-emerald-600 bg-white hover:bg-emerald-50 p-1.5 rounded-md border border-emerald-200 shadow-sm transition-colors" title="Approve Exception"><CheckCircle2 size={12}/></button>
-                                    <button onClick={() => rejectBBDItem(item)} className="text-rose-600 bg-white hover:bg-rose-50 p-1.5 rounded-md border border-rose-200 shadow-sm transition-colors" title="Reject Exception"><X size={12}/></button>
-                                 </div>
+                                <div className="flex gap-1.5 justify-center mt-2.5">
+                                  <button onClick={() => approveBBDItem(item)} className="text-emerald-600 bg-white hover:bg-emerald-50 p-1.5 rounded-md border border-emerald-200 shadow-sm transition-colors" title="Approve Exception"><CheckCircle2 size={12} /></button>
+                                  <button onClick={() => rejectBBDItem(item)} className="text-rose-600 bg-white hover:bg-rose-50 p-1.5 rounded-md border border-rose-200 shadow-sm transition-colors" title="Reject Exception"><X size={12} /></button>
+                                </div>
                               )}
                             </td>
 
@@ -2257,7 +2253,7 @@ ${bFirm}`;
                                 <span className="font-bold text-indigo-700 text-[10px]">{item.mfgDate || '-'}</span>
                               )}
                             </td>
-                            
+
                             <td className="px-3 py-3 sm:py-4 text-center bg-indigo-50/10 border-r border-indigo-50">
                               {canEditItems ? (
                                 <input type="date" max={!isAdminOrSuperadmin ? auditDateString : undefined} value={item.expDate || ''} onChange={(e) => handleInlineChange(item.id, 'expDate', e.target.value, e)} onBlur={() => saveInlineEdit(item.id)} className="w-[100px] sm:w-[110px] text-center bg-white border border-slate-200 text-[10px] font-bold rounded-lg px-1 py-2 sm:py-1.5 focus:ring-2 focus:ring-indigo-500 outline-none text-indigo-700 cursor-pointer shadow-sm" />
@@ -2265,7 +2261,7 @@ ${bFirm}`;
                                 <span className="font-bold text-indigo-700 text-[10px]">{item.expDate || '-'}</span>
                               )}
                             </td>
-                            
+
                             <td className="px-3 py-3 sm:py-4 text-center bg-indigo-50/10 border-r border-indigo-50">
                               <span className="font-bold text-indigo-900 text-[10px] sm:text-xs whitespace-nowrap">{item.productLife || '-'}</span>
                             </td>
@@ -2295,16 +2291,16 @@ ${bFirm}`;
                                 <span>₹{parseFloat(item.unitValue.toFixed(10))}</span>
                               )}
                             </td>
-                            <td className="px-4 py-3 sm:py-4 text-right font-black text-slate-900">₹{item.totalValue.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</td>
+                            <td className="px-4 py-3 sm:py-4 text-right font-black text-slate-900">₹{item.totalValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
 
                             {/* Remarks — required dropdown for Primary Damage / Non-Saleable */}
                             <td className="px-3 py-3 sm:py-4 text-left min-w-[160px]">
                               {(canEditItems || isSuperAdmin) && !isClosedPhase ? (() => {
                                 const hasDmg = (item.qtyDamaged || 0) > 0;
-                                const hasNs  = (item.qtyNonSaleable || 0) > 0;
+                                const hasNs = (item.qtyNonSaleable || 0) > 0;
                                 const needsRemark = hasDmg || hasNs;
                                 const dmgOptions = ['Sending Invoice'];
-                                const nsOptions  = ['Damaged Bottles/Cans', 'Label Damage', 'Packaging Defects', 'Leakage'];
+                                const nsOptions = ['Damaged Bottles/Cans', 'Label Damage', 'Packaging Defects', 'Leakage'];
                                 const options = hasDmg ? dmgOptions : nsOptions;
                                 const missingRemark = needsRemark && !item.remarks;
                                 return (
@@ -2359,7 +2355,7 @@ ${bFirm}`;
 
             {/* --- EVIDENCE AND SIGN OFFS --- */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6 pt-4 border-t border-slate-100 w-full">
-              
+
               <div className="space-y-3 sm:space-y-4">
                 <h4 className="font-bold text-base sm:text-lg text-slate-900">Verification Evidence</h4>
 
@@ -2375,7 +2371,7 @@ ${bFirm}`;
                         <p className="text-[10px] sm:text-xs text-slate-500 font-medium">Admin approval to enable the "Add Unlisted Item" option</p>
                       </div>
                     </div>
-                    
+
                     {isAdminOrSuperadmin ? (
                       <button
                         onClick={toggleAddItemApproval}
@@ -2390,7 +2386,7 @@ ${bFirm}`;
                     )}
                   </div>
                 )}
-                
+
                 <div className="p-4 sm:p-5 bg-white border border-slate-200 shadow-sm rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div className="flex items-center gap-3">
                     <div className={cn("w-10 h-10 sm:w-12 sm:h-12 rounded-[14px] flex items-center justify-center shrink-0 border", activeTicket.signOffs?.whatsappMediaApproved ? "bg-emerald-50 text-emerald-600 border-emerald-100" : "bg-slate-50 text-slate-500 border-slate-200")}>
@@ -2401,7 +2397,7 @@ ${bFirm}`;
                       <p className="text-[10px] sm:text-xs text-slate-500 font-medium">Stock images & large videos</p>
                     </div>
                   </div>
-                  
+
                   {isAdminOrSuperadmin && !isClosedPhase ? (
                     <button onClick={toggleWhatsappApproval} className={cn("w-full sm:w-auto px-4 py-2 text-xs font-bold rounded-xl transition-all active:scale-95", activeTicket.signOffs?.whatsappMediaApproved ? "bg-emerald-600 text-white shadow-lg shadow-emerald-600/20" : "bg-slate-900 text-white hover:bg-slate-800 shadow-md")}>
                       {activeTicket.signOffs?.whatsappMediaApproved ? 'Approved' : 'Mark Received'}
@@ -2450,7 +2446,7 @@ ${bFirm}`;
                       )}
                     </div>
                   </div>
-                  
+
                   <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
                     {!activeTicket.signOffs?.signoffDocumentUrl && (isAuditor || isASE || isAdminOrSuperadmin) && !isClosedPhase && (
                       <>
@@ -2460,11 +2456,11 @@ ${bFirm}`;
                         </button>
                       </>
                     )}
-                    
+
                     {activeTicket.signOffs?.signoffDocumentUrl && isAdminOrSuperadmin && !isClosedPhase ? (
                       <div className="flex items-center gap-2 w-full sm:w-auto">
                         {!activeTicket.signOffs?.signoffDocumentApproved && (
-                           <button onClick={rejectSignoffDocument} className="flex-1 sm:flex-none px-3 py-2 text-xs font-bold rounded-xl transition-all active:scale-95 bg-rose-50 border border-rose-200 text-rose-600 hover:bg-rose-100 shadow-sm">Reject</button>
+                          <button onClick={rejectSignoffDocument} className="flex-1 sm:flex-none px-3 py-2 text-xs font-bold rounded-xl transition-all active:scale-95 bg-rose-50 border border-rose-200 text-rose-600 hover:bg-rose-100 shadow-sm">Reject</button>
                         )}
                         <button onClick={toggleSignoffApproval} className={cn("flex-1 sm:flex-none px-4 py-2 text-xs font-bold rounded-xl transition-all active:scale-95", activeTicket.signOffs?.signoffDocumentApproved ? "bg-emerald-600 text-white shadow-lg shadow-emerald-600/20" : "bg-slate-900 text-white hover:bg-slate-800 shadow-md")}>
                           {activeTicket.signOffs?.signoffDocumentApproved ? 'Approved' : 'Approve'}
@@ -2490,7 +2486,7 @@ ${bFirm}`;
                         <div key={role} className="flex items-center justify-between p-3 sm:p-4 bg-white shadow-sm rounded-xl sm:rounded-2xl border border-slate-200">
                           <div><span className="text-xs sm:text-sm font-bold uppercase tracking-wider text-slate-600">{role}</span></div>
                           {signedData ? <span className="flex items-center gap-1 text-[10px] sm:text-xs font-bold text-emerald-700 bg-emerald-50 px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-lg sm:rounded-xl border border-emerald-100/50"><CheckCircle2 size={12} className="sm:w-[14px] sm:h-[14px]" /> Signed</span>
-                           : <button onClick={() => signOff(role as any)} disabled={!isMyRole || activeTicket.status !== 'submitted' || isClosedPhase} className={cn("px-3 sm:px-4 py-1.5 sm:py-2 text-[10px] sm:text-xs font-bold rounded-lg sm:rounded-xl shadow-sm transition-all", (isMyRole && activeTicket.status === 'submitted' && !isClosedPhase) ? "bg-slate-900 text-white hover:bg-slate-800" : "bg-slate-100 text-slate-400 border border-slate-200/50")}>{isMyRole && !isClosedPhase ? 'Sign Off' : 'Awaiting'}</button>}
+                            : <button onClick={() => signOff(role as any)} disabled={!isMyRole || activeTicket.status !== 'submitted' || isClosedPhase} className={cn("px-3 sm:px-4 py-1.5 sm:py-2 text-[10px] sm:text-xs font-bold rounded-lg sm:rounded-xl shadow-sm transition-all", (isMyRole && activeTicket.status === 'submitted' && !isClosedPhase) ? "bg-slate-900 text-white hover:bg-slate-800" : "bg-slate-100 text-slate-400 border border-slate-200/50")}>{isMyRole && !isClosedPhase ? 'Sign Off' : 'Awaiting'}</button>}
                         </div>
                       );
                     })}
@@ -2508,8 +2504,8 @@ ${bFirm}`;
                     <p>WhatsApp Evidence and Physical Sign-off must be approved by Admin before submitting.</p>
                   </div>
                 )}
-                <button 
-                  onClick={submitByAuditor} 
+                <button
+                  onClick={submitByAuditor}
                   disabled={!canSubmitToAse}
                   className={cn("w-full sm:w-auto flex justify-center items-center gap-2 px-6 sm:px-8 py-3.5 sm:py-4 rounded-xl sm:rounded-2xl font-bold transition-all shadow-xl active:scale-95 text-sm sm:text-base", canSubmitToAse ? "bg-indigo-600 text-white hover:bg-indigo-700 shadow-indigo-600/20" : "bg-slate-100 text-slate-400 cursor-not-allowed shadow-none border border-slate-200")}
                 >
@@ -2536,13 +2532,13 @@ ${bFirm}`;
                     <AlertCircle size={14} /> Drainage Evidence must be marked received before closing.
                   </p>
                 )}
-                <button 
-                  onClick={submitDrainage} 
+                <button
+                  onClick={submitDrainage}
                   disabled={!activeTicket.signOffs?.drainageDate || !activeTicket.signOffs?.drainageMediaApproved}
                   title={
                     !activeTicket.signOffs?.drainageDate ? "Please set a Drainage Date first" :
-                    !activeTicket.signOffs?.drainageMediaApproved ? "Drainage Evidence must be marked received first" :
-                    "Complete Drainage & Close Audit"
+                      !activeTicket.signOffs?.drainageMediaApproved ? "Drainage Evidence must be marked received first" :
+                        "Complete Drainage & Close Audit"
                   }
                   className="w-full sm:w-auto flex justify-center items-center gap-2 px-6 sm:px-8 py-3.5 sm:py-4 bg-cyan-600 text-white rounded-xl sm:rounded-2xl font-bold hover:bg-cyan-700 transition-all shadow-xl shadow-cyan-600/20 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed text-sm sm:text-base"
                 >
@@ -2554,13 +2550,13 @@ ${bFirm}`;
           </div>
         </div>
 
-        <AddItemModal 
-          isOpen={isAddModalOpen} 
-          onClose={() => setIsAddModalOpen(false)} 
-          activeTicket={activeTicket} 
-          distributor={distMap[activeTicket.distributorId]} 
-          availableDumpItems={availableDumpItems} 
-          existingItemCodes={items.map(i => i.articleNumber)} 
+        <AddItemModal
+          isOpen={isAddModalOpen}
+          onClose={() => setIsAddModalOpen(false)}
+          activeTicket={activeTicket}
+          distributor={distMap[activeTicket.distributorId]}
+          availableDumpItems={availableDumpItems}
+          existingItemCodes={items.map(i => i.articleNumber)}
           user={user}
           profile={profile}
           addItemApprovalGranted={addItemApprovalGranted}
@@ -2634,32 +2630,32 @@ ${bFirm}`;
   // ── Search filter across all assignment fields ───────────────────────────
   const displayTickets = listSearch.trim()
     ? baseDisplayTickets.filter(t => {
-        const dist = distMap[t.distributorId];
-        if (!dist) return false;
-        const q = listSearch.toLowerCase();
-        return (
-          // Assignment / serial no
-          (dist.assignment_serial_no || '').toLowerCase().includes(q) ||
-          // Distributor code
-          (dist.code || '').toLowerCase().includes(q) ||
-          // Anchor code
-          (dist.anchorName || '').toLowerCase().includes(q) ||
-          // Distributor name
-          (dist.name || '').toLowerCase().includes(q) ||
-          // City / State / Region
-          (dist.city || '').toLowerCase().includes(q) ||
-          (dist.state || '').toLowerCase().includes(q) ||
-          (dist.region || '').toLowerCase().includes(q) ||
-          // Address
-          (dist.address || '').toLowerCase().includes(q) ||
-          // Status
-          t.status.replace(/_/g, ' ').toLowerCase().includes(q) ||
-          // Scheduled date
-          (t.scheduledDate || '').includes(q) ||
-          // Ticket id
-          t.id.toLowerCase().includes(q)
-        );
-      })
+      const dist = distMap[t.distributorId];
+      if (!dist) return false;
+      const q = listSearch.toLowerCase();
+      return (
+        // Assignment / serial no
+        (dist.assignment_serial_no || '').toLowerCase().includes(q) ||
+        // Distributor code
+        (dist.code || '').toLowerCase().includes(q) ||
+        // Anchor code
+        (dist.anchorName || '').toLowerCase().includes(q) ||
+        // Distributor name
+        (dist.name || '').toLowerCase().includes(q) ||
+        // City / State / Region
+        (dist.city || '').toLowerCase().includes(q) ||
+        (dist.state || '').toLowerCase().includes(q) ||
+        (dist.region || '').toLowerCase().includes(q) ||
+        // Address
+        (dist.address || '').toLowerCase().includes(q) ||
+        // Status
+        t.status.replace(/_/g, ' ').toLowerCase().includes(q) ||
+        // Scheduled date
+        (t.scheduledDate || '').includes(q) ||
+        // Ticket id
+        t.id.toLowerCase().includes(q)
+      );
+    })
     : baseDisplayTickets;
 
   return (
@@ -2668,13 +2664,13 @@ ${bFirm}`;
       {/* Tabs row + Status Report download button */}
       <div className="-mx-4 sm:mx-0 px-4 sm:px-0 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div className="flex bg-slate-100/80 p-1.5 rounded-xl sm:rounded-2xl overflow-x-auto w-full sm:w-fit custom-scrollbar scroll-smooth">
-          <button onClick={() => { setActiveTab('active');    setListSearch(''); }} className={cn("px-4 sm:px-6 py-2.5 sm:py-3 rounded-lg sm:rounded-xl text-xs sm:text-sm font-bold transition-all whitespace-nowrap flex items-center gap-2", activeTab === 'active' ? "bg-white text-indigo-700 shadow-sm border border-slate-200/50" : "text-slate-500 hover:text-slate-900")}>
+          <button onClick={() => { setActiveTab('active'); setListSearch(''); }} className={cn("px-4 sm:px-6 py-2.5 sm:py-3 rounded-lg sm:rounded-xl text-xs sm:text-sm font-bold transition-all whitespace-nowrap flex items-center gap-2", activeTab === 'active' ? "bg-white text-indigo-700 shadow-sm border border-slate-200/50" : "text-slate-500 hover:text-slate-900")}>
             Active <span className={cn("px-1.5 sm:px-2 py-0.5 rounded-md text-[9px] sm:text-[10px]", activeTab === 'active' ? "bg-indigo-50 text-indigo-700" : "bg-slate-200/50 text-slate-500")}>{activeTickets.length}</span>
           </button>
-          <button onClick={() => { setActiveTab('signoff');   setListSearch(''); }} className={cn("px-4 sm:px-6 py-2.5 sm:py-3 rounded-lg sm:rounded-xl text-xs sm:text-sm font-bold transition-all whitespace-nowrap flex items-center gap-2", activeTab === 'signoff' ? "bg-white text-indigo-700 shadow-sm border border-slate-200/50" : "text-slate-500 hover:text-slate-900")}>
+          <button onClick={() => { setActiveTab('signoff'); setListSearch(''); }} className={cn("px-4 sm:px-6 py-2.5 sm:py-3 rounded-lg sm:rounded-xl text-xs sm:text-sm font-bold transition-all whitespace-nowrap flex items-center gap-2", activeTab === 'signoff' ? "bg-white text-indigo-700 shadow-sm border border-slate-200/50" : "text-slate-500 hover:text-slate-900")}>
             Sign-off <span className={cn("px-1.5 sm:px-2 py-0.5 rounded-md text-[9px] sm:text-[10px]", activeTab === 'signoff' ? "bg-indigo-50 text-indigo-700" : "bg-slate-200/50 text-slate-500")}>{signoffTickets.length}</span>
           </button>
-          <button onClick={() => { setActiveTab('drainage');  setListSearch(''); }} className={cn("px-4 sm:px-6 py-2.5 sm:py-3 rounded-lg sm:rounded-xl text-xs sm:text-sm font-bold transition-all whitespace-nowrap flex items-center gap-2", activeTab === 'drainage' ? "bg-white text-indigo-700 shadow-sm border border-slate-200/50" : "text-slate-500 hover:text-slate-900")}>
+          <button onClick={() => { setActiveTab('drainage'); setListSearch(''); }} className={cn("px-4 sm:px-6 py-2.5 sm:py-3 rounded-lg sm:rounded-xl text-xs sm:text-sm font-bold transition-all whitespace-nowrap flex items-center gap-2", activeTab === 'drainage' ? "bg-white text-indigo-700 shadow-sm border border-slate-200/50" : "text-slate-500 hover:text-slate-900")}>
             Drainage <span className="hidden sm:inline">Pending</span> <span className={cn("px-1.5 sm:px-2 py-0.5 rounded-md text-[9px] sm:text-[10px]", activeTab === 'drainage' ? "bg-indigo-50 text-indigo-700" : "bg-slate-200/50 text-slate-500")}>{drainageTickets.length}</span>
           </button>
           <button onClick={() => { setActiveTab('completed'); setListSearch(''); }} className={cn("px-4 sm:px-6 py-2.5 sm:py-3 rounded-lg sm:rounded-xl text-xs sm:text-sm font-bold transition-all whitespace-nowrap flex items-center gap-2", activeTab === 'completed' ? "bg-white text-indigo-700 shadow-sm border border-slate-200/50" : "text-slate-500 hover:text-slate-900")}>
@@ -2778,12 +2774,12 @@ ${bFirm}`;
 
                   // Status badge config
                   const statusConfig: Record<string, { label: string; cls: string }> = {
-                    scheduled:         { label: 'Scheduled',        cls: 'bg-blue-50 text-blue-700 border-blue-100' },
-                    in_progress:       { label: 'In Progress',      cls: 'bg-indigo-50 text-indigo-700 border-indigo-100' },
-                    auditor_submitted: { label: 'ASE Review',       cls: 'bg-amber-50 text-amber-700 border-amber-100' },
-                    submitted:         { label: 'Pending Sign-off', cls: 'bg-purple-50 text-purple-700 border-purple-100' },
-                    drainage_pending:  { label: 'Drainage Pending', cls: 'bg-cyan-50 text-cyan-700 border-cyan-100' },
-                    closed:            { label: 'Closed',           cls: 'bg-emerald-50 text-emerald-700 border-emerald-100' },
+                    scheduled: { label: 'Scheduled', cls: 'bg-blue-50 text-blue-700 border-blue-100' },
+                    in_progress: { label: 'In Progress', cls: 'bg-indigo-50 text-indigo-700 border-indigo-100' },
+                    auditor_submitted: { label: 'ASE Review', cls: 'bg-amber-50 text-amber-700 border-amber-100' },
+                    submitted: { label: 'Pending Sign-off', cls: 'bg-purple-50 text-purple-700 border-purple-100' },
+                    drainage_pending: { label: 'Drainage Pending', cls: 'bg-cyan-50 text-cyan-700 border-cyan-100' },
+                    closed: { label: 'Closed', cls: 'bg-emerald-50 text-emerald-700 border-emerald-100' },
                   };
                   const sc = statusConfig[ticket.status] || { label: ticket.status.replace(/_/g, ' '), cls: 'bg-slate-100 text-slate-600 border-slate-200' };
 
