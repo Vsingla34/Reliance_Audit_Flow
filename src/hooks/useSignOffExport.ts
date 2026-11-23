@@ -374,6 +374,19 @@ async function fetchHierarchy(code: string): Promise<Record<'hoIds' | 'dmIds' | 
     .eq('assignment_id', getActiveAssignmentId()).eq('code', code).maybeSingle();
   return data ? { ...empty, ...Object.fromEntries(Object.entries(data).map(([k, v]) => [k, Array.isArray(v) ? v : []])) } as any : empty;
 }
+// Contacts typed/imported directly on the distributor (name, email, phone per role)
+type RoleContacts = Record<'hoIds' | 'dmIds' | 'smIds' | 'asmIds' | 'aseIds', Person[]>;
+async function fetchSheetContacts(code: string): Promise<RoleContacts> {
+  const empty: RoleContacts = { hoIds: [], dmIds: [], smIds: [], asmIds: [], aseIds: [] };
+  if (!code) return empty;
+  const { data, error } = await supabase.from('distributors').select('hoContacts,dmContacts,smContacts,asmContacts,aseContacts')
+    .eq('assignment_id', getActiveAssignmentId()).eq('code', code).maybeSingle();
+  if (error || !data) return empty;
+  const conv = (v: any): Person[] => Array.isArray(v)
+    ? v.map((c: any) => ({ name: c?.name || '', email: c?.email || '', mobile: c?.phone || '' })) : [];
+  const d: any = data;
+  return { hoIds: conv(d.hoContacts), dmIds: conv(d.dmContacts), smIds: conv(d.smContacts), asmIds: conv(d.asmContacts), aseIds: conv(d.aseContacts) };
+}
 
 // ── Aggregation shared by ALF + Sign ─────────────────────────────────────────
 interface AggRow {
@@ -720,7 +733,7 @@ function buildSignSheet(ws: ExcelJS.Worksheet, dist: SignOffDistributor, audit: 
 // SHEET 3 — Summary ("Quality Audit- Lot 2")
 // ═════════════════════════════════════════════════════════════════════════════
 function buildSummarySheet(ws: ExcelJS.Worksheet, dist: SignOffDistributor, audit: SignOffAudit, alf: ALFLayout,
-  people: Record<string, Person>, hier: Record<string, string[]>, auditorNames: string) {
+  people: Record<string, Person>, hier: Record<string, string[]>, auditorNames: string, sheet?: RoleContacts) {
   ws.views = [{ showGridLines: false }];
   const widths: Record<number, number> = { 1: 6.26953125, 2: 8.6328125, 3: 5.453125, 4: 6.36328125, 5: 8.08984375, 7: 5.90625, 8: 4.7265625, 9: 6.26953125, 10: 6.26953125, 11: 8.36328125, 12: 8.36328125, 13: 8.453125, 14: 7.26953125, 15: 8.6328125, 16: 5.90625, 17: 6.90625, 18: 8.453125, 19: 8.36328125, 20: 8.54296875, 21: 8, 22: 7.6328125, 23: 8.54296875, 24: 7.08984375, 25: 8.26953125, 26: 5.26953125 };
   Object.entries(widths).forEach(([k, w]) => { ws.getColumn(+k).width = w; });
@@ -745,7 +758,8 @@ function buildSummarySheet(ws: ExcelJS.Worksheet, dist: SignOffDistributor, audi
 
   // One data row for this audit (template ships the header only)
   const who = (key: string) => {
-    const ps = (hier[key] || []).map(id => people[id]).filter(Boolean);
+    const fromSheet = (sheet as any)?.[key] as Person[] | undefined;
+    const ps = fromSheet && fromSheet.length ? fromSheet : (hier[key] || []).map(id => people[id]).filter(Boolean);
     return [ps.map(p => p.name).join(', '), ps.map(p => p.email).join(', '), ps.map(p => p.mobile).filter(Boolean).join(', ')];
   };
   const [asmN, asmE, asmC] = who('asmIds'); const [aseN, aseE, aseC] = who('aseIds');
@@ -871,9 +885,10 @@ export function useSignOffExport(params: {
         : (activeCategories.find(c => c.key === 'damage') || activeCategories[0]);
       const invoiceSheetName = `Invoie details - ${invoiceCategory.shortLabel}`.slice(0, 31);
 
-      const [hier, auditorMap] = await Promise.all([
+      const [hier, auditorMap, sheetContacts] = await Promise.all([
         fetchHierarchy(freshDist.code),
         fetchPeople(params.audit.auditorIds || []),
+        fetchSheetContacts(freshDist.code),
       ]);
       const people = await fetchPeople(Object.values(hier).flat());
       const auditors = (params.audit.auditorIds || []).map(id => auditorMap[id]).filter(Boolean);
@@ -889,7 +904,7 @@ export function useSignOffExport(params: {
       const wsAtt = wb.addWorksheet('Attendance Sheet');
       const alf = buildALFSheet(wsALF, freshDist, params.audit, enrichedItems);
       buildSignSheet(wsSign, freshDist, params.audit, enrichedItems, alf);
-      buildSummarySheet(wsSum, freshDist, params.audit, alf, people, hier, auditorNames);
+      buildSummarySheet(wsSum, freshDist, params.audit, alf, people, hier, auditorNames, sheetContacts);
       buildInvoiceDetailsSheet(wsInv, freshDist, params.audit, enrichedItems, invoiceCategory);
       buildAttendanceSheet(wsAtt, params.audit, auditors);
       const buf = await wb.xlsx.writeBuffer();

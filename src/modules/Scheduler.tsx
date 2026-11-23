@@ -2,7 +2,7 @@ import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import { supabase, logActivity, notifyLinkedUsers } from '../supabase';
 import { getCachedData, setCachedData, fetchCachedDistributors, fetchCachedUsers } from '../supabaseOptimized';
 import { AuditTicket, Distributor, UserProfile, DateProposal } from '../types';
-import { Calendar as CalendarIcon, Plus, Store, MapPin, CheckCircle2, X, Send, AlertCircle, MessageSquare, Filter, Trash2, CalendarCheck, ChevronLeft, ChevronRight, Clock, Edit2, Search, User as UserIcon, Phone, Mail } from 'lucide-react';
+import { Calendar as CalendarIcon, Plus, Store, MapPin, CheckCircle2, X, Send, AlertCircle, MessageSquare, Filter, Trash2, CalendarCheck, ChevronLeft, ChevronRight, Clock, Edit2, Search, User as UserIcon, Phone, Mail, Upload, Download, Loader2 } from 'lucide-react';
 import { cn, useAuth } from '../App';
 import { motion, AnimatePresence } from 'motion/react';
 import { format, startOfMonth, endOfMonth, eachDayOfInterval, addMonths, subMonths, isToday } from 'date-fns';
@@ -12,7 +12,7 @@ const calculateAuditDays = (approvedValue: number) => {
   if (!approvedValue) return 1;
   if (approvedValue <= 150000) return 1;
   if (approvedValue <= 300000) return 2;
-  return Math.ceil(approvedValue / 150000); 
+  return Math.ceil(approvedValue / 150000);
 };
 
 
@@ -44,18 +44,18 @@ export function SchedulerModule() {
   const cacheKeyTickets = `scheduler-tickets-${assignmentId}-${profile?.uid || 'anon'}`;
 
   const [tickets, setTickets] = useState<AuditTicket[]>(() => getCachedData<AuditTicket[]>(cacheKeyTickets) || []);
-  const [distributors, setDistributors] = useState<any[]>(() => getCachedData<any[]>(cacheKeyDist) || []); 
+  const [distributors, setDistributors] = useState<any[]>(() => getCachedData<any[]>(cacheKeyDist) || []);
   const [auditors, setAuditors] = useState<UserProfile[]>(() => (getCachedData<UserProfile[]>('global-users') || []).filter(u => u.role === 'auditor'));
-  const [allUsers, setAllUsers] = useState<UserProfile[]>(() => getCachedData<UserProfile[]>('global-users') || []); 
-  
+  const [allUsers, setAllUsers] = useState<UserProfile[]>(() => getCachedData<UserProfile[]>('global-users') || []);
+
   const [currentMonth, setCurrentMonth] = useState(new Date());
-  
+
   const [isNegotiationModalOpen, setIsNegotiationModalOpen] = useState(false);
   const [negFilterAseId, setNegFilterAseId] = useState('');
   const [negDistId, setNegDistId] = useState('');
   const [replyDistId, setReplyDistId] = useState('');
   const [proposalData, setProposalData] = useState({ date: '', remarks: '' });
-  
+
   const [headerSearchTerm, setHeaderSearchTerm] = useState('');
   const [isHeaderSearchOpen, setIsHeaderSearchOpen] = useState(false);
 
@@ -70,7 +70,7 @@ export function SchedulerModule() {
   const [aseSearch, setAseSearch] = useState('');
   const [distSearch, setDistSearch] = useState('');
   const [createData, setCreateData] = useState({ distributorId: '', proposedDate: '' });
-  
+
   const [auditorSearch, setAuditorSearch] = useState('');
 
   const isAdminOrHO = ['superadmin', 'admin', 'ho'].includes(profile?.role || '');
@@ -116,10 +116,10 @@ export function SchedulerModule() {
 
   const headerFilteredDistributors = useMemo(() => {
     if (!headerSearchTerm.trim()) return distributors.filter(d => !negotiationBlockedIds.has(d.id));
-    return distributors.filter(d => 
+    return distributors.filter(d =>
       !negotiationBlockedIds.has(d.id) &&
-      (d.name.toLowerCase().includes(headerSearchTerm.toLowerCase()) || 
-       d.code.toLowerCase().includes(headerSearchTerm.toLowerCase()))
+      (d.name.toLowerCase().includes(headerSearchTerm.toLowerCase()) ||
+        d.code.toLowerCase().includes(headerSearchTerm.toLowerCase()))
     );
   }, [distributors, headerSearchTerm, negotiationBlockedIds]);
 
@@ -196,7 +196,7 @@ export function SchedulerModule() {
     if (!createData.distributorId) return alert("Please select a distributor.");
 
     if (forceScheduleBlockedIds.has(createData.distributorId)) {
-        return alert("This distributor already has an active or scheduled audit ticket. Please reset or close the existing ticket before scheduling a new one.");
+      return alert("This distributor already has an active or scheduled audit ticket. Please reset or close the existing ticket before scheduling a new one.");
     }
 
     try {
@@ -214,7 +214,7 @@ export function SchedulerModule() {
           status: 'scheduled',
           updatedAt: new Date().toISOString()
         }).eq('id', existingTicket.id);
-        
+
         if (error) throw error;
       } else {
         const newTicket = {
@@ -222,11 +222,11 @@ export function SchedulerModule() {
           assignment_id: assignmentId,
           distributorId: createData.distributorId,
           proposedDate: createData.proposedDate,
-          auditorIds: [], 
+          auditorIds: [],
           auditDays: autoAuditDays,
           approvedValue: dist.approvedValue,
           maxAllowedValue: dist.approvedValue * 1.05,
-          status: 'scheduled', 
+          status: 'scheduled',
           scheduledDate: createData.proposedDate,
           verifiedTotal: 0,
           presenceLogs: [],
@@ -236,7 +236,7 @@ export function SchedulerModule() {
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString()
         };
-        
+
         const { error } = await supabase.from('auditTickets').insert([newTicket]);
         if (error) throw error;
       }
@@ -248,9 +248,164 @@ export function SchedulerModule() {
       setCreateData({ distributorId: '', proposedDate: '' });
       setCreateAseId(''); setAseSearch(''); setDistSearch('');
       alert("Audit Scheduled Successfully!");
-    } catch (error: any) { 
+    } catch (error: any) {
       console.error("Error creating audit ticket:", error);
-      alert(`Failed to schedule audit: ${error.message}`); 
+      alert(`Failed to schedule audit: ${error.message}`);
+    }
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // SCHEDULE SHEET UPLOAD (CSV) — superadmin / admin only
+  // Columns: DistributorCode, AuditDate, AuditorEmails (optional, ';' separated)
+  // Every row is linked to a distributor of the ACTIVE assignment by its code,
+  // and creates / updates that distributor's audit ticket in the database.
+  // ─────────────────────────────────────────────────────────────────────────
+  const [isUploadingSchedule, setIsUploadingSchedule] = useState(false);
+  const [uploadReport, setUploadReport] = useState<null | {
+    total: number; scheduled: number; rescheduled: number;
+    failed: { row: number; code: string; reason: string }[];
+  }>(null);
+
+  const downloadScheduleTemplate = () => {
+    const sample = distributors.slice(0, 2);
+    const rows = sample.length
+      ? sample.map((d, i) => `${d.code},${format(new Date(Date.now() + (i + 1) * 86400000), 'yyyy-MM-dd')},${i === 0 && auditors[0]?.email ? auditors[0].email : ''}`)
+      : ['DIST-001,2026-12-01,auditor1@comp.com;auditor2@comp.com', 'DIST-002,2026-12-02,'];
+    const csv = `DistributorCode,AuditDate,AuditorEmails\n${rows.join('\n')}`;
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
+    link.download = 'Schedule_Upload_Template.csv';
+    link.click();
+  };
+
+  const parseScheduleDate = (raw: string): string | null => {
+    const v = (raw || '').trim();
+    if (!v) return null;
+    let y: number, m: number, d: number;
+    let mt = v.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/);
+    if (mt) { y = +mt[1]; m = +mt[2]; d = +mt[3]; }
+    else if ((mt = v.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/))) { d = +mt[1]; m = +mt[2]; y = +mt[3]; }
+    else if ((mt = v.match(/^(\d{1,2})[-/ ]([A-Za-z]{3,9})[-/ ,]+(\d{4})$/))) {
+      const idx = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'].indexOf(mt[2].slice(0, 3).toLowerCase());
+      if (idx < 0) return null;
+      d = +mt[1]; m = idx + 1; y = +mt[3];
+    } else return null;
+    const dt = new Date(Date.UTC(y, m - 1, d));
+    if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) return null;
+    return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+  };
+
+  const handleScheduleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const input = e.target;
+    const file = input.files?.[0];
+    if (!file || !canEdit) return;
+    setIsUploadingSchedule(true);
+    try {
+      const text = (await file.text()).replace(/^\uFEFF/, '');
+      const lines = text.split(/\r?\n/).filter(l => l.trim() !== '');
+      const parseRow = (str: string) => {
+        const out: string[] = []; let cur = ''; let q = false;
+        for (const ch of str) {
+          if (ch === '"') q = !q;
+          else if (ch === ',' && !q) { out.push(cur.trim()); cur = ''; }
+          else cur += ch;
+        }
+        out.push(cur.trim());
+        return out.map(x => x.replace(/^"|"$/g, '').trim());
+      };
+      const norm = (h: string) => h.toLowerCase().replace(/[\s_]/g, '');
+      const headers = parseRow(lines[0] || '').map(norm);
+      const idx = (names: string[]) => headers.findIndex(h => names.includes(h));
+      const cCode = idx(['distributorcode', 'code', 'distcode']);
+      const cDate = idx(['auditdate', 'scheduleddate', 'date', 'scheduledate']);
+      const cAud = idx(['auditoremails', 'auditoremail', 'auditors', 'auditor']);
+      if (cCode === -1 || cDate === -1) {
+        alert('Invalid sheet. The first row must have the headers: DistributorCode, AuditDate, AuditorEmails.\n\nDownload the template to see the exact format.');
+        return;
+      }
+
+      // Fresh data straight from the database (not the role-scoped cache)
+      const [dbDists, dbTickets, dbUsers] = await Promise.all([
+        fetchAllRows<any>(() => supabase.from('distributors').select('id,code,name,approvedValue').eq('assignment_id', assignmentId).order('id')),
+        fetchAllRows<any>(() => supabase.from('auditTickets').select('id,distributorId,status').eq('assignment_id', assignmentId).order('id')),
+        fetchCachedUsers(true),
+      ]);
+      const distByCode = new Map<string, any>(dbDists.map(d => [String(d.code).trim().toLowerCase(), d]));
+      const ticketsByDist = new Map<string, any[]>();
+      dbTickets.forEach(t => { const a = ticketsByDist.get(t.distributorId) || []; a.push(t); ticketsByDist.set(t.distributorId, a); });
+      const auditorByEmail = new Map<string, UserProfile>(
+        (dbUsers as UserProfile[]).filter(u => u.role === 'auditor' && u.email).map(u => [u.email.toLowerCase(), u]));
+
+      const failed: { row: number; code: string; reason: string }[] = [];
+      const seen = new Map<string, number>();
+      type Plan = { dist: any; date: string; auditorIds: string[] | null; ticketId: string | null };
+      const plans: Plan[] = [];
+
+      lines.slice(1).forEach((line, i) => {
+        const rowNo = i + 2;
+        const cols = parseRow(line);
+        const code = (cols[cCode] || '').trim();
+        if (!code && !(cols[cDate] || '').trim()) return;
+        const dist = distByCode.get(code.toLowerCase());
+        if (!dist) { failed.push({ row: rowNo, code, reason: 'Distributor code not found in this assignment' }); return; }
+        const date = parseScheduleDate(cols[cDate] || '');
+        if (!date) { failed.push({ row: rowNo, code, reason: `Invalid audit date "${cols[cDate] || ''}" (use YYYY-MM-DD or DD-MM-YYYY)` }); return; }
+        let auditorIds: string[] | null = null;
+        if (cAud !== -1 && (cols[cAud] || '').trim()) {
+          const emails = cols[cAud].split(/[;|]/).map(x => x.trim().toLowerCase()).filter(Boolean);
+          const missing = emails.filter(em => !auditorByEmail.has(em));
+          if (missing.length) { failed.push({ row: rowNo, code, reason: `Auditor not found: ${missing.join(', ')}` }); return; }
+          auditorIds = Array.from(new Set(emails.map(em => auditorByEmail.get(em)!.uid)));
+        }
+        const dts = ticketsByDist.get(dist.id) || [];
+        const open = dts.find(t => ['tentative', 'scheduled'].includes(t.status));
+        const busy = dts.find(t => !['tentative', 'scheduled', 'closed'].includes(t.status));
+        if (!open && busy) { failed.push({ row: rowNo, code, reason: `Audit already ${busy.status.replace(/_/g, ' ')} — cannot reschedule` }); return; }
+        if (seen.has(dist.id)) {
+          const prev = seen.get(dist.id)!;
+          plans[prev] = { dist, date, auditorIds, ticketId: open?.id || null };   // last row wins
+          return;
+        }
+        seen.set(dist.id, plans.length);
+        plans.push({ dist, date, auditorIds, ticketId: open?.id || null });
+      });
+
+      const now = new Date().toISOString();
+      let scheduled = 0, rescheduled = 0;
+      const toInsert = plans.filter(p => !p.ticketId).map(p => ({
+        id: crypto.randomUUID(), assignment_id: assignmentId, distributorId: p.dist.id,
+        proposedDate: p.date, scheduledDate: p.date, auditorIds: p.auditorIds || [],
+        auditDays: calculateAuditDays(p.dist.approvedValue), approvedValue: p.dist.approvedValue,
+        maxAllowedValue: (p.dist.approvedValue || 0) * 1.05, status: 'scheduled', verifiedTotal: 0,
+        presenceLogs: [], signOffs: {}, media: [], dateProposals: [], createdAt: now, updatedAt: now,
+      }));
+      for (let i = 0; i < toInsert.length; i += 200) {
+        const { error } = await supabase.from('auditTickets').insert(toInsert.slice(i, i + 200));
+        if (error) throw error;
+        scheduled += Math.min(200, toInsert.length - i);
+      }
+      const toUpdate = plans.filter(p => p.ticketId);
+      for (let i = 0; i < toUpdate.length; i += 20) {
+        await Promise.all(toUpdate.slice(i, i + 20).map(async p => {
+          const patch: any = {
+            proposedDate: p.date, scheduledDate: p.date, status: 'scheduled',
+            auditDays: calculateAuditDays(p.dist.approvedValue), updatedAt: now,
+          };
+          if (p.auditorIds) patch.auditorIds = p.auditorIds;
+          const { error } = await supabase.from('auditTickets').update(patch).eq('id', p.ticketId!).eq('assignment_id', assignmentId);
+          if (error) failed.push({ row: 0, code: p.dist.code, reason: error.message });
+          else rescheduled++;
+        }));
+      }
+
+      logActivity(user, profile, 'Schedule Uploaded', `${profile?.role.toUpperCase()} uploaded schedule sheet: ${scheduled} new, ${rescheduled} updated, ${failed.length} failed`, assignmentId);
+      setUploadReport({ total: lines.length - 1, scheduled, rescheduled, failed });
+    } catch (error: any) {
+      console.error('Schedule upload failed:', error);
+      alert(`Failed to upload schedule: ${error.message}`);
+    } finally {
+      setIsUploadingSchedule(false);
+      input.value = '';
     }
   };
 
@@ -278,7 +433,7 @@ export function SchedulerModule() {
       setEditingActiveTicket(null);
       setAuditorSearch('');
       alert("Changes Saved Successfully!");
-    } catch (error: any) { 
+    } catch (error: any) {
       console.error("Error updating ticket:", error);
       alert(`Failed to save changes: ${error.message}`);
     }
@@ -286,9 +441,9 @@ export function SchedulerModule() {
 
   const handleAdminRequestDate = async () => {
     if (!user || !profile || !negDistId) return;
-    
+
     if (negotiationBlockedIds.has(negDistId)) {
-        return alert("Cannot request dates for this distributor as they already have an active audit in progress.");
+      return alert("Cannot request dates for this distributor as they already have an active audit in progress.");
     }
 
     try {
@@ -320,9 +475,9 @@ export function SchedulerModule() {
 
       notifyLinkedUsers(negDistId, "Date Requested", `Admin requested a date proposal for ${distMap[negDistId]?.name}.`);
       setProposalData({ date: '', remarks: '' });
-    } catch (error: any) { 
+    } catch (error: any) {
       console.error("Error requesting date:", error);
-      alert(`Failed to request date: ${error.message}`); 
+      alert(`Failed to request date: ${error.message}`);
     }
   };
 
@@ -334,7 +489,7 @@ export function SchedulerModule() {
     if (!finalTargetDistId) return alert("Please select a distributor first.");
 
     if (negotiationBlockedIds.has(finalTargetDistId)) {
-        return alert("Cannot propose dates for this distributor as they already have an active audit in progress.");
+      return alert("Cannot propose dates for this distributor as they already have an active audit in progress.");
     }
 
     if (profile?.role === 'ase' && !proposalData.date) {
@@ -345,7 +500,7 @@ export function SchedulerModule() {
     }
 
     const targetTicket = tickets.find(t => t.distributorId === finalTargetDistId && ['tentative', 'scheduled'].includes(t.status));
-    
+
     let rescheduleReason = "";
     if (targetTicket && targetTicket.status === 'scheduled' && profile?.role === 'ase') {
       rescheduleReason = window.prompt("⚠️ This audit is already scheduled and confirmed.\n\nPlease provide a mandatory reason for requesting this reschedule:") || "";
@@ -354,7 +509,7 @@ export function SchedulerModule() {
       }
     }
 
-    const finalRemarks = rescheduleReason 
+    const finalRemarks = rescheduleReason
       ? `🚨 Reschedule Reason: ${rescheduleReason}${proposalData.remarks ? ` | Notes: ${proposalData.remarks}` : ''}`
       : proposalData.remarks;
 
@@ -376,7 +531,7 @@ export function SchedulerModule() {
           id: crypto.randomUUID(), date: proposalData.date || '', proposedByUserId: user.id, proposedByName: profile.name, role: profile.role, email: profile.email, remarks: `Counter-proposed for a different distributor: ${targetDistName}. ${finalRemarks ? `Remarks: ${finalRemarks}` : ''}`, timestamp: new Date().toISOString()
         };
         const updatedOldProposals = [...(currentNegTicket.dateProposals || []), redirectProposal];
-        
+
         const oldTicketStatus = currentNegTicket.status === 'scheduled' && profile?.role === 'ase' ? 'tentative' : currentNegTicket.status;
         await supabase.from('auditTickets').update({ dateProposals: updatedOldProposals, status: oldTicketStatus, updatedAt: new Date().toISOString() }).eq('id', currentNegTicket.id);
       }
@@ -384,14 +539,14 @@ export function SchedulerModule() {
       if (targetTicket) {
         const updatedProposals = [...(targetTicket.dateProposals || []), newProposal];
         const newMainDate = proposalData.date ? proposalData.date : targetTicket.proposedDate;
-        
+
         const newStatus = targetTicket.status === 'scheduled' && profile?.role === 'ase' ? 'tentative' : targetTicket.status;
 
         const { error } = await supabase.from('auditTickets').update({ proposedDate: newMainDate, dateProposals: updatedProposals, status: newStatus, updatedAt: new Date().toISOString() }).eq('id', targetTicket.id);
         if (error) throw error;
-        
+
         if (newStatus === 'tentative' && targetTicket.status === 'scheduled') {
-           logActivity(user, profile, "Reschedule Requested", `ASE requested a reschedule for ${distMap[finalTargetDistId]?.name}. Reason: "${rescheduleReason}"`);
+          logActivity(user, profile, "Reschedule Requested", `ASE requested a reschedule for ${distMap[finalTargetDistId]?.name}. Reason: "${rescheduleReason}"`);
         }
       } else {
         const dist = distMap[finalTargetDistId];
@@ -408,8 +563,8 @@ export function SchedulerModule() {
       notifyLinkedUsers(finalTargetDistId, "New Message / Proposal", `${profile.name} has submitted a new date proposal or message for ${distMap[finalTargetDistId]?.name}.`);
 
       setProposalData({ date: '', remarks: '' });
-      setNegDistId(finalTargetDistId); 
-    } catch (error: any) { 
+      setNegDistId(finalTargetDistId);
+    } catch (error: any) {
       console.error("Error submitting proposal:", error);
       alert(`Failed to submit proposal: ${error.message}`);
     }
@@ -417,7 +572,7 @@ export function SchedulerModule() {
 
   const cancelAssignment = async () => {
     if (!currentNegTicket || !user || !profile) return;
-    
+
     const cancelReason = window.prompt("⚠️ You are cancelling an audit on the day of execution past 12 PM.\n\nPlease provide a mandatory reason for this late cancellation:");
     if (!cancelReason?.trim()) return alert("Cancellation aborted: A valid reason is required.");
 
@@ -436,14 +591,14 @@ export function SchedulerModule() {
 
       const updatedProposals = [...(currentNegTicket.dateProposals || []), newProposal];
 
-      const { error } = await supabase.from('auditTickets').update({ 
-        status: 'tentative', 
-        scheduledDate: null, 
-        proposedDate: null, 
-        dateProposals: updatedProposals, 
-        updatedAt: new Date().toISOString() 
+      const { error } = await supabase.from('auditTickets').update({
+        status: 'tentative',
+        scheduledDate: null,
+        proposedDate: null,
+        dateProposals: updatedProposals,
+        updatedAt: new Date().toISOString()
       }).eq('id', currentNegTicket.id);
-      
+
       if (error) throw error;
 
       const dist = distMap[currentNegTicket.distributorId];
@@ -465,13 +620,13 @@ export function SchedulerModule() {
       const dist = distMap[currentNegTicket.distributorId];
       const autoAuditDays = calculateAuditDays(dist?.approvedValue || 0);
 
-      const { error } = await supabase.from('auditTickets').update({ 
-        status: 'scheduled', 
-        scheduledDate: proposalDate, 
-        auditDays: autoAuditDays, 
-        updatedAt: new Date().toISOString() 
+      const { error } = await supabase.from('auditTickets').update({
+        status: 'scheduled',
+        scheduledDate: proposalDate,
+        auditDays: autoAuditDays,
+        updatedAt: new Date().toISOString()
       }).eq('id', currentNegTicket.id);
-      
+
       if (error) throw error;
 
       logActivity(user, profile, "Date Approved", `${profile?.role.toUpperCase()} approved date proposal for ${dist?.name} on ${proposalDate}`);
@@ -480,7 +635,7 @@ export function SchedulerModule() {
       setIsNegotiationModalOpen(false);
       setNegDistId('');
       alert("Schedule Approved successfully!");
-    } catch (error: any) { 
+    } catch (error: any) {
       console.error("Error approving schedule:", error);
       alert(`Failed to approve schedule: ${error.message}`);
     }
@@ -501,7 +656,7 @@ export function SchedulerModule() {
   const paddingDays = Array.from({ length: startDayOfWeek }).map((_, i) => i);
 
   const allPendingTickets = useMemo(() => tickets.filter(t => t.status === 'tentative'), [tickets]);
-  
+
   const uniquePendingAseIds = useMemo(() => {
     const ids = new Set<string>();
     allPendingTickets.forEach(t => {
@@ -545,14 +700,14 @@ export function SchedulerModule() {
   const localOffset = todayObj.getTimezoneOffset();
   const localToday = new Date(todayObj.getTime() - (localOffset * 60000));
   const localTodayStr = localToday.toISOString().split('T')[0];
-  
+
   const isTodayAudit = currentNegTicket?.scheduledDate === localTodayStr;
   const isPastNoon = todayObj.getHours() >= 12;
   const canCancelToday = profile?.role === 'ase' && currentNegTicket?.status === 'scheduled' && isTodayAudit && isPastNoon;
 
   return (
     <div className="space-y-6 sm:space-y-8 pb-12 w-full min-w-0">
-      
+
       {/* Header Actions */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 sm:gap-6">
         <div className="flex items-center justify-between sm:justify-start gap-2 sm:gap-4 bg-white p-2 rounded-2xl shadow-sm border border-zinc-200">
@@ -560,15 +715,15 @@ export function SchedulerModule() {
           <h3 className="text-base sm:text-lg font-bold min-w-[120px] sm:min-w-[150px] text-center">{format(currentMonth, 'MMMM yyyy')}</h3>
           <button onClick={() => setCurrentMonth(addMonths(currentMonth, 1))} className="p-2 hover:bg-zinc-100 rounded-xl transition-colors"><ChevronRight size={20} className="w-5 h-5" /></button>
         </div>
-        
+
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-3 w-full sm:w-auto">
-          
+
           {(isAdminOrHO || profile?.role === 'ase') && (
             <div className="relative w-full sm:w-72">
               <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-400" size={18} />
-              <input 
-                type="text" 
-                placeholder="Search dist to propose date..." 
+              <input
+                type="text"
+                placeholder="Search dist to propose date..."
                 className="w-full pl-10 pr-4 py-3 sm:py-3.5 bg-white border border-zinc-200 text-black rounded-xl font-bold focus:ring-2 focus:ring-black outline-none transition-all shadow-sm text-sm"
                 value={headerSearchTerm}
                 onChange={e => { setHeaderSearchTerm(e.target.value); setIsHeaderSearchOpen(true); }}
@@ -595,6 +750,18 @@ export function SchedulerModule() {
 
           {/* ── PATCH: canEdit (superadmin/admin only) gates Force Schedule ── */}
           {canEdit && (
+            <>
+              <button onClick={downloadScheduleTemplate} title="Download schedule template" className="flex items-center justify-center gap-2 px-3 py-3 sm:py-3.5 bg-white border border-zinc-200 text-zinc-900 rounded-xl font-bold hover:bg-zinc-50 transition-all active:scale-95">
+                <Download size={18} /><span className="hidden sm:inline">Template</span>
+              </button>
+              <label className={cn("flex items-center justify-center gap-2 px-3 py-3 sm:py-3.5 bg-zinc-100 text-zinc-900 rounded-xl font-bold hover:bg-zinc-200 transition-all active:scale-95 cursor-pointer", isUploadingSchedule && "opacity-60 pointer-events-none")}>
+                {isUploadingSchedule ? <Loader2 size={18} className="animate-spin" /> : <Upload size={18} />}
+                <span>Upload Schedule</span>
+                <input type="file" accept=".csv" className="hidden" onChange={handleScheduleUpload} />
+              </label>
+            </>
+          )}
+          {canEdit && (
             <button onClick={() => setIsCreateModalOpen(true)} className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-3 sm:py-3.5 bg-black text-white rounded-xl font-bold hover:bg-zinc-800 transition-all shadow-md active:scale-95 text-sm">
               <Plus size={18} /> Force Schedule
             </button>
@@ -615,7 +782,7 @@ export function SchedulerModule() {
                 </button>
               </div>
             </div>
-            
+
             {isAdminOrHO && (
               <div className="flex items-center gap-2 w-full md:w-auto">
                 <Filter size={16} className="text-zinc-400 hidden sm:block" />
@@ -634,7 +801,7 @@ export function SchedulerModule() {
               <div className="space-y-3">
                 {displayTickets.map(ticket => {
                   const dist = distMap[ticket.distributorId];
-                  const aseNames = dist?.aseIds?.length > 0 
+                  const aseNames = dist?.aseIds?.length > 0
                     ? dist.aseIds.map((id: string) => userMap[id]?.name.split(' ')[0]).filter(Boolean).join(', ')
                     : 'Unassigned';
                   const lastProposal = ticket.dateProposals?.[ticket.dateProposals.length - 1];
@@ -679,33 +846,33 @@ export function SchedulerModule() {
                 <div key={day} className="text-center text-[10px] sm:text-xs font-bold text-zinc-400 uppercase tracking-wider py-1 sm:py-2">{day}</div>
               ))}
             </div>
-            
+
             <div className="grid grid-cols-7 gap-2 sm:gap-4">
               {paddingDays.map(day => <div key={`empty-${day}`} className="min-h-[100px] sm:min-h-[120px] rounded-xl sm:rounded-2xl bg-zinc-50/50 border border-zinc-100/50" />)}
-              
+
               {days.map(day => {
                 const dayStr = format(day, 'yyyy-MM-dd');
                 const dayTickets = ticketsByDate[dayStr] || [];
                 const isCurrentDay = isToday(day);
-                
+
                 return (
                   <div key={day.toISOString()} className={cn("min-h-[100px] sm:min-h-[120px] rounded-xl sm:rounded-2xl p-2 sm:p-3 border transition-colors flex flex-col gap-1 sm:gap-2", isCurrentDay ? "bg-black/5 border-black/10" : "bg-white border-zinc-200 hover:border-black/20")}>
                     <div className="flex items-center justify-between mb-1">
                       <span className={cn("text-xs sm:text-sm font-bold w-6 h-6 sm:w-8 sm:h-8 flex items-center justify-center rounded-lg sm:rounded-xl", isCurrentDay ? "bg-black text-white shadow-md" : "text-zinc-700")}>{format(day, 'd')}</span>
                     </div>
-                    
+
                     <div className="space-y-1.5 sm:space-y-2 flex-1 overflow-y-auto custom-scrollbar pr-1">
                       {dayTickets.map(ticket => {
                         const dist = distMap[ticket.distributorId];
 
                         return (
-                          <div 
-                            key={ticket.id} 
+                          <div
+                            key={ticket.id}
                             onClick={() => {
                               if (ticket.status === 'tentative') {
                                 openNegotiationModal(ticket.distributorId);
                               } else {
-                                {/* ── PATCH: only superadmin/admin can open edit modal ── */}
+                                {/* ── PATCH: only superadmin/admin can open edit modal ── */ }
                                 if (canEdit) {
                                   setEditingActiveTicket(ticket);
                                   setEditTicketData({ scheduledDate: ticket.scheduledDate || '', auditorIds: ticket.auditorIds || [] });
@@ -713,17 +880,17 @@ export function SchedulerModule() {
                                   openNegotiationModal(ticket.distributorId);
                                 }
                               }
-                            }} 
+                            }}
                             className={cn(
-                              "p-1.5 sm:p-2 rounded-lg sm:rounded-xl text-[10px] sm:text-xs border transition-all", 
-                              ticket.status === 'tentative' ? "bg-amber-50 border-amber-200 hover:shadow-md cursor-pointer hover:-translate-y-0.5" : 
-                             
-                              cn("bg-emerald-50 border-emerald-100/50", (canEdit || (profile?.role === 'ase' && ticket.status === 'scheduled')) ? "cursor-pointer hover:shadow-md hover:border-emerald-300 hover:-translate-y-0.5" : "cursor-default")
-                            )} 
+                              "p-1.5 sm:p-2 rounded-lg sm:rounded-xl text-[10px] sm:text-xs border transition-all",
+                              ticket.status === 'tentative' ? "bg-amber-50 border-amber-200 hover:shadow-md cursor-pointer hover:-translate-y-0.5" :
+
+                                cn("bg-emerald-50 border-emerald-100/50", (canEdit || (profile?.role === 'ase' && ticket.status === 'scheduled')) ? "cursor-pointer hover:shadow-md hover:border-emerald-300 hover:-translate-y-0.5" : "cursor-default")
+                            )}
                             title={ticket.status === 'tentative' ? 'Click to view dates' : (canEdit ? 'Click to edit assignment' : (profile?.role === 'ase' ? 'Click to request reschedule' : 'Scheduled'))}
                           >
                             <p className="font-bold text-zinc-900 truncate mb-0.5 sm:mb-1 leading-tight">{dist?.name || 'Unknown'}</p>
-                            
+
                             {ticket.status === 'tentative' ? (
                               <div className="flex items-center gap-1 text-[9px] sm:text-[10px] font-bold text-amber-600 uppercase"><Clock size={10} /> Needs Approval</div>
                             ) : (
@@ -734,9 +901,9 @@ export function SchedulerModule() {
                                     if (!u) return null;
                                     return (
                                       <div key={id} className="flex flex-col bg-emerald-100/50 px-1.5 py-1 rounded border border-emerald-100/50 gap-0.5">
-                                        <span className="flex items-center gap-1 text-[9px] sm:text-[10px] font-bold text-emerald-800"><UserIcon size={10} className="shrink-0"/> <span className="truncate">{u.name}</span></span>
-                                        {(u.phone || (u as any).mobile) && <span className="flex items-center gap-1 text-[8px] sm:text-[9px] font-medium text-emerald-600"><Phone size={8} className="shrink-0"/> {u.phone || (u as any).mobile}</span>}
-                                        {u.email && <span className="flex items-center gap-1 text-[8px] sm:text-[9px] font-medium text-emerald-600 truncate"><Mail size={8} className="shrink-0"/> {u.email}</span>}
+                                        <span className="flex items-center gap-1 text-[9px] sm:text-[10px] font-bold text-emerald-800"><UserIcon size={10} className="shrink-0" /> <span className="truncate">{u.name}</span></span>
+                                        {(u.phone || (u as any).mobile) && <span className="flex items-center gap-1 text-[8px] sm:text-[9px] font-medium text-emerald-600"><Phone size={8} className="shrink-0" /> {u.phone || (u as any).mobile}</span>}
+                                        {u.email && <span className="flex items-center gap-1 text-[8px] sm:text-[9px] font-medium text-emerald-600 truncate"><Mail size={8} className="shrink-0" /> {u.email}</span>}
                                       </div>
                                     );
                                   })
@@ -763,21 +930,21 @@ export function SchedulerModule() {
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6">
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => { setEditingActiveTicket(null); setAuditorSearch(''); }} className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
             <motion.div initial={{ opacity: 0, scale: 0.9, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9, y: 20 }} className="relative w-full max-w-md bg-white rounded-[1.5rem] sm:rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
-              
+
               <form id="edit-ticket-form" onSubmit={handleEditActiveTicketSubmit} className="flex flex-col h-full">
-                
+
                 <div className="flex justify-between items-start sm:items-center p-5 sm:p-8 mb-0 shrink-0 border-b border-zinc-100">
                   <div>
                     <h3 className="text-lg sm:text-xl font-bold flex items-center gap-2"><Edit2 size={18} className="text-blue-600 sm:w-5 sm:h-5" /> Edit Assignment</h3>
                     <p className="text-xs sm:text-sm text-zinc-500 mt-1">{distMap[editingActiveTicket.distributorId]?.name}</p>
                   </div>
-                  <button type="button" onClick={() => { setEditingActiveTicket(null); setAuditorSearch(''); }} className="p-1.5 sm:p-2 hover:bg-zinc-100 rounded-lg sm:rounded-xl shrink-0"><X size={18} className="sm:w-5 sm:h-5"/></button>
+                  <button type="button" onClick={() => { setEditingActiveTicket(null); setAuditorSearch(''); }} className="p-1.5 sm:p-2 hover:bg-zinc-100 rounded-lg sm:rounded-xl shrink-0"><X size={18} className="sm:w-5 sm:h-5" /></button>
                 </div>
-                
+
                 <div className="overflow-y-auto custom-scrollbar flex-1 p-5 sm:p-8 space-y-4">
                   <div>
                     <label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-400">Start Date</label>
-                    <input required type="date" className="w-full mt-1 px-3 sm:px-4 py-2.5 sm:py-3 bg-zinc-50 border border-zinc-200 sm:border-none rounded-xl focus:ring-2 focus:ring-black transition-all cursor-pointer text-sm" value={editTicketData.scheduledDate} onChange={e => setEditTicketData({...editTicketData, scheduledDate: e.target.value})} />
+                    <input required type="date" className="w-full mt-1 px-3 sm:px-4 py-2.5 sm:py-3 bg-zinc-50 border border-zinc-200 sm:border-none rounded-xl focus:ring-2 focus:ring-black transition-all cursor-pointer text-sm" value={editTicketData.scheduledDate} onChange={e => setEditTicketData({ ...editTicketData, scheduledDate: e.target.value })} />
                   </div>
 
                   <div>
@@ -812,9 +979,9 @@ export function SchedulerModule() {
         {isNegotiationModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6">
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsNegotiationModalOpen(false)} className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
-            
+
             <motion.div initial={{ opacity: 0, scale: 0.9, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9, y: 20 }} className="relative w-full max-w-2xl bg-white rounded-[1.5rem] sm:rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
-              
+
               <div className="p-4 sm:p-5 md:p-6 border-b border-zinc-100 flex items-center justify-between shrink-0 bg-white z-10">
                 <div className="flex items-center gap-3 sm:gap-4">
                   <div className="w-10 h-10 sm:w-12 sm:h-12 bg-amber-50 rounded-xl flex items-center justify-center shrink-0"><CalendarIcon className="text-amber-600 sm:w-5 sm:h-5" size={18} /></div>
@@ -830,11 +997,11 @@ export function SchedulerModule() {
                 </div>
                 <div className="flex items-center gap-1 sm:gap-2">
                   {/* ── PATCH: only superadmin/admin can delete ticket from negotiation modal ── */}
-                  {canEdit && currentNegTicket && <button onClick={() => deleteTicket(currentNegTicket.id)} className="p-1.5 sm:p-2 text-zinc-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Delete this ticket"><Trash2 size={18}/></button>}
-                  <button onClick={() => setIsNegotiationModalOpen(false)} className="p-1.5 sm:p-2 hover:bg-zinc-100 rounded-lg transition-colors"><X size={18}/></button>
+                  {canEdit && currentNegTicket && <button onClick={() => deleteTicket(currentNegTicket.id)} className="p-1.5 sm:p-2 text-zinc-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Delete this ticket"><Trash2 size={18} /></button>}
+                  <button onClick={() => setIsNegotiationModalOpen(false)} className="p-1.5 sm:p-2 hover:bg-zinc-100 rounded-lg transition-colors"><X size={18} /></button>
                 </div>
               </div>
-              
+
               {!currentNegTicket && (
                 <div className="p-4 sm:p-5 md:p-6 bg-zinc-50 border-b border-zinc-200 shrink-0 space-y-3">
                   {isAdminOrHO && (
@@ -866,7 +1033,7 @@ export function SchedulerModule() {
                   <div className="text-center py-6 sm:py-8 text-zinc-400">
                     <MessageSquare size={28} className="mx-auto mb-2 opacity-50" />
                     <p className="text-xs sm:text-sm font-medium">{isAdminOrHO ? 'Request a date proposal from the ASE below.' : 'No messages yet. Send a proposal below to start.'}</p>
-                    
+
                     {isAdminOrHO && (
                       <button onClick={handleAdminRequestDate} className="mt-4 px-6 py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 shadow-md active:scale-95 transition-all text-sm">
                         Request Date from ASE
@@ -890,11 +1057,11 @@ export function SchedulerModule() {
                         </div>
                         <span className="text-[10px] text-zinc-400 font-medium shrink-0">{new Date(prop.timestamp).toLocaleDateString()}</span>
                       </div>
-                      
+
                       <div className="pl-11 space-y-2">
-                        {prop.date && <div className="inline-flex items-center gap-1.5 bg-amber-50 text-amber-700 px-2 py-1 rounded-md border border-amber-100 text-xs font-bold"><CalendarIcon size={12}/> Proposed: {format(new Date(prop.date), 'dd MMM yyyy')}</div>}
+                        {prop.date && <div className="inline-flex items-center gap-1.5 bg-amber-50 text-amber-700 px-2 py-1 rounded-md border border-amber-100 text-xs font-bold"><CalendarIcon size={12} /> Proposed: {format(new Date(prop.date), 'dd MMM yyyy')}</div>}
                         {prop.remarks && <p className="text-sm text-zinc-600 bg-zinc-50 p-2.5 rounded-lg border border-zinc-100">"{prop.remarks}"</p>}
-                        
+
                         {isAdminOrHO && prop.date && currentNegTicket.status === 'tentative' && (
                           <div className="pt-3 mt-2 border-t border-zinc-100 flex flex-col gap-2">
                             <div className="flex flex-col sm:flex-row sm:items-center gap-2">
@@ -917,7 +1084,7 @@ export function SchedulerModule() {
                       {isAdminOrHO ? "Suggest a Date & Distributor" : currentNegTicket?.status === 'scheduled' ? "Request Reschedule" : "Submit Date Proposal"}
                     </h5>
                     <div className="flex flex-col gap-3 w-full">
-                      
+
                       <select disabled={!negDistId} className="w-full px-3 py-2.5 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black outline-none transition-all text-xs font-medium text-zinc-700 cursor-pointer disabled:opacity-50" value={replyDistId} onChange={e => setReplyDistId(e.target.value)}>
                         {negDistId && <option value={negDistId}>{distMap[negDistId]?.name} ({distMap[negDistId]?.code}) - Current</option>}
                         <optgroup label="Counter-Propose Another Distributor">
@@ -926,15 +1093,15 @@ export function SchedulerModule() {
                       </select>
 
                       <div className="flex flex-col sm:flex-row gap-3 w-full">
-                        <input type="date" required={profile?.role === 'ase'} disabled={!negDistId} className="w-full sm:w-40 px-3 py-2.5 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black outline-none transition-all text-xs font-medium text-zinc-700 cursor-pointer shrink-0 disabled:opacity-50" value={proposalData.date} onChange={e => setProposalData({...proposalData, date: e.target.value})} />
+                        <input type="date" required={profile?.role === 'ase'} disabled={!negDistId} className="w-full sm:w-40 px-3 py-2.5 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black outline-none transition-all text-xs font-medium text-zinc-700 cursor-pointer shrink-0 disabled:opacity-50" value={proposalData.date} onChange={e => setProposalData({ ...proposalData, date: e.target.value })} />
                         <div className={cn("relative flex-1")}>
-                          <input type="text" disabled={!negDistId} placeholder="Type message..." className="w-full pl-3 pr-10 py-2.5 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black outline-none transition-all text-xs disabled:opacity-50" value={proposalData.remarks} onChange={e => setProposalData({...proposalData, remarks: e.target.value})} />
-                          <button type="submit" disabled={!negDistId} className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1.5 bg-black text-white rounded-lg hover:bg-zinc-800 transition-colors disabled:opacity-50"><Send size={14}/></button>
+                          <input type="text" disabled={!negDistId} placeholder="Type message..." className="w-full pl-3 pr-10 py-2.5 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black outline-none transition-all text-xs disabled:opacity-50" value={proposalData.remarks} onChange={e => setProposalData({ ...proposalData, remarks: e.target.value })} />
+                          <button type="submit" disabled={!negDistId} className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1.5 bg-black text-white rounded-lg hover:bg-zinc-800 transition-colors disabled:opacity-50"><Send size={14} /></button>
                         </div>
                       </div>
                     </div>
                   </form>
-                  
+
                   {canCancelToday && (
                     <div className="mt-4 pt-4 border-t border-zinc-100">
                       <button type="button" onClick={cancelAssignment} className="w-full py-2.5 bg-red-50 text-red-600 font-bold rounded-xl border border-red-200 hover:bg-red-100 transition-colors flex justify-center items-center gap-2">
@@ -955,12 +1122,12 @@ export function SchedulerModule() {
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6">
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsCreateModalOpen(false)} className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
             <motion.div initial={{ opacity: 0, scale: 0.9, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9, y: 20 }} className="relative w-full max-w-md bg-white rounded-[1.5rem] sm:rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
-              
+
               <form id="force-schedule-form" onSubmit={handleCreateSubmit} className="flex flex-col h-full">
-                
+
                 <div className="flex justify-between items-center p-5 sm:p-6 border-b border-zinc-100 shrink-0">
                   <h3 className="text-lg sm:text-xl font-bold">Force Schedule Audit</h3>
-                  <button type="button" onClick={() => setIsCreateModalOpen(false)} className="p-1.5 sm:p-2 hover:bg-zinc-100 rounded-lg sm:rounded-xl"><X size={18} className="sm:w-5 sm:h-5"/></button>
+                  <button type="button" onClick={() => setIsCreateModalOpen(false)} className="p-1.5 sm:p-2 hover:bg-zinc-100 rounded-lg sm:rounded-xl"><X size={18} className="sm:w-5 sm:h-5" /></button>
                 </div>
 
                 <div className="p-5 sm:p-6 overflow-y-auto custom-scrollbar flex-1 min-h-0 space-y-3 sm:space-y-4">
@@ -981,7 +1148,7 @@ export function SchedulerModule() {
                             }
                             onChange={e => {
                               setAseSearch(e.target.value);
-                              if (createAseId) { setCreateAseId(''); setCreateData({...createData, distributorId: ''}); }
+                              if (createAseId) { setCreateAseId(''); setCreateData({ ...createData, distributorId: '' }); }
                             }}
                             onFocus={() => { if (createAseId) setAseSearch(''); }}
                           />
@@ -989,7 +1156,7 @@ export function SchedulerModule() {
                           {(createAseId || aseSearch) && (
                             <button
                               type="button"
-                              onClick={() => { setCreateAseId(''); setAseSearch(''); setCreateData({...createData, distributorId: ''}); }}
+                              onClick={() => { setCreateAseId(''); setAseSearch(''); setCreateData({ ...createData, distributorId: '' }); }}
                               className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-700"
                             >
                               <X size={13} />
@@ -1017,7 +1184,7 @@ export function SchedulerModule() {
                                 <button
                                   key={u.uid}
                                   type="button"
-                                  onClick={() => { setCreateAseId(u.uid); setAseSearch(''); setDistSearch(''); setCreateData({...createData, distributorId: ''}); }}
+                                  onClick={() => { setCreateAseId(u.uid); setAseSearch(''); setDistSearch(''); setCreateData({ ...createData, distributorId: '' }); }}
                                   className="w-full text-left px-4 py-2.5 text-sm hover:bg-zinc-50 flex items-center justify-between gap-2"
                                 >
                                   <span className="font-bold text-zinc-900">{u.name}</span>
@@ -1059,14 +1226,14 @@ export function SchedulerModule() {
                           }
                           onChange={e => {
                             setDistSearch(e.target.value);
-                            if (createData.distributorId) setCreateData({...createData, distributorId: ''});
+                            if (createData.distributorId) setCreateData({ ...createData, distributorId: '' });
                           }}
                           onFocus={() => { if (createData.distributorId) setDistSearch(''); }}
                         />
                         {(createData.distributorId || distSearch) && (
                           <button
                             type="button"
-                            onClick={() => { setCreateData({...createData, distributorId: ''}); setDistSearch(''); }}
+                            onClick={() => { setCreateData({ ...createData, distributorId: '' }); setDistSearch(''); }}
                             className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-700"
                           >
                             <X size={13} />
@@ -1088,7 +1255,7 @@ export function SchedulerModule() {
                               <button
                                 key={d.id}
                                 type="button"
-                                onClick={() => { setCreateData({...createData, distributorId: d.id}); setDistSearch(''); }}
+                                onClick={() => { setCreateData({ ...createData, distributorId: d.id }); setDistSearch(''); }}
                                 className="w-full text-left px-4 py-2.5 text-sm hover:bg-zinc-50 flex items-center justify-between gap-2 border-b border-zinc-50 last:border-0"
                               >
                                 <div className="min-w-0">
@@ -1119,16 +1286,16 @@ export function SchedulerModule() {
                         type="text"
                         required
                         value={createData.distributorId}
-                        onChange={() => {}}
+                        onChange={() => { }}
                         className="sr-only"
                         tabIndex={-1}
                       />
                     </div>
                   </div>
-                  
+
                   <div>
                     <label className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-400">Start Date</label>
-                    <input required type="date" className="w-full mt-1 px-3 sm:px-4 py-2.5 sm:py-3 bg-zinc-50 border border-zinc-200 sm:border-none rounded-xl focus:ring-2 focus:ring-black transition-all cursor-pointer text-sm" value={createData.proposedDate} onChange={e => setCreateData({...createData, proposedDate: e.target.value})} />
+                    <input required type="date" className="w-full mt-1 px-3 sm:px-4 py-2.5 sm:py-3 bg-zinc-50 border border-zinc-200 sm:border-none rounded-xl focus:ring-2 focus:ring-black transition-all cursor-pointer text-sm" value={createData.proposedDate} onChange={e => setCreateData({ ...createData, proposedDate: e.target.value })} />
                   </div>
                 </div>
 
@@ -1142,6 +1309,32 @@ export function SchedulerModule() {
         )}
       </AnimatePresence>
 
+      {uploadReport && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4" onClick={() => setUploadReport(null)}>
+          <div className="bg-white rounded-2xl w-full max-w-lg max-h-[85vh] overflow-y-auto p-5 shadow-2xl" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-bold text-zinc-900">Schedule Upload Result</h3>
+              <button onClick={() => setUploadReport(null)} className="p-2 rounded-lg hover:bg-zinc-100"><X size={18} /></button>
+            </div>
+            <div className="grid grid-cols-3 gap-2 mb-4 text-center">
+              <div className="bg-emerald-50 rounded-xl p-3"><p className="text-2xl font-bold text-emerald-700">{uploadReport.scheduled}</p><p className="text-[11px] font-bold text-emerald-700 uppercase">Newly scheduled</p></div>
+              <div className="bg-blue-50 rounded-xl p-3"><p className="text-2xl font-bold text-blue-700">{uploadReport.rescheduled}</p><p className="text-[11px] font-bold text-blue-700 uppercase">Updated</p></div>
+              <div className="bg-red-50 rounded-xl p-3"><p className="text-2xl font-bold text-red-700">{uploadReport.failed.length}</p><p className="text-[11px] font-bold text-red-700 uppercase">Skipped</p></div>
+            </div>
+            {uploadReport.failed.length > 0 && (
+              <div className="space-y-1.5">
+                <p className="text-xs font-bold uppercase tracking-wider text-zinc-400">Skipped rows</p>
+                {uploadReport.failed.map((f, i) => (
+                  <div key={i} className="text-sm bg-zinc-50 border border-zinc-100 rounded-lg px-3 py-2">
+                    <span className="font-bold text-zinc-900">{f.row ? `Row ${f.row}` : 'Save error'}{f.code ? ` · ${f.code}` : ''}</span>
+                    <span className="block text-zinc-500">{f.reason}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

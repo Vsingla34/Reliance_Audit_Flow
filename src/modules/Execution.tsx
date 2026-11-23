@@ -1884,6 +1884,16 @@ ${bFirm}`;
             </div>
           </div>
 
+          {effectiveApprovedValue > 0 && percentUsed >= 100 && (
+            <div className="mb-6 sm:mb-8 p-4 sm:p-5 bg-rose-50 border border-rose-200 rounded-xl sm:rounded-2xl flex items-start gap-3 sm:gap-4">
+              <AlertCircle className="text-rose-600 shrink-0 mt-0.5" size={20} />
+              <div>
+                <h4 className="font-bold text-rose-800 text-sm sm:text-base">Approved Value Reached</h4>
+                <p className="text-xs sm:text-sm text-rose-700 mt-1">The audited value has reached the approved value of <strong>₹{effectiveApprovedValue.toLocaleString('en-IN')}</strong>.</p>
+              </div>
+            </div>
+          )}
+
           {!isActionableDate && canUploadFiles && !isClosedPhase && (
             <div className="mb-6 sm:mb-8 p-4 sm:p-5 bg-amber-50 border border-amber-100 rounded-xl sm:rounded-2xl flex items-start gap-3 sm:gap-4">
               <Lock className="text-amber-500 shrink-0 mt-0.5" size={20} />

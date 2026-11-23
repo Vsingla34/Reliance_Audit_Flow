@@ -118,6 +118,10 @@ export function AddItemModal({ isOpen, onClose, activeTicket, distributor, avail
 
     const totalValue = finalQty * unitValue;
     const newVerifiedTotal = (activeTicket.verifiedTotal || 0) + totalValue;
+    const approvedLimit = activeTicket.approvedValue || distributor?.approvedValue || 0;
+    if (approvedLimit > 0 && newVerifiedTotal > approvedLimit * 1.05 + 0.005) {
+      return alert(`Approved value limit exceeded. This item (₹${totalValue.toLocaleString('en-IN')}) cannot be added.`);
+    }
 
     try {
 
@@ -153,6 +157,9 @@ export function AddItemModal({ isOpen, onClose, activeTicket, distributor, avail
       await supabase.from('auditLineItems').insert(inserts);
       await supabase.from('auditTickets').update({ verifiedTotal: newVerifiedTotal, updatedAt: new Date().toISOString() }).eq('id', activeTicket.id);
       resetAndClose();
+      if (approvedLimit > 0 && (activeTicket.verifiedTotal || 0) < approvedLimit && newVerifiedTotal >= approvedLimit) {
+        alert(`⚠️ Approved value reached (₹${approvedLimit.toLocaleString('en-IN')}).`);
+      }
     } catch (error) {
       console.error("Error saving item:", error); alert("Failed to save item.");
     }

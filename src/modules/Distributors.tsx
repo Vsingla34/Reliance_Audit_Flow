@@ -2,9 +2,9 @@ import React, { useEffect, useState } from 'react';
 import { supabase, logActivity } from '../supabase';
 import { getCachedData, fetchCachedDistributors, fetchCachedUsers, invalidateCache } from '../supabaseOptimized';
 import { Distributor, UserProfile } from '../types';
-import { 
+import {
   Plus, Search, Store, MapPin, Edit2, Trash2, X, Upload, Download,
-  IndianRupee, User as UserIcon, Network, Filter, ChevronLeft, ChevronRight, Mail, Send, Loader2
+  IndianRupee, User as UserIcon, Network, Filter, ChevronLeft, ChevronRight, Mail, Send, Loader2, Phone
 } from 'lucide-react';
 import { cn, useAuth } from '../App';
 import { motion, AnimatePresence } from 'motion/react';
@@ -36,33 +36,33 @@ export function DistributorsModule() {
   const isGlobal = ['superadmin', 'admin', 'ho', 'auditor'].includes(profile?.role || '');
   const cacheKeyDist = `distributors-${assignmentId}-${isGlobal ? 'all' : `${profile?.role}-${profile?.uid}`}`;
 
-  const [distributors, setDistributors] = useState<any[]>(() => getCachedData<any[]>(cacheKeyDist) || []); 
+  const [distributors, setDistributors] = useState<any[]>(() => getCachedData<any[]>(cacheKeyDist) || []);
   const [users, setUsers] = useState<UserProfile[]>(() => getCachedData<UserProfile[]>('global-users') || []);
   const [searchTerm, setSearchTerm] = useState('');
-  
+
   const [filterAse, setFilterAse] = useState('all');
   const [filterAsm, setFilterAsm] = useState('all');
-  
+
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
-  
+
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [isEmailModalOpen, setIsEmailModalOpen] = useState(false);
   const [emailSubject, setEmailSubject] = useState('');
   const [emailBody, setEmailBody] = useState('');
   const [isSendingEmail, setIsSendingEmail] = useState(false);
-  
+
   const [emailTargetRoles, setEmailTargetRoles] = useState<string[]>(['aseIds']);
-  
+
   const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 25; 
-  
+  const itemsPerPage = 25;
+
   const [editingDist, setEditingDist] = useState<any | null>(null);
-  
+
   const [formData, setFormData] = useState<any>({
-    code: '', assignment_serial_no: '', anchorName: '', name: '', approvedValue: 0, 
-    hoIds: [], dmIds: [], smIds: [], asmIds: [], aseIds: [], 
-    active: true, address: '', city: '', state: '', region: ''
+    code: '', assignment_serial_no: '', anchorName: '', name: '', approvedValue: 0,
+    hoIds: [], dmIds: [], smIds: [], asmIds: [], aseIds: [],
+    active: true, address: '', city: '', state: '', region: '', contactNumber: ''
   });
 
   const fetchData = async (force = false) => {
@@ -89,14 +89,15 @@ export function DistributorsModule() {
   }, [searchTerm, filterAse, filterAsm]);
 
   const filteredDistributors = distributors.filter(d => {
-    const matchesSearch = d.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                          d.code.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                          (d.anchorName?.toLowerCase() || '').includes(searchTerm.toLowerCase()) ||
-                          (d.city?.toLowerCase() || '').includes(searchTerm.toLowerCase());
-                          
+    const matchesSearch = d.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      d.code.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (d.anchorName?.toLowerCase() || '').includes(searchTerm.toLowerCase()) ||
+      (d.city?.toLowerCase() || '').includes(searchTerm.toLowerCase()) ||
+      (d.contactNumber || '').includes(searchTerm);
+
     const matchesAse = filterAse === 'all' || (d.aseIds && d.aseIds.includes(filterAse));
     const matchesAsm = filterAsm === 'all' || (d.asmIds && d.asmIds.includes(filterAsm));
-    
+
     return matchesSearch && matchesAse && matchesAsm;
   });
 
@@ -139,7 +140,7 @@ export function DistributorsModule() {
       alert("Please select at least one target role.");
       return;
     }
-    
+
     const selectedDistributors = distributors.filter(d => selectedIds.has(d.id));
     const targetEmailSet = new Set<string>();
 
@@ -170,18 +171,18 @@ export function DistributorsModule() {
       const { error } = await supabase.functions.invoke('send-email', {
         body: { emails, subject: emailSubject, message: emailBody }
       });
-      
+
       if (error) throw error;
-      
+
       logActivity(user, profile, "Bulk Email Sent", `Sent email to ${emails.length} user(s) (${roleNames}) regarding selected distributors. Subject: "${emailSubject}"`);
-      
+
       alert(`Successfully sent email to ${emails.length} user(s) in roles: ${roleNames}!`);
       setIsEmailModalOpen(false);
       setEmailSubject('');
       setEmailBody('');
       setSelectedIds(new Set());
-      setEmailTargetRoles(['aseIds']); 
-      
+      setEmailTargetRoles(['aseIds']);
+
     } catch (error: any) {
       alert(`Failed to send emails.`);
     } finally {
@@ -195,25 +196,25 @@ export function DistributorsModule() {
 
     try {
       const sanitizedData = { ...formData };
-      
+
       const arrayFields = ['hoIds', 'dmIds', 'smIds', 'asmIds', 'aseIds'];
-      arrayFields.forEach(field => { 
+      arrayFields.forEach(field => {
         if (!sanitizedData[field] || !Array.isArray(sanitizedData[field])) {
-          sanitizedData[field] = []; 
+          sanitizedData[field] = [];
         }
       });
 
       if (editingDist) {
         const { error } = await supabase.from('distributors').update(sanitizedData).eq('id', editingDist.id).eq('assignment_id', assignmentId);
         if (error) throw error;
-        
+
         await supabase.from('auditTickets').update({ approvedValue: sanitizedData.approvedValue, maxAllowedValue: (sanitizedData.approvedValue || 0) * 1.05 }).eq('distributorId', editingDist.id).eq('assignment_id', assignmentId).in('status', ['tentative', 'scheduled', 'in_progress']);
         logActivity(user!, profile!, "Distributor Updated", `Updated details for ${formData.name}`, assignmentId);
       } else {
         const newDistId = Math.random().toString(36).substring(7);
         const { error } = await supabase.from('distributors').insert([{ ...sanitizedData, id: newDistId, assignment_id: assignmentId }]);
         if (error) throw error;
-        
+
         const tentativeTicket = {
           id: Math.random().toString(36).substring(7), assignment_id: assignmentId, distributorId: newDistId, proposedDate: null, auditorId: null, approvedValue: sanitizedData.approvedValue, maxAllowedValue: (sanitizedData.approvedValue || 0) * 1.05, status: 'tentative', verifiedTotal: 0, dateProposals: [], comments: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
         };
@@ -225,13 +226,45 @@ export function DistributorsModule() {
     } catch (error: any) { alert(`Failed to save distributor: ${error.message}`); }
   };
 
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
+  const deleteSelected = async () => {
+    if (!hasWriteAccess() || profile?.role !== 'superadmin') return;
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+    const names = distributors.filter(d => selectedIds.has(d.id)).map(d => d.name);
+    const preview = names.slice(0, 5).join(', ') + (names.length > 5 ? ` and ${names.length - 5} more` : '');
+    if (!window.confirm(`Delete ${ids.length} distributor(s)?\n\n${preview}\n\nAll their audits and audit line items will also be permanently removed. This cannot be undone.`)) return;
+    setIsBulkDeleting(true);
+    try {
+      const { data: tickets, error: tErr } = await supabase.from('auditTickets').select('id').in('distributorId', ids).eq('assignment_id', assignmentId);
+      if (tErr) throw tErr;
+      const ticketIds = (tickets || []).map((t: any) => t.id);
+      if (ticketIds.length > 0) {
+        const { error: liErr } = await supabase.from('auditLineItems').delete().in('ticketId', ticketIds);
+        if (liErr) throw liErr;
+        const { error: tdErr } = await supabase.from('auditTickets').delete().in('id', ticketIds);
+        if (tdErr) throw tdErr;
+      }
+      const { error } = await supabase.from('distributors').delete().in('id', ids).eq('assignment_id', assignmentId);
+      if (error) throw error;
+      logActivity(user!, profile!, "Distributors Deleted", `Bulk deleted ${ids.length} distributor(s) and their audits: ${preview}`, assignmentId);
+      setSelectedIds(new Set());
+      invalidateCache(`distributors-${assignmentId}`);
+      fetchData(true);
+    } catch (error: any) {
+      alert(`Failed to delete distributors: ${error.message}`);
+    } finally {
+      setIsBulkDeleting(false);
+    }
+  };
+
   const deleteDist = async (id: string) => {
-    if (!hasWriteAccess()) return;
+    if (!hasWriteAccess() || profile?.role !== 'superadmin') return;
 
     if (window.confirm("Are you sure you want to delete this distributor? All associated audits will also be removed.")) {
       try {
         const distName = distributors.find(d => d.id === id)?.name || 'Unknown';
-        
+
         const { data: tickets } = await supabase.from('auditTickets').select('id').eq('distributorId', id);
         if (tickets && tickets.length > 0) {
           const ticketIds = tickets.map(t => t.id);
@@ -239,35 +272,36 @@ export function DistributorsModule() {
           await supabase.from('auditTickets').delete().in('id', ticketIds);
         }
         await supabase.from('distributors').delete().eq('id', id);
-        
+
         logActivity(user!, profile!, "Distributor Deleted", `Deleted distributor and associated audits: ${distName}`);
         setSelectedIds(prev => { const n = new Set(prev); n.delete(id); return n; });
       } catch (error) { alert("Failed to delete distributor."); }
     }
   };
 
-  const resetForm = () => { 
-    setFormData({ 
-      code: '', assignment_serial_no: '', anchorName: '', name: '', approvedValue: 0, 
-      hoIds: [], dmIds: [], smIds: [], asmIds: [], aseIds: [], 
-      active: true, address: '', city: '', state: '', region: '' 
+  const resetForm = () => {
+    setFormData({
+      code: '', assignment_serial_no: '', anchorName: '', name: '', approvedValue: 0,
+      hoIds: [], dmIds: [], smIds: [], asmIds: [], aseIds: [],
+      active: true, address: '', city: '', state: '', region: '', contactNumber: ''
     });
     setRoleSearchTerms({});
   };
 
   const openEditModal = (dist: any) => {
     setEditingDist(dist);
-    setFormData({ 
-      ...dist, 
-      hoIds: dist.hoIds || [], 
-      dmIds: dist.dmIds || [], 
-      smIds: dist.smIds || [], 
-      asmIds: dist.asmIds || [], 
-      aseIds: dist.aseIds || [], 
+    setFormData({
+      ...dist,
+      hoIds: dist.hoIds || [],
+      dmIds: dist.dmIds || [],
+      smIds: dist.smIds || [],
+      asmIds: dist.asmIds || [],
+      aseIds: dist.aseIds || [],
       anchorName: dist.anchorName || '',
       assignment_serial_no: dist.assignment_serial_no || '',
       region: dist.region || '',
       address: dist.address || '',
+      contactNumber: dist.contactNumber || '',
       city: dist.city || '',
       state: dist.state || ''
     });
@@ -277,12 +311,13 @@ export function DistributorsModule() {
   // ─────────────────────────────────────────────────────────────────────────
   // CSV TEMPLATE — includes Assignment No column so imports work correctly
   // Columns: Code, AssignmentNo, AnchorName, Name, ApprovedValue,
-  //          HO_Emails, DM_Emails, SM_Emails, ASM_Emails, ASE_Emails,
-  //          Region, City, State, Address
+  //          <ROLE>_Name, <ROLE>_Emails, <ROLE>_ContactNo for HO, DM, SM, ASM, ASE
+  //          (name/email/phone are stored on the distributor; several people separated by ';'),
+  //          Region, City, State, Address, Phone
   // ─────────────────────────────────────────────────────────────────────────
   const downloadTemplate = () => {
-    const headers = 'Code,AssignmentNo,AnchorName,Name,ApprovedValue,HO_Emails,DM_Emails,SM_Emails,ASM_Emails,ASE_Emails,Region,City,State,Address';
-    const example = 'DIST-001,ASN-2024-001,Reliance,Reliance Smart Point,500000,ho@comp.com,,sm1@comp.com;sm2@comp.com,asm@comp.com,ase1@comp.com;ase2@comp.com,North,Delhi,Delhi,123 Main Street Sector 4';
+    const headers = 'Code,AssignmentNo,AnchorName,Name,ApprovedValue,HO_Name,HO_Emails,HO_ContactNo,DM_Name,DM_Emails,DM_ContactNo,SM_Name,SM_Emails,SM_ContactNo,ASM_Name,ASM_Emails,ASM_ContactNo,ASE_Name,ASE_Emails,ASE_ContactNo,Region,City,State,Address,Phone';
+    const example = 'DIST-001,ASN-2024-001,Reliance,Reliance Smart Point,500000,Ravi HO,ho@comp.com,9000000001,,,,SM One;SM Two,sm1@comp.com;sm2@comp.com,9000000002;9000000003,ASM One,asm@comp.com,9000000004,ASE One;ASE Two,ase1@comp.com;ase2@comp.com,9000000005;9000000006,North,Delhi,Delhi,123 Main Street Sector 4,9876543210';
     const csvContent = `${headers}\n${example}`;
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
@@ -296,7 +331,7 @@ export function DistributorsModule() {
   // ─────────────────────────────────────────────────────────────────────────
   const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!hasWriteAccess()) return;
-    
+
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -335,20 +370,31 @@ export function DistributorsModule() {
 
         // Column index map — supports both old and new header names
         const COL = {
-          code:              col(['code', 'distributorcode']),
-          assignmentNo:      col(['assignmentno', 'assignmentserialno', 'assignment_serial_no', 'assignno']),
-          anchorName:        col(['anchorname', 'anchor']),
-          name:              col(['name', 'distributorname']),
-          approvedValue:     col(['approvedvalue', 'value', 'budget']),
-          hoEmails:          col(['ho_emails', 'hoemails', 'ho']),
-          dmEmails:          col(['dm_emails', 'dmemails', 'dm']),
-          smEmails:          col(['sm_emails', 'smemails', 'sm']),
-          asmEmails:         col(['asm_emails', 'asmemails', 'asm']),
-          aseEmails:         col(['ase_emails', 'aseemails', 'ase']),
-          region:            col(['region']),
-          city:              col(['city']),
-          state:             col(['state']),
-          address:           col(['address']),
+          code: col(['code', 'distributorcode']),
+          assignmentNo: col(['assignmentno', 'assignmentserialno', 'assignment_serial_no', 'assignno']),
+          anchorName: col(['anchorname', 'anchor']),
+          name: col(['name', 'distributorname']),
+          approvedValue: col(['approvedvalue', 'value', 'budget']),
+          hoEmails: col(['ho_emails', 'hoemails', 'ho']),
+          dmEmails: col(['dm_emails', 'dmemails', 'dm']),
+          smEmails: col(['sm_emails', 'smemails', 'sm']),
+          asmEmails: col(['asm_emails', 'asmemails', 'asm']),
+          aseEmails: col(['ase_emails', 'aseemails', 'ase']),
+          hoNames: col(['ho_name', 'honame', 'honames']),
+          dmNames: col(['dm_name', 'dmname', 'dmnames']),
+          smNames: col(['sm_name', 'smname', 'smnames']),
+          asmNames: col(['asm_name', 'asmname', 'asmnames']),
+          aseNames: col(['ase_name', 'asename', 'asenames']),
+          hoPhones: col(['ho_contactno', 'hocontactno', 'hophone', 'hophoneno', 'hocontactnumber']),
+          dmPhones: col(['dm_contactno', 'dmcontactno', 'dmphone', 'dmphoneno', 'dmcontactnumber']),
+          smPhones: col(['sm_contactno', 'smcontactno', 'smphone', 'smphoneno', 'smcontactnumber']),
+          asmPhones: col(['asm_contactno', 'asmcontactno', 'asmphone', 'asmphoneno', 'asmcontactnumber']),
+          asePhones: col(['ase_contactno', 'asecontactno', 'asephone', 'asephoneno', 'asecontactnumber']),
+          region: col(['region']),
+          city: col(['city']),
+          state: col(['state']),
+          address: col(['address']),
+          phone: col(['phone', 'phoneno', 'phonenumber', 'mobile', 'mobileno', 'contactnumber', 'contactno']),
         };
 
         const get = (cols: number[], row: string[]) => {
@@ -366,6 +412,18 @@ export function DistributorsModule() {
             .map(u => u.uid);
         };
 
+        // Role contacts are read straight from the sheet (no lookup in the users table).
+        // Names / emails / numbers are split on ';' and paired by position.
+        const splitList = (str: string) => (str || '').split(/[;|]/).map(x => x.trim()).filter(Boolean);
+        const buildContacts = (nameStr: string, emailStr: string, phoneStr: string) => {
+          const names = splitList(nameStr), emails = splitList(emailStr), phones = splitList(phoneStr).map(p => p.replace(/[^0-9+\-\s()]/g, '').trim());
+          const n = Math.max(names.length, emails.length, phones.length);
+          return Array.from({ length: n }, (_, i) => ({
+            name: names[i] || '', email: emails[i] || '',
+            phone: phones[i] ?? (phones.length === 1 && n === 1 ? phones[0] : ''),
+          })).filter(c => c.name || c.email || c.phone);
+        };
+
         const newDistributors = lines.slice(1).map(line => {
           const cols = parseCSVRow(line);
           if (cols.length < 4) return null;
@@ -375,23 +433,29 @@ export function DistributorsModule() {
           if (!code || !name) return null;
 
           return {
-            id:                 Math.random().toString(36).substring(7),
-            assignment_id:      assignmentId,
+            id: Math.random().toString(36).substring(7),
+            assignment_id: assignmentId,
             code,
             assignment_serial_no: get([COL.assignmentNo], cols) || '',
-            anchorName:         get([COL.anchorName], cols) || '',
+            anchorName: get([COL.anchorName], cols) || '',
             name,
-            approvedValue:      parseFloat(get([COL.approvedValue], cols).replace(/[^0-9.]/g, '')) || 0,
-            hoIds:              findUserIds(get([COL.hoEmails], cols), 'ho'),
-            dmIds:              findUserIds(get([COL.dmEmails], cols), 'dm'),
-            smIds:              findUserIds(get([COL.smEmails], cols), 'sm'),
-            asmIds:             findUserIds(get([COL.asmEmails], cols), 'asm'),
-            aseIds:             findUserIds(get([COL.aseEmails], cols), 'ase'),
-            region:             get([COL.region], cols) || '',
-            city:               get([COL.city], cols) || '',
-            state:              get([COL.state], cols) || '',
-            address:            get([COL.address], cols) || '',
-            active:             true,
+            approvedValue: parseFloat(get([COL.approvedValue], cols).replace(/[^0-9.]/g, '')) || 0,
+            hoIds: findUserIds(get([COL.hoEmails], cols), 'ho'),
+            dmIds: findUserIds(get([COL.dmEmails], cols), 'dm'),
+            smIds: findUserIds(get([COL.smEmails], cols), 'sm'),
+            asmIds: findUserIds(get([COL.asmEmails], cols), 'asm'),
+            aseIds: findUserIds(get([COL.aseEmails], cols), 'ase'),
+            region: get([COL.region], cols) || '',
+            city: get([COL.city], cols) || '',
+            state: get([COL.state], cols) || '',
+            address: get([COL.address], cols) || '',
+            contactNumber: get([COL.phone], cols).replace(/[^0-9+\-\s()]/g, '').trim(),
+            hoContacts: buildContacts(get([COL.hoNames], cols), get([COL.hoEmails], cols), get([COL.hoPhones], cols)),
+            dmContacts: buildContacts(get([COL.dmNames], cols), get([COL.dmEmails], cols), get([COL.dmPhones], cols)),
+            smContacts: buildContacts(get([COL.smNames], cols), get([COL.smEmails], cols), get([COL.smPhones], cols)),
+            asmContacts: buildContacts(get([COL.asmNames], cols), get([COL.asmEmails], cols), get([COL.asmPhones], cols)),
+            aseContacts: buildContacts(get([COL.aseNames], cols), get([COL.aseEmails], cols), get([COL.asePhones], cols)),
+            active: true,
           };
         }).filter(Boolean);
 
@@ -419,8 +483,9 @@ export function DistributorsModule() {
     reader.readAsText(file);
   };
 
+  const isSuperadmin = profile?.role === 'superadmin';
   const canManage = ['superadmin', 'admin'].includes(profile?.role || '');
-  
+
   const ases = users.filter(u => u.role === 'ase');
   const asms = users.filter(u => u.role === 'asm');
 
@@ -428,14 +493,14 @@ export function DistributorsModule() {
   const [roleSearchTerms, setRoleSearchTerms] = React.useState<Record<string, string>>({});
 
   const renderMultiUserSelect = (label: string, roleFilter: string, fieldName: string) => {
-    const allRoleUsers  = users.filter(u => u.role === roleFilter && u.active);
-    const searchTerm    = roleSearchTerms[fieldName] || '';
-    const visibleUsers  = searchTerm.trim()
+    const allRoleUsers = users.filter(u => u.role === roleFilter && u.active);
+    const searchTerm = roleSearchTerms[fieldName] || '';
+    const visibleUsers = searchTerm.trim()
       ? allRoleUsers.filter(u =>
-          u.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          (u.region || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-          (u.email  || '').toLowerCase().includes(searchTerm.toLowerCase())
-        )
+        u.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (u.region || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (u.email || '').toLowerCase().includes(searchTerm.toLowerCase())
+      )
       : allRoleUsers;
 
     const selectedCount = ((formData[fieldName] || []) as string[])
@@ -562,10 +627,20 @@ export function DistributorsModule() {
             </div>
           )}
         </div>
-        
+
         {canManage && (
           <div className="flex w-full flex-wrap items-center justify-start gap-3 2xl:w-auto 2xl:flex-nowrap 2xl:justify-end 2xl:shrink-0">
+            {isSuperadmin && (
+              <button onClick={toggleSelectAll} className="flex items-center justify-center gap-2 px-5 py-4 bg-white border border-zinc-200 text-zinc-900 rounded-2xl font-bold hover:bg-zinc-50 transition-all active:scale-95 whitespace-nowrap">
+                {selectedIds.size === filteredDistributors.length && filteredDistributors.length > 0 ? 'Deselect All' : 'Select All'}
+              </button>
+            )}
             <AnimatePresence>
+              {isSuperadmin && selectedIds.size > 0 && (
+                <motion.button initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }} onClick={deleteSelected} disabled={isBulkDeleting} className="flex items-center justify-center gap-2 px-6 py-4 bg-red-600 text-white rounded-2xl font-bold hover:bg-red-700 transition-all shadow-xl shadow-red-600/20 active:scale-95 whitespace-nowrap disabled:opacity-60">
+                  {isBulkDeleting ? <Loader2 size={20} className="animate-spin" /> : <Trash2 size={20} />} Delete ({selectedIds.size})
+                </motion.button>
+              )}
               {selectedIds.size > 0 && (
                 <motion.button initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }} onClick={() => setIsEmailModalOpen(true)} className="flex items-center justify-center gap-2 px-6 py-4 bg-blue-600 text-white rounded-2xl font-bold hover:bg-blue-700 transition-all shadow-xl shadow-blue-600/20 active:scale-95 whitespace-nowrap">
                   <Mail size={20} /> Email Team ({selectedIds.size})
@@ -574,8 +649,8 @@ export function DistributorsModule() {
             </AnimatePresence>
             <button onClick={downloadTemplate} className="flex items-center justify-center gap-2 px-4 py-4 bg-white border border-zinc-200 text-zinc-900 rounded-2xl font-bold hover:bg-zinc-50 transition-all active:scale-95 whitespace-nowrap" title="Download Template"><Download size={18} /></button>
             <div className="relative">
-               <input type="file" accept=".csv" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" onChange={handleImport} title="Upload CSV" />
-               <button className="flex items-center justify-center gap-2 px-6 py-4 bg-zinc-100 text-zinc-900 rounded-2xl font-bold hover:bg-zinc-200 transition-all active:scale-95 whitespace-nowrap pointer-events-none"><Upload size={20} /> Import</button>
+              <input type="file" accept=".csv" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" onChange={handleImport} title="Upload CSV" />
+              <button className="flex items-center justify-center gap-2 px-6 py-4 bg-zinc-100 text-zinc-900 rounded-2xl font-bold hover:bg-zinc-200 transition-all active:scale-95 whitespace-nowrap pointer-events-none"><Upload size={20} /> Import</button>
             </div>
             <button onClick={() => { resetForm(); setIsModalOpen(true); }} className="flex items-center justify-center gap-2 px-6 py-4 bg-black text-white rounded-2xl font-bold hover:bg-zinc-800 transition-all shadow-xl shadow-black/10 active:scale-95 whitespace-nowrap"><Plus size={20} /> Add</button>
           </div>
@@ -589,8 +664,8 @@ export function DistributorsModule() {
               <tr className="text-left bg-zinc-50/50 border-b border-zinc-100">
                 {canManage && (
                   <th className="px-4 py-5 w-12">
-                    <input 
-                      type="checkbox" 
+                    <input
+                      type="checkbox"
                       className="w-5 h-5 rounded border-zinc-300 text-black focus:ring-black cursor-pointer"
                       checked={selectedIds.size === filteredDistributors.length && filteredDistributors.length > 0}
                       onChange={toggleSelectAll}
@@ -609,8 +684,8 @@ export function DistributorsModule() {
                 <tr key={dist.id} className={cn("hover:bg-zinc-50/50 transition-colors group", selectedIds.has(dist.id) && "bg-blue-50/30")}>
                   {canManage && (
                     <td className="px-4 py-5">
-                      <input 
-                        type="checkbox" 
+                      <input
+                        type="checkbox"
                         className="w-5 h-5 rounded border-zinc-300 text-black focus:ring-black cursor-pointer"
                         checked={selectedIds.has(dist.id)}
                         onChange={() => toggleSelect(dist.id)}
@@ -642,15 +717,23 @@ export function DistributorsModule() {
                         <MapPin size={12} className="shrink-0" />
                         <span className="truncate max-w-[180px]">{dist.city || 'No City'}{dist.state ? `, ${dist.state}` : ''}</span>
                       </div>
+                      {dist.contactNumber && (
+                        <a href={`tel:${dist.contactNumber}`} className="flex items-center gap-1.5 text-sm text-zinc-500 hover:text-blue-600">
+                          <Phone size={12} className="shrink-0" />
+                          <span className="truncate max-w-[180px]">{dist.contactNumber}</span>
+                        </a>
+                      )}
                     </div>
                   </td>
                   <td className="px-5 py-5 align-middle">
                     <div className="flex items-center gap-2 bg-zinc-50 px-3 py-1.5 rounded-xl inline-flex border border-zinc-100">
                       <Network size={14} className="text-zinc-400 shrink-0" />
                       <span className="text-sm font-medium text-zinc-700 truncate max-w-[150px]">
-                        {dist.aseIds && dist.aseIds.length > 0 
-                          ? dist.aseIds.map((id: string) => users.find(u => u.uid === id)?.name.split(' ')[0]).filter(Boolean).join(', ') 
-                          : 'No ASE Assigned'}
+                        {(() => {
+                          const fromSheet = (dist.aseContacts || []).map((c: any) => (c.name || '').split(' ')[0]).filter(Boolean).join(', ');
+                          const fromUsers = (dist.aseIds || []).map((id: string) => users.find(u => u.uid === id)?.name.split(' ')[0]).filter(Boolean).join(', ');
+                          return fromSheet || fromUsers || 'No ASE Assigned';
+                        })()}
                       </span>
                     </div>
                   </td>
@@ -659,12 +742,14 @@ export function DistributorsModule() {
                       <IndianRupee size={14} /><span>{dist.approvedValue.toLocaleString('en-IN')}</span>
                     </div>
                   </td>
-                  
+
                   {canManage && (
                     <td className="px-5 py-5 text-right align-middle">
                       <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                         <button onClick={() => openEditModal(dist)} className="p-2 text-zinc-400 hover:text-black hover:bg-zinc-100 rounded-xl transition-all" title="Edit Distributor"><Edit2 size={16} /></button>
-                        <button onClick={() => deleteDist(dist.id)} className="p-2 text-zinc-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all" title="Delete Distributor"><Trash2 size={16} /></button>
+                        {isSuperadmin && (
+                          <button onClick={() => deleteDist(dist.id)} className="p-2 text-zinc-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all" title="Delete Distributor"><Trash2 size={16} /></button>
+                        )}
                       </div>
                     </td>
                   )}
@@ -686,7 +771,7 @@ export function DistributorsModule() {
             <span className="text-sm font-medium text-zinc-500">
               Showing <span className="font-bold text-zinc-900">{(currentPage - 1) * itemsPerPage + 1}</span> to <span className="font-bold text-zinc-900">{Math.min(currentPage * itemsPerPage, filteredDistributors.length)}</span> of <span className="font-bold text-zinc-900">{filteredDistributors.length}</span> distributors
             </span>
-            
+
             <div className="flex items-center gap-2">
               <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1} className="p-2 rounded-xl border border-zinc-200 bg-white text-zinc-600 hover:bg-zinc-100 disabled:opacity-50 transition-colors"><ChevronLeft size={18} /></button>
               <span className="text-sm font-bold text-zinc-700 px-4">Page {currentPage} of {totalPages}</span>
@@ -702,7 +787,7 @@ export function DistributorsModule() {
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 md:p-6">
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => !isSendingEmail && setIsEmailModalOpen(false)} className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
             <motion.div initial={{ opacity: 0, scale: 0.9, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9, y: 20 }} className="relative w-full max-w-2xl bg-white rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col max-h-[95vh]">
-              
+
               <div className="p-6 md:p-8 border-b border-zinc-100 flex items-center justify-between shrink-0 bg-white">
                 <div className="flex items-center gap-4">
                   <div className="w-12 h-12 bg-blue-50 rounded-2xl flex items-center justify-center"><Mail className="text-blue-600" size={24} /></div>
@@ -713,7 +798,7 @@ export function DistributorsModule() {
                 </div>
                 <button type="button" onClick={() => !isSendingEmail && setIsEmailModalOpen(false)} className="p-2 hover:bg-zinc-100 rounded-xl transition-colors"><X size={20} /></button>
               </div>
-              
+
               <div className="p-6 md:p-8 flex-1 min-h-0 overflow-y-auto bg-zinc-50/50 custom-scrollbar">
                 <form id="bulk-email-form" onSubmit={handleSendBulkEmail} className="space-y-6">
                   <div>
@@ -752,7 +837,7 @@ export function DistributorsModule() {
                   </div>
                 </form>
               </div>
-              
+
               <div className="p-6 md:p-8 border-t border-zinc-100 shrink-0 bg-white flex justify-end gap-3">
                 <button type="button" onClick={() => setIsEmailModalOpen(false)} disabled={isSendingEmail} className="px-6 py-4 text-sm font-bold text-zinc-500 hover:text-black transition-colors disabled:opacity-50">Cancel</button>
                 <button type="submit" form="bulk-email-form" disabled={isSendingEmail} className="px-10 py-4 bg-blue-600 text-white rounded-2xl font-bold hover:bg-blue-700 transition-all shadow-xl shadow-blue-600/20 active:scale-95 flex items-center gap-2">
@@ -770,7 +855,7 @@ export function DistributorsModule() {
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 md:p-6">
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsModalOpen(false)} className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
             <motion.div initial={{ opacity: 0, scale: 0.9, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9, y: 20 }} className="relative w-full max-w-5xl bg-white rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col max-h-[95vh]">
-              
+
               <div className="p-6 md:p-8 border-b border-zinc-100 flex items-center justify-between shrink-0 bg-white z-10">
                 <div className="flex items-center gap-4">
                   <div className="w-12 h-12 bg-zinc-100 rounded-2xl flex items-center justify-center"><Store className="text-black" size={20} /></div>
@@ -778,7 +863,7 @@ export function DistributorsModule() {
                 </div>
                 <button type="button" onClick={() => setIsModalOpen(false)} className="p-2 hover:bg-zinc-100 rounded-xl transition-colors"><X size={20} /></button>
               </div>
-              
+
               <div className="p-6 md:p-8 flex-1 min-h-0 overflow-y-auto custom-scrollbar bg-zinc-50/50">
                 <form id="distributor-form" onSubmit={handleSubmit} className="space-y-8">
 
@@ -827,6 +912,7 @@ export function DistributorsModule() {
                         <div className="space-y-2"><label className="text-xs font-bold uppercase tracking-wider text-zinc-400 ml-1">City</label><input className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black transition-all" value={formData.city} onChange={(e) => setFormData({ ...formData, city: e.target.value })} /></div>
                         <div className="space-y-2"><label className="text-xs font-bold uppercase tracking-wider text-zinc-400 ml-1">State</label><input className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black transition-all" value={formData.state} onChange={(e) => setFormData({ ...formData, state: e.target.value })} /></div>
                       </div>
+                      <div className="space-y-2"><label className="text-xs font-bold uppercase tracking-wider text-zinc-400 ml-1">Phone Number</label><input type="tel" inputMode="tel" placeholder="e.g. 9876543210" className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black transition-all" value={formData.contactNumber || ''} onChange={(e) => setFormData({ ...formData, contactNumber: e.target.value })} /></div>
                       <div className="space-y-2">
                         <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 ml-1">Full Address</label>
                         <textarea className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-black transition-all resize-none custom-scrollbar" rows={2} value={formData.address || ''} onChange={(e) => setFormData({ ...formData, address: e.target.value })} placeholder="Complete street address..."></textarea>
@@ -840,7 +926,7 @@ export function DistributorsModule() {
                   </div>
                 </form>
               </div>
-              
+
               <div className="p-6 md:p-8 border-t border-zinc-100 shrink-0 bg-white z-10 flex justify-end">
                 <button type="submit" form="distributor-form" className="px-12 py-4 bg-black text-white rounded-2xl font-bold hover:bg-zinc-800 transition-all shadow-xl shadow-black/10 active:scale-95 text-lg">
                   {editingDist ? 'Save Changes' : 'Create Distributor'}

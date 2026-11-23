@@ -27,7 +27,8 @@ export const TICKET_COLS = [
 
 export const DIST_COLS = [
   'id', 'assignment_id', 'code', 'name', 'anchorName', 'address', 'city', 'state', 'region',
-  'approvedValue', 'aseIds', 'asmIds', 'smIds', 'dmIds', 'hoIds', 'active', 'assignment_serial_no'
+  'approvedValue', 'aseIds', 'asmIds', 'smIds', 'dmIds', 'hoIds', 'active', 'assignment_serial_no', 'contactNumber',
+  'hoContacts', 'dmContacts', 'smContacts', 'asmContacts', 'aseContacts'
 ].join(',');
 
 export const USER_COLS = [

@@ -153,6 +153,35 @@ export default function App() {
     }
   };
 
+  // Restore the last opened assignment after a page refresh (instead of dropping the
+  // user back on the Select Assignment screen).
+  const [restoringAssignment, setRestoringAssignment] = useState<boolean>(() => {
+    try { return !!localStorage.getItem(ACTIVE_ASSIGNMENT_STORAGE_KEY); } catch { return false; }
+  });
+  useEffect(() => {
+    if (!profile || activeAssignment || !restoringAssignment) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const savedId = localStorage.getItem(ACTIVE_ASSIGNMENT_STORAGE_KEY);
+        if (!savedId) return;
+        const { data } = await supabase.from('assignments').select('*').eq('id', savedId).maybeSingle();
+        const canManage = ['superadmin', 'admin'].includes(profile.role);
+        const allowed = !!data
+          && (savedId !== 'assignment-1' || canManage)   // Assignment 1: superadmin/admin only
+          && (canManage || (data as any).active !== false);
+        if (cancelled) return;
+        if (allowed) setActiveAssignmentState(data as Assignment);
+        else localStorage.removeItem(ACTIVE_ASSIGNMENT_STORAGE_KEY);
+      } catch (e) {
+        console.warn('Could not restore last assignment:', e);
+      } finally {
+        if (!cancelled) setRestoringAssignment(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [profile?.uid, activeAssignment, restoringAssignment]);
+
   const [loading, setLoading] = useState(true);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -959,6 +988,13 @@ export default function App() {
   }
 
   // ─── SELECT ASSIGNMENT PAGE (shown before main dashboard after login) ────
+  if (!activeAssignment && restoringAssignment) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50">
+        <Loader2 size={32} className="animate-spin text-indigo-600" />
+      </div>
+    );
+  }
   if (!activeAssignment) {
     return (
       <SelectAssignment

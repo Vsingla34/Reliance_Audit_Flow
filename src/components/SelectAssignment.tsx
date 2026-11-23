@@ -128,6 +128,9 @@ export function SelectAssignment({
 
   const visibleAssignments = useMemo(() => {
     return assignments.filter(a => {
+      // Policy: Assignment 1 (the historical/primary tenant) is restricted to
+      // superadmin and admin only — it is never shown to any other role.
+      if (a.id === 'assignment-1' && !['superadmin', 'admin'].includes(profile.role)) return false;
       if (!canManageAssignments && !a.active) return false;
       const q = searchTerm.toLowerCase().trim();
       if (!q) return true;
@@ -137,7 +140,7 @@ export function SelectAssignment({
         (a.description || '').toLowerCase().includes(q)
       );
     });
-  }, [assignments, searchTerm, canManageAssignments]);
+  }, [assignments, searchTerm, canManageAssignments, profile.role]);
 
   const openCreateModal = () => {
     setEditingAssignment(null);
