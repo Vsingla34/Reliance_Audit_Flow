@@ -103,7 +103,8 @@ export function ExecutionModule() {
   const isSubmittedPhase = activeTicket ? ['submitted', 'drainage_pending', 'signed', 'evidence_uploaded', 'closed'].includes(activeTicket.status) : false;
   const isClosedPhase = activeTicket ? activeTicket.status === 'closed' : false;
   const isDrainagePhase = activeTicket ? ['drainage_pending', 'closed'].includes(activeTicket.status) : false;
-  const isActionableDate = activeTicket?.scheduledDate ? (activeTicket.scheduledDate <= todayStr || activeTicket.status === 'in_progress') : false;
+  // Superadmin is never date-locked: can execute any audit on any day.
+  const isActionableDate = profile?.role === 'superadmin' ? true : (activeTicket?.scheduledDate ? (activeTicket.scheduledDate <= todayStr || activeTicket.status === 'in_progress') : false);
   const isDrainageToday = activeTicket?.signOffs?.drainageDate === todayStr;
 
   const distMap = useMemo(() => {

@@ -286,7 +286,7 @@ export function CheckInBlock({
                     <div>
                       <p className="text-xs font-bold text-slate-700 dark:text-slate-300">Check-In Selfie Required</p>
                       <p className="text-[10px] text-slate-400 dark:text-slate-500">
-                        {isFuture
+                        {isFuture && profile?.role !== 'superadmin'
                           ? `Available on ${dayDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}`
                           : `Upload selfie for Day ${dayNum}.`}
                         {isAdminOrSuperadmin && isToday && (
@@ -300,7 +300,7 @@ export function CheckInBlock({
                   </div>
 
                   {/* Upload button — each day has its own, fires for that dayNum only */}
-                  {canUploadSelfie && !isFuture && isActionableDate && (
+                  {canUploadSelfie && (!isFuture || profile?.role === 'superadmin') && isActionableDate && (
                     <div className="shrink-0">
                       <button
                         onClick={() => fileRefs.current[dayNum]?.click()}
