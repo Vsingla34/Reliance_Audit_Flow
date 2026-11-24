@@ -1246,7 +1246,7 @@ export function ExecutionModule() {
       const remarkCell = `J${rowNum}`;
       ws.getCell(remarkCell).dataValidation = {
         type: 'list',
-        formulae: ['"Sending Invoice,Damaged Bottles/Cans,Label Damage,Packaging Defects,Leakage"'],
+        formulae: ['"Sending Invoice,Damaged Bottles/Cans,Label Damage,Packaging Defects,Leakage,Quality Issue"'],
         showErrorMessage: true,
         errorStyle: 'warning',
         errorTitle: 'Invalid Remark',
