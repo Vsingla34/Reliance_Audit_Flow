@@ -1125,7 +1125,6 @@ export function ExecutionModule() {
       { header: 'SoldToParty', key: 'SoldToParty', width: 16 },
       { header: 'ArticleNo', key: 'ArticleNo', width: 18 },
       { header: 'Description', key: 'Description', width: 32 },
-      { header: 'SystemQty', key: 'SystemQty', width: 14 },
       { header: 'PrimaryDamage', key: 'PrimaryDamage', width: 16 },
       { header: 'NonSaleable', key: 'NonSaleable', width: 16 },
       { header: 'BBD', key: 'BBD', width: 14 },
@@ -1134,9 +1133,9 @@ export function ExecutionModule() {
       { header: 'Remarks', key: 'Remarks', width: 28 },
     ];
 
-    // Cols 1-4 = locked, Cols 5-10 = editable (qty + dates + remarks)
-    const LOCKED_COLS = new Set([1, 2, 3, 4]);
-    const EDITABLE_COLS = new Set([5, 6, 7, 8, 9, 10]);
+    // Cols 1-3 = locked, Cols 4-9 = editable (qty + dates + remarks)
+    const LOCKED_COLS = new Set([1, 2, 3]);
+    const EDITABLE_COLS = new Set([4, 5, 6, 7, 8, 9]);
 
     // ── Header row (row 1) ─────────────────────────────────────────────────
     ws.getRow(1).eachCell((cell, colNum) => {
@@ -1156,7 +1155,6 @@ export function ExecutionModule() {
         SoldToParty: distCode,
         ArticleNo: item.itemCode,
         Description: item.itemName,
-        SystemQty: item.expectedQty,
         PrimaryDamage: 0,
         NonSaleable: 0,
         BBD: 0,
@@ -1166,11 +1164,11 @@ export function ExecutionModule() {
       });
 
       const rowNum = row.number;
-      const mfgCell = `H${rowNum}`;  // MfgDate col 8
-      const expCell = `I${rowNum}`;  // ExpDate  col 9
-      const dmgCell = `E${rowNum}`;  // PrimaryDamage col 5
-      const nsCell = `F${rowNum}`;  // NonSaleable col 6
-      const bbdCell = `G${rowNum}`;  // BBD col 7
+      const mfgCell = `G${rowNum}`;  // MfgDate col 7
+      const expCell = `H${rowNum}`;  // ExpDate  col 8
+      const dmgCell = `D${rowNum}`;  // PrimaryDamage col 4
+      const nsCell = `E${rowNum}`;  // NonSaleable col 5
+      const bbdCell = `F${rowNum}`;  // BBD col 6
 
       row.eachCell({ includeEmpty: true }, (cell, colNum) => {
         if (LOCKED_COLS.has(colNum)) {
@@ -1196,8 +1194,8 @@ export function ExecutionModule() {
           errorTitle: 'Invalid Quantity',
           error: 'Quantity must be a whole number 0 or greater.',
           showInputMessage: true,
-          promptTitle: cellAddr.startsWith('E') ? 'Primary Damage' : cellAddr.startsWith('F') ? 'Non-Saleable' : 'BBD / Expired',
-          prompt: cellAddr.startsWith('G')
+          promptTitle: cellAddr.startsWith('D') ? 'Primary Damage' : cellAddr.startsWith('E') ? 'Non-Saleable' : 'BBD / Expired',
+          prompt: cellAddr.startsWith('F')
             ? 'BBD qty. Exp date must be on or before audit date.'
             : 'Enter verified quantity.',
         };
@@ -1244,7 +1242,7 @@ export function ExecutionModule() {
       };
       ws.getCell(expCell).numFmt = 'DD-MM-YYYY';
       // Remarks dropdown — Primary Damage: "Sending Invoice", Non-Saleable: damage reasons
-      const remarkCell = `J${rowNum}`;
+      const remarkCell = `I${rowNum}`;
       ws.getCell(remarkCell).dataValidation = {
         type: 'list',
         formulae: ['"Sending Invoice,Damaged Bottles/Cans,Label Damage,Packaging Defects,Leakage,Quality Issue"'],
@@ -1275,12 +1273,12 @@ export function ExecutionModule() {
 
     // ── Add 20 blank editable rows at the bottom for manual new items ────────
     for (let i = 0; i < 20; i++) {
-      const blankRow = ws.addRow(['', '', '', '', 0, 0, 0, '', '', '']);
+      const blankRow = ws.addRow(['', '', '', 0, 0, 0, '', '', '']);
       blankRow.eachCell({ includeEmpty: true }, (cell, colNum) => {
         cell.protection = { locked: false };
-        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colNum >= 5 ? 'FFFFF9F0' : 'FFFFFFFF' } };
-        if (colNum >= 5 && colNum <= 7) cell.numFmt = '#,##0';
-        if (colNum >= 8) cell.numFmt = 'DD-MM-YYYY';
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colNum >= 4 ? 'FFFFF9F0' : 'FFFFFFFF' } };
+        if (colNum >= 4 && colNum <= 6) cell.numFmt = '#,##0';
+        if (colNum >= 7 && colNum <= 8) cell.numFmt = 'DD-MM-YYYY';
       });
     }
 

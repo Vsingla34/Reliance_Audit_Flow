@@ -9,6 +9,7 @@ import {
   ShieldAlert, Loader2, Search, X, Filter, Store,
 } from 'lucide-react';
 import { cn, useAuth } from '../App';
+import { RSOModule } from './RSO';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -73,6 +74,7 @@ export function ReportsModule() {
   const [selectedDistId, setSelectedDistId] = useState<string>(''); // '' = all
   const [regionFilter, setRegionFilter] = useState<string>('');  // '' = all regions
   const [statusFilter, setStatusFilter] = useState<string>('');  // '' = all statuses
+  const [view, setView] = useState<'reports' | 'rso'>('reports');   // RSO tab: superadmin / admin only
 
   const allowedRoles = ['superadmin', 'admin', 'ho', 'dm', 'sm', 'asm'];
   const hasAccess = allowedRoles.includes(profile?.role || '');
@@ -600,8 +602,31 @@ export function ReportsModule() {
   const tableSingle = tableCats.length <= 1;
   if (tableCats.length === 0) tableCats.push(TABLE_CAT_DEFS[1]);
 
+  const canRso = ['superadmin', 'admin'].includes(profile?.role || '');
+  const tabBar = canRso ? (
+    <div className="flex gap-1.5 bg-slate-100 p-1 rounded-xl w-fit">
+      {([['reports', 'Combined Report'], ['rso', 'RSO']] as const).map(([id, label]) => (
+        <button key={id} onClick={() => setView(id)}
+          className={cn('px-4 py-2 rounded-lg text-sm font-bold transition-all',
+            view === id ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700')}>
+          {label}
+        </button>
+      ))}
+    </div>
+  ) : null;
+
+  if (view === 'rso' && canRso) {
+    return (
+      <div className="space-y-5 pb-12">
+        {tabBar}
+        <RSOModule />
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-8 pb-12">
+      {tabBar}
 
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">

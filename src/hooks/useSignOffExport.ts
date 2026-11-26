@@ -63,6 +63,8 @@ export interface SignOffAudit {
   auditorIds?: string[];
   /** Tab name of the one-row summary sheet. Defaults to the template's name. */
   summarySheetName?: string;
+  /** Wording after "raising of credit note" in the DB claim letters. */
+  claimSubject?: string;
 }
 
 export interface SignOffItem {
@@ -102,6 +104,7 @@ const C = {
 };
 
 const DEFAULT_FIRM_NAME = 'Singla Vishal & Co.';
+const DEFAULT_CLAIM_SUBJECT = 'Quality GB Pet 300 ML';
 const DEFAULT_REPORT_TITLE = 'Audit Report - Phase V Part 2 Beverage';
 
 const thinSide = { style: 'thin' as ExcelJS.BorderStyle };
@@ -984,17 +987,19 @@ export function useSignOffExport(params: {
         <p>__________________</p>
       </div>`;
 
-      const mkLetter = (letterhead: string, bodyHTML: string) => `
+      const claimSubject = params.audit.claimSubject || DEFAULT_CLAIM_SUBJECT;
+      const mkLetter = (letterhead: string, bodyHTML: string, afterTableHTML = '') => `
         <div class="letter">
-          <p class="hl"><b>${letterhead}</b></p>
-          <p class="hl"><b>Audit Serial No. - ${serialNo}</b></p>
+          <div class="lh-space"></div>
+          <p class="hl c"><b><u>${letterhead}</u></b></p>
+          <p class="hl"><b><u>Audit Serial No. - ${serialNo || '….'}</u></b></p>
           <p><b>Audit Date: -</b> ${auditDate}</p>
           <br>
           <p>To,</p>
           <p>Reliance Consumer Product Limited,</p>
           <p>Branch Commercial Manager.</p>
           <br>
-          <p>Subject: - <u>Regarding raising of credit note Expiry Audit</u></p>
+          <p>Subject: - <b>Regarding raising of credit note ${claimSubject}</b></p>
           <br>
           <p>Dear Sir,</p>
           <br>
@@ -1002,36 +1007,39 @@ export function useSignOffExport(params: {
           <p><b>Anchor code and Name -</b> ${anchorName} - ${anchorCode}</p>
           <br>
           ${tableHTML}
+          ${afterTableHTML}
           ${sig}
         </div>`;
 
+      // Letter 1 — on the distributor's letterhead
       const body1 = `
         <p>We, hereby confirm that leakage &amp; breakage audit has been completed at our premises by Auditors.</p><br>
-        <p>Request you to please raise credit note in our Anchor's account as per below details: -</p><br>`;
+        <p>Request you to please raise credit note in our Anchor&#8217;s account as per below details: -</p><br>`;
 
+      // Letter 2 — on the anchor's letterhead
       const body2 = `
-        <p>We, hereby confirm that leakage &amp; breakage audit has been completed at our distributor as per below details. Request you to please raise credit note to our account accordingly.</p><br>
-        <p>Request you to please raise credit note in our Anchor's account as per below details: -</p><br>`;
-
-      const extra2 = `<br><p>We hereby confirm that credit note amount shall be reimbursed to abovementioned Distributor.</p>`;
+        <p>We, hereby confirm that leakage &amp; breakage audit has been completed at our distributor as per below details. Request you to please raise credit note to our account accordingly.</p><br>`;
+      const after2 = `<p>We hereby confirm that credit note amount shall be reimbursed to abovementioned Distributor.</p>`;
 
       const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
 <title>Claim Letter - ${serialNo}</title>
 <style>
-  @page { size: A4; margin: 20mm; }
-  * { font-family: Arial, sans-serif; font-size: 11pt; margin: 0; padding: 0; box-sizing: border-box; }
-  p { margin-bottom: 5pt; text-align: justify; }
-  .hl { background: yellow; display: block; padding: 2px 0; }
+  @page { size: Letter; margin: 12.7mm 24mm; }
+  * { font-family: 'Times New Roman', Times, serif; font-size: 12pt; margin: 0; padding: 0; box-sizing: border-box; }
+  p { margin-bottom: 4pt; text-align: justify; }
+  .hl { background: yellow; display: block; padding: 1px 0; }
+  .hl.c { text-align: center; }
+  .lh-space { height: 70pt; }          /* blank space for the letterhead */
   .letter { page-break-after: always; }
   .letter:last-child { page-break-after: avoid; }
   table { width: 100%; border-collapse: collapse; margin: 10pt 0; }
-  th, td { border: 1px solid #888; padding: 6pt; text-align: center; }
-  th { background: #c6e0b4; font-weight: bold; }
-  .sig { margin-top: 24pt; line-height: 2; }
-  br { display: block; margin: 5pt 0; content: ''; }
+  th, td { border: 1px solid #000; padding: 5pt 6pt; text-align: center; }
+  th { font-weight: bold; }
+  .sig { margin-top: 22pt; line-height: 1.6; }
+  br { display: block; margin: 4pt 0; content: ''; }
 </style></head><body>
   ${mkLetter('On the Letter Head of the Distributor', body1)}
-  ${mkLetter('On the Letter Head of the Anchor', body2 + extra2)}
+  ${mkLetter('On the Letter Head of the Anchor', body2, after2)}
 </body></html>`;
 
       const win = window.open('', '_blank', 'width=900,height=700');
