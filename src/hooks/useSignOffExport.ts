@@ -398,12 +398,14 @@ interface AggRow {
 function aggregate(items: SignOffItem[]): AggRow[] {
   const map = new Map<string, AggRow>();
   for (const item of items) {
-    if (!map.has(item.articleNumber)) map.set(item.articleNumber, {
+    // One line per article + Mfg date + Expiry date (so a split like 300/400/300 stays 3 lines)
+    const key = `${item.articleNumber}|${String(item.mfgDate || '').slice(0, 10)}|${String(item.expDate || '').slice(0, 10)}`;
+    if (!map.has(key)) map.set(key, {
       item, qTot: 0, vTot: 0,
       qByKey: { damage: 0, sampling: 0, nonSaleable: 0, bbd: 0 },
       vByKey: { damage: 0, sampling: 0, nonSaleable: 0, bbd: 0 },
     });
-    const a = map.get(item.articleNumber)!;
+    const a = map.get(key)!;
     const sv = splitValues(item);
     a.qByKey.damage += item.qtyDamaged || 0; a.vByKey.damage += sv.vDmg;
     a.qByKey.nonSaleable += item.qtyNonSaleable || 0; a.vByKey.nonSaleable += sv.vNs;
