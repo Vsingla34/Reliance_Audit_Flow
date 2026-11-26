@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../supabase';
+import { fetchGstByArticle, parseGst } from '../gstLookup';
 import { activeCategoryKeys } from '../categoryPolicy';
 import { getCachedData, setCachedData, fetchCachedDistributors } from '../supabaseOptimized';
 import { AuditTicket, Distributor } from '../types';
@@ -163,6 +164,8 @@ export function ReportsModule() {
           }
         }
 
+        const gstByArticle = await fetchGstByArticle(assignmentId, uniqueArticleCodes as string[]);
+
         for (const item of allItems) {
           const ticket = ticketMap[item.ticketId];
           if (!ticket) continue;
@@ -172,7 +175,7 @@ export function ReportsModule() {
           sno++;
           const uv = item.unitValue || 0;
           const master = itemMasterMap[item.articleNumber] || {};
-          const gstPct = master.gst ?? item.gst ?? 0;
+          const gstPct = gstByArticle[item.articleNumber] || master.gst || parseGst(item.gst) || 0;
           const category = master.category || item.category || '';
           const standardPack = master.standardPack || item.standardPack || '';
           const gstMul = 1 + gstPct / 100;

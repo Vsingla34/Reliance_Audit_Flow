@@ -349,9 +349,10 @@ export function ExecutionModule() {
           const parseNum = (v: any) => parseFloat(String(v ?? '').replace(/[^0-9.]/g, '')) || 0;
           const qty = parseNum(d.quantity);
           const tv = parseNum(d.totalValue);
-          // Rate = totalValue ÷ quantity. Falls back to stored d.rate if either is 0.
+          // Rate is taken from the DB exactly as stored — no frontend recalculation.
+          // (Only if the DB rate is empty do we derive it, so the value is not zero.)
           const storedRate = parseNum(d.rate);
-          const rate = qty > 0 && tv > 0 ? tv / qty : storedRate;
+          const rate = storedRate > 0 ? storedRate : (qty > 0 && tv > 0 ? tv / qty : 0);
           return {
             id: d.id, itemCode: d.itemCode, itemName: d.itemName || 'Unknown Item',
             expectedQty: qty, rate, category: d.category || 'Uncategorized',

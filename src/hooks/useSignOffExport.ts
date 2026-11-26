@@ -27,6 +27,7 @@
 import { useState } from 'react';
 import ExcelJS from 'exceljs';
 import { supabase, getActiveAssignmentId } from '../supabase';
+import { fetchGstByArticle, parseGst } from '../gstLookup';
 import { activeCategoryKeys } from '../categoryPolicy';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -241,7 +242,8 @@ async function enrichWithItemMaster(items: SignOffItem[]): Promise<SignOffItem[]
   const { data } = await supabase.from('itemMaster').select('itemCode,gst,standardPack,category').eq('assignment_id', assignmentId).in('itemCode', codes);
   const map: Record<string, any> = {};
   if (data) data.forEach((m: any) => { map[m.itemCode] = m; });
-  return items.map(i => ({ ...i, gst: map[i.articleNumber]?.gst ?? i.gst ?? 0, standardPack: map[i.articleNumber]?.standardPack ?? i.standardPack ?? '', category: map[i.articleNumber]?.category || i.category || '' }));
+  const gstMap = await fetchGstByArticle(assignmentId, codes);
+  return items.map(i => ({ ...i, gst: gstMap[i.articleNumber] || parseGst(i.gst), standardPack: map[i.articleNumber]?.standardPack ?? i.standardPack ?? '', category: map[i.articleNumber]?.category || i.category || '' }));
 }
 
 // ── VALUE HELPER ──────────────────────────────────────────────────────────────
@@ -514,7 +516,7 @@ function buildALFSheet(ws: ExcelJS.Worksheet, dist: SignOffDistributor, audit: S
     ws.getRow(r).height = 42;
     const base: PutOpts = { font: fAptos(10.5), v: 'middle', border: THIN };
     const gst = Number(a.item.gst) || 0;
-    const rate = a.qTot > 0 ? a.vTot / a.qTot : (a.item.unitValue || 0); // weighted avg rate → P×M == stored value
+    const rate = Number(a.item.unitValue) > 0 ? Number(a.item.unitValue) : (a.qTot > 0 ? a.vTot / a.qTot : 0); // rate exactly as stored in DB
     const gstFrac = gst > 1 ? gst / 100 : gst;
     const excl = a.vTot / (1 + gstFrac);
     const mfg = toDate(a.item.mfgDate), exp = toDate(a.item.expDate);
@@ -1065,9 +1067,10 @@ export function useSignOffExport(params: {
         if (m) m.forEach((r: any) => { itemMasterMap[r.itemCode] = r; });
       }
 
+      const gstMapPdf = await fetchGstByArticle(assignmentId, codes);
       const enriched = policyItems.map(i => ({
         ...i,
-        gst: itemMasterMap[i.articleNumber]?.gst ?? i.gst ?? 0,
+        gst: gstMapPdf[i.articleNumber] || parseGst(i.gst),
         standardPack: itemMasterMap[i.articleNumber]?.standardPack ?? i.standardPack ?? '',
         category: itemMasterMap[i.articleNumber]?.category || i.category || '',
       }));
