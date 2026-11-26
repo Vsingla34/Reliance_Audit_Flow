@@ -2312,7 +2312,7 @@ ${bFirm}`;
                                 const hasNs = (item.qtyNonSaleable || 0) > 0;
                                 const needsRemark = hasDmg || hasNs;
                                 const dmgOptions = ['Sending Invoice'];
-                                const nsOptions = ['Damaged Bottles/Cans', 'Label Damage', 'Packaging Defects', 'Leakage'];
+                                const nsOptions = ['Damaged Bottles/Cans', 'Label Damage', 'Packaging Defects', 'Leakage', 'Quality Issue'];
                                 const options = hasDmg ? dmgOptions : nsOptions;
                                 const missingRemark = needsRemark && !item.remarks;
                                 return (
