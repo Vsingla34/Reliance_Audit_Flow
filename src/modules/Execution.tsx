@@ -58,6 +58,12 @@ export function ExecutionModule() {
   const [tickets, setTickets] = useState<AuditTicket[]>(() => getCachedData<AuditTicket[]>(cacheKeyTickets) || []);
   const [distributors, setDistributors] = useState<any[]>(() => getCachedData<any[]>(cacheKeyDist) || []);
   const [activeTicket, setActiveTicket] = useState<AuditTicket | null>(null);
+  // Remember the open ticket so a page refresh returns to it instead of the list.
+  const activeTicketKey = `execution-active-ticket-${assignmentId}`;
+  const [restoringTicket, setRestoringTicket] = useState<boolean>(() => {
+    try { return !!localStorage.getItem(activeTicketKey); } catch { return false; }
+  });
+  const [ticketsLoaded, setTicketsLoaded] = useState(false);
   const [ticketUsers, setTicketUsers] = useState<{ id: string; name: string; role: string; phone?: string; email?: string }[]>([]);
 
   const [items, setItems] = useState<AuditLineItem[]>([]);
@@ -260,9 +266,11 @@ export function ExecutionModule() {
       const validTickets = fetchedTickets.filter(t => validDistIds.has(t.distributorId));
       setTickets(validTickets);
       setCachedData(cacheKeyTickets, validTickets);
+      setTicketsLoaded(true);
 
     } catch (error) {
       console.error("Execution Data Fetch Error:", error);
+      setTicketsLoaded(true);
     }
   };
 
@@ -304,6 +312,30 @@ export function ExecutionModule() {
       .subscribe();
     return () => { supabase.removeChannel(channel); };
   }, [profile, assignmentId]);
+
+  // Restore the previously open ticket (after refresh) once the ticket list is available
+  useEffect(() => {
+    if (!restoringTicket || activeTicket) return;
+    let savedId: string | null = null;
+    try { savedId = localStorage.getItem(activeTicketKey); } catch { }
+    if (!savedId) { setRestoringTicket(false); return; }
+    const found = tickets.find(t => t.id === savedId);
+    if (found) { setActiveTicket(found); setRestoringTicket(false); }
+    else if (ticketsLoaded) {
+      try { localStorage.removeItem(activeTicketKey); } catch { }
+      setRestoringTicket(false);
+    }
+  }, [restoringTicket, activeTicket, tickets, ticketsLoaded, activeTicketKey]);
+
+  // Persist which ticket is open (cleared when the user goes back to the list)
+  useEffect(() => {
+    if (restoringTicket) return;
+    try {
+      if (activeTicket?.id) localStorage.setItem(activeTicketKey, activeTicket.id);
+      else localStorage.removeItem(activeTicketKey);
+    } catch { }
+  }, [activeTicket?.id, restoringTicket, activeTicketKey]);
+
 
   const fetchItems = async (ticketId: string) => {
     const cacheKeyItems = `line-items-${ticketId}`;

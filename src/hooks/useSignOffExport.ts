@@ -548,13 +548,15 @@ function buildALFSheet(ws: ExcelJS.Worksheet, dist: SignOffDistributor, audit: S
     put(ws, r, mfgCol, mfg, { ...base, numFmt: DATE_FMT });
     put(ws, r, expCol, exp, { ...base, numFmt: DATE_FMT });
     put(ws, r, lifeCol, mfg && exp ? f(`(${colL(expCol)}${r}-${colL(mfgCol)}${r})/30`, (exp.getTime() - mfg.getTime()) / 86400000 / 30) : null, { ...base, numFmt: ACCT2 });
-    put(ws, r, qtrCol, fy(mfg) || null, { ...base, fill: X.YELLOW, numFmt: ACCT2 });
+    put(ws, r, qtrCol, fy(mfg) || null, { ...base, numFmt: ACCT2 });
     put(ws, r, issueCol, a.item.reasonCode || null, { ...base, wrap: true });
     put(ws, r, remarksCol, a.item.remarks || null, base);
   }
 
   // ── Totals row: SUBTOTAL on qty/value columns only, no label ──
   const totalRow = lastData + 1;
+  // bordered cell in every column of the totals row (values are filled in below)
+  for (let c = 1; c <= remarksCol; c++) put(ws, totalRow, c, null, { font: fAptos(11, true), v: 'middle', border: THIN });
   const sub = (col: number, result: number) =>
     put(ws, totalRow, col, f(`SUBTOTAL(9,${colL(col)}${FIRST}:${colL(col)}${lastData})`, result), { font: fAptos(11, true), v: 'middle', border: THIN, numFmt: ACCT0 });
   cats.forEach((cat, k) => { sub(qtyCols[k], totals.qByKey[cat.key]); });
