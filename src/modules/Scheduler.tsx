@@ -76,6 +76,7 @@ export function SchedulerModule() {
   const isAdminOrHO = ['superadmin', 'admin', 'ho'].includes(profile?.role || '');
   // ── HO can VIEW everything but cannot edit assignments or force-schedule ──
   const canEdit = ['superadmin', 'admin'].includes(profile?.role || '');
+  const isSuperadmin = profile?.role === 'superadmin';
 
   const distMap = useMemo(() => {
     const map: Record<string, any> = {};
@@ -114,14 +115,29 @@ export function SchedulerModule() {
     return tickets.find(t => t.distributorId === negDistId && ['tentative', 'scheduled'].includes(t.status)) || null;
   }, [negDistId, tickets]);
 
+  // Why a distributor cannot be scheduled right now (null = available)
+  const blockedReason = (d: any, strict: boolean): string | null => {
+    if (isSuperadmin) return null; // superadmin can open / reschedule anything
+    if (strict && d.active === false) return 'Inactive';
+    const t = tickets.find(x => x.distributorId === d.id && !['tentative', 'scheduled', 'closed'].includes(x.status));
+    if (t) return t.status.replace(/_/g, ' ');
+    if (strict) {
+      const s2 = tickets.find(x => x.distributorId === d.id && x.status === 'scheduled');
+      if (s2) return 'already scheduled';
+    }
+    return null;
+  };
+  // Every word typed must match name / code / city / state / anchor — nothing is hidden
+  const matchesSearch = (d: any, q: string) => {
+    const hay = `${d.name || ''} ${d.code || ''} ${d.city || ''} ${d.state || ''} ${d.anchorName || ''}`.toLowerCase();
+    return q.toLowerCase().split(/\s+/).filter(Boolean).every(w => hay.includes(w));
+  };
   const headerFilteredDistributors = useMemo(() => {
-    if (!headerSearchTerm.trim()) return distributors.filter(d => !negotiationBlockedIds.has(d.id));
-    return distributors.filter(d =>
-      !negotiationBlockedIds.has(d.id) &&
-      (d.name.toLowerCase().includes(headerSearchTerm.toLowerCase()) ||
-        d.code.toLowerCase().includes(headerSearchTerm.toLowerCase()))
-    );
-  }, [distributors, headerSearchTerm, negotiationBlockedIds]);
+    const q = headerSearchTerm.trim();
+    const list = q ? distributors.filter(d => matchesSearch(d, q)) : distributors;
+    // available first, blocked ones (with their reason) after
+    return [...list].sort((a, b) => Number(!!blockedReason(a, false)) - Number(!!blockedReason(b, false))).slice(0, 150);
+  }, [distributors, headerSearchTerm, tickets]);
 
   useEffect(() => { setReplyDistId(negDistId); }, [negDistId]);
 
@@ -641,6 +657,16 @@ export function SchedulerModule() {
     }
   };
 
+  // Superadmin: open the edit/reschedule form for any live (non-closed) audit of a distributor
+  const openEditForDistributor = (distId: string): boolean => {
+    const t = tickets.find(x => x.distributorId === distId && x.status !== 'closed' && x.status !== 'tentative');
+    if (!t) return false;
+    setEditingActiveTicket(t);
+    setEditTicketData({ scheduledDate: t.scheduledDate || '', auditorIds: t.auditorIds || [] });
+    setIsHeaderSearchOpen(false); setHeaderSearchTerm('');
+    return true;
+  };
+
   const openNegotiationModal = (distId: string) => {
     setNegDistId(distId);
     setProposalData({ date: '', remarks: '' });
@@ -733,15 +759,21 @@ export function SchedulerModule() {
               <AnimatePresence>
                 {isHeaderSearchOpen && headerFilteredDistributors.length > 0 && (
                   <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="absolute top-full mt-2 left-0 w-full bg-white border border-zinc-200 rounded-xl shadow-xl z-50 max-h-60 overflow-y-auto custom-scrollbar flex flex-col p-1">
-                    {headerFilteredDistributors.map(dist => (
-                      <button key={dist.id} onMouseDown={() => openNegotiationModal(dist.id)} className="text-left px-3 py-2.5 hover:bg-zinc-50 rounded-lg transition-colors flex items-center gap-3 w-full">
-                        <Store size={14} className="text-zinc-400 shrink-0" />
-                        <div className="min-w-0">
-                          <p className="font-bold text-sm text-zinc-900 truncate">{dist.name}</p>
-                          <p className="text-[10px] text-zinc-500 font-mono truncate">{dist.code}</p>
-                        </div>
-                      </button>
-                    ))}
+                    {headerFilteredDistributors.map(dist => {
+                      const why = blockedReason(dist, false);
+                      return (
+                        <button key={dist.id} disabled={!!why} onMouseDown={() => { if (why) return; if (isSuperadmin && openEditForDistributor(dist.id)) return; openNegotiationModal(dist.id); }}
+                          className={cn("text-left px-3 py-2.5 rounded-lg transition-colors flex items-center gap-3 w-full", why ? "opacity-60 cursor-not-allowed" : "hover:bg-zinc-50")}>
+                          <Store size={14} className="text-zinc-400 shrink-0" />
+                          <div className="min-w-0 flex-1">
+                            <p className="font-bold text-sm text-zinc-900 truncate">{dist.name}</p>
+                            <p className="text-[10px] text-zinc-500 font-mono truncate">{dist.code}{dist.city ? ` · ${dist.city}` : ''}</p>
+                          </div>
+                          {why && <span className="text-[10px] font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full shrink-0 capitalize">{why}</span>}
+                          {isSuperadmin && (() => { const lt = tickets.find(x => x.distributorId === dist.id && x.status !== 'closed' && x.status !== 'tentative'); return lt ? <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full shrink-0 capitalize">{lt.status.replace(/_/g, ' ')} · Reschedule</span> : null; })()}
+                        </button>
+                      );
+                    })}
                   </motion.div>
                 )}
               </AnimatePresence>
@@ -889,7 +921,12 @@ export function SchedulerModule() {
                             )}
                             title={ticket.status === 'tentative' ? 'Click to view dates' : (canEdit ? 'Click to edit assignment' : (profile?.role === 'ase' ? 'Click to request reschedule' : 'Scheduled'))}
                           >
-                            <p className="font-bold text-zinc-900 truncate mb-0.5 sm:mb-1 leading-tight">{dist?.name || 'Unknown'}</p>
+                            <div className="flex items-start justify-between gap-1">
+                              <p className="font-bold text-zinc-900 truncate mb-0.5 sm:mb-1 leading-tight">{dist?.name || 'Unknown'}</p>
+                              {canEdit && ticket.status !== 'tentative' && (
+                                <button type="button" title="Reschedule / edit" onClick={(e) => { e.stopPropagation(); setEditingActiveTicket(ticket); setEditTicketData({ scheduledDate: ticket.scheduledDate || '', auditorIds: ticket.auditorIds || [] }); }} className="shrink-0 p-0.5 rounded text-emerald-700 hover:bg-emerald-100"><Edit2 size={11} /></button>
+                              )}
+                            </div>
 
                             {ticket.status === 'tentative' ? (
                               <div className="flex items-center gap-1 text-[9px] sm:text-[10px] font-bold text-amber-600 uppercase"><Clock size={10} /> Needs Approval</div>
@@ -1244,25 +1281,31 @@ export function SchedulerModule() {
                       {/* Dropdown */}
                       {!createData.distributorId && distSearch.trim() && (() => {
                         const filtered = distributors.filter(d =>
-                          d.active &&
-                          !forceScheduleBlockedIds.has(d.id) &&
                           (!createAseId || (d.aseIds && d.aseIds.includes(createAseId))) &&
-                          (`${d.name} ${d.code} ${d.city || ''}`.toLowerCase().includes(distSearch.toLowerCase()))
-                        );
+                          matchesSearch(d, distSearch)
+                        ).sort((x, y) => Number(!!(x.active === false || forceScheduleBlockedIds.has(x.id))) - Number(!!(y.active === false || forceScheduleBlockedIds.has(y.id)))).slice(0, 100);
                         return filtered.length > 0 ? (
                           <div className="absolute z-50 w-full mt-1 bg-white border border-zinc-200 rounded-xl shadow-lg max-h-52 overflow-y-auto">
                             {filtered.map(d => (
                               <button
                                 key={d.id}
                                 type="button"
-                                onClick={() => { setCreateData({ ...createData, distributorId: d.id }); setDistSearch(''); }}
-                                className="w-full text-left px-4 py-2.5 text-sm hover:bg-zinc-50 flex items-center justify-between gap-2 border-b border-zinc-50 last:border-0"
+                                disabled={!isSuperadmin && (d.active === false || forceScheduleBlockedIds.has(d.id))}
+                                onClick={() => {
+                                  if (isSuperadmin && forceScheduleBlockedIds.has(d.id) && openEditForDistributor(d.id)) { setIsCreateModalOpen(false); setDistSearch(''); return; }
+                                  setCreateData({ ...createData, distributorId: d.id }); setDistSearch('');
+                                }}
+                                className="w-full text-left px-4 py-2.5 text-sm hover:bg-zinc-50 disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:bg-white flex items-center justify-between gap-2 border-b border-zinc-50 last:border-0"
                               >
                                 <div className="min-w-0">
                                   <p className="font-bold text-zinc-900 truncate">{d.name}</p>
                                   <p className="text-[10px] text-zinc-400">{d.code}{d.city ? ` · ${d.city}` : ''}</p>
                                 </div>
-                                {d.city && <span className="text-[10px] text-zinc-400 bg-zinc-100 px-2 py-0.5 rounded-full shrink-0">{d.city}</span>}
+                                {d.active === false
+                                  ? <span className="text-[10px] font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full shrink-0">Inactive</span>
+                                  : forceScheduleBlockedIds.has(d.id)
+                                    ? <span className="text-[10px] font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full shrink-0 capitalize">{isSuperadmin ? 'Reschedule' : (blockedReason(d, false) || 'Has active audit')}</span>
+                                    : d.city && <span className="text-[10px] text-zinc-400 bg-zinc-100 px-2 py-0.5 rounded-full shrink-0">{d.city}</span>}
                               </button>
                             ))}
                           </div>

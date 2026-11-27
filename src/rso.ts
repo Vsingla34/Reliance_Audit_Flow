@@ -226,7 +226,8 @@ export function buildRso(
                     distCode: inv.distCode, distName: inv.distName, state: rows[0]?.state || '', article: inv.article,
                     brandPack: inv.itemName, category: inv.category, totalIncl: 0, pdValue: 0,
                 };
-                rows.push(mkRow(l, inv, 0, put, 'Ok', true));
+                const nr = mkRow(l, inv, 0, put, 'Ok', true); nr.brandPack = '';   // reference sheet leaves Brand Pack blank on added invoices
+                rows.push(nr);
                 inv.usedInRows = true; inv.used = inv.value;
                 rem = round2(rem - put);
             }

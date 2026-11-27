@@ -51,7 +51,7 @@ export function RSOModule() {
     const [dedBusy, setDedBusy] = useState(false);
     const [selected, setSelected] = useState<string>('');
     const [generating, setGenerating] = useState(false);
-    const [result, setResult] = useState<null | { anchor: string; res: RsoResult; lines: RsoLinesResult; items: number }>(null);
+    const [result, setResult] = useState<null | { anchor: string; res: RsoResult; lines: RsoLinesResult; items: number; dumpCount: number; distNames: string[] }>(null);
     const [error, setError] = useState('');
 
     // ── Base data: anchors + audit completion ────────────────────────────────────
@@ -190,55 +190,102 @@ export function RSOModule() {
 
             const lines = buildRsoLines(auditLines, deductions, MIN_EXPIRY_YEAR);
             const res = buildRso(a.key, lines.lines, lines.rsoByLine, dump);
-            setResult({ anchor: a.key, res, lines, items: items.length });
+            setResult({ anchor: a.key, res, lines, items: items.length, dumpCount: dump.length, distNames: a.dists.map(d => d.name) });
         } catch (e: any) {
             console.error(e); setError(e.message || 'Failed to generate RSO');
         } finally { setGenerating(false); }
     };
 
-    // ── Excel (same layout as the "RSO Format" sheet) ─────────────────────────────
+    // ── Excel — identical layout to the "RSO Format" + "RSO status" sheets of RSO_Working.xlsx ──
     const downloadExcel = async () => {
         if (!result) return;
         const ExcelJS = (await import('exceljs')).default;
         const wb = new ExcelJS.Workbook();
-        const ws = wb.addWorksheet('RSO Format', { views: [{ state: 'frozen', ySplit: 3 }] });
+        const ws = wb.addWorksheet('RSO Format', { views: [{ state: 'frozen', ySplit: 3, zoomScale: 90 }] });
         const heads = ['Comm', 'Customer Code', 'Customer Name', 'Distributor Name', 'Location', 'Claim Reason', 'Billing Site code',
             'Invoice Internal Ref no', 'Invoice Date', 'Article Code', 'Brand Pack', 'Category', 'Billed Qty', 'Rate in Invoice (With GST)',
             'Billed Value (With GST)', 'RSO Qty in EA', 'RSO Value (Total Audited Value\n(Including GST)', 'Qty Diff', 'Add/Del',
             'Revised RSO Qty', 'Revised RSO Value', 'Qty Diff', 'Remarks', 'Balance Value'];
-        const widths = [18, 14, 26, 26, 16, 13, 12, 16, 12, 14, 34, 11, 11, 14, 16, 12, 18, 10, 14, 13, 16, 10, 18, 14];
+        const widths = [20, 12.5, 33.4, 33.4, 10.9, 11.1, 12.9, 18.2, 16.4, 10.1, 39.5, 7.7, 13.2, 14.8, 15, 11.5, 16.7, 10.4, 13.2, 13.5, 14.7, 12.5, 15.3, 11.5];
         widths.forEach((w, i) => { ws.getColumn(i + 1).width = w; });
+        const headFill = ['FFFFC000', 'FFFFC000', 'FFFFC000', 'FFFFC000', 'FFFFC000', 'FFD9E1F2', 'FFFFFF00', 'FFFFFF00', 'FFFFFF00',
+            'FFFFC000', 'FFFFC000', 'FFFFC000', 'FFFFFF00', 'FFFFFF00', 'FFFFFF00', 'FFD9E1F2', 'FFFFC000', 'FFD9E1F2', 'FFFFC000',
+            'FFFFC000', 'FFD9E1F2', 'FFFFC000', 'FFFFC000', 'FFFFC000'];
+        const thin = { style: 'thin' as const };
+        const box = { top: thin, bottom: thin, left: thin, right: thin };
+        const ACC = '_ * #,##0.00_ ;_ * \\-#,##0.00_ ;_ * "-"??_ ;_ @_ ';
         const rows = result.res.rows;
         const first = 4, last = first + rows.length - 1;
         ['Q', 'S', 'T', 'U', 'V'].forEach(c => {
             const cell = ws.getCell(`${c}2`);
             cell.value = { formula: `SUBTOTAL(9,${c}${first}:${c}${Math.max(last, first)})` };
-            cell.font = { bold: true }; cell.numFmt = '#,##0.00';
+            cell.numFmt = ACC; cell.font = { name: 'Calibri', size: 11 };
         });
-        const hr = ws.getRow(3); hr.height = 48;
+        const hr = ws.getRow(3); hr.height = 39;
         heads.forEach((h, i) => {
             const c = hr.getCell(i + 1); c.value = h;
-            c.font = { bold: true, name: 'Calibri', size: 11 };
-            c.alignment = { wrapText: true, vertical: 'middle', horizontal: 'center' };
-            c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: i >= 15 ? 'FFE2EFDA' : 'FFD9E1F2' } };
-            c.border = { top: { style: 'thin' }, bottom: { style: 'thin' }, left: { style: 'thin' }, right: { style: 'thin' } };
+            c.font = { bold: i !== 16, name: 'Calibri', size: 10 };
+            c.alignment = { wrapText: [12, 13, 14, 16, 18, 19, 20, 21, 22, 23].includes(i), vertical: 'bottom', horizontal: 'center' };
+            c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: headFill[i] } };
+            c.border = box;
         });
+        const orange = { type: 'pattern' as const, pattern: 'solid' as const, fgColor: { argb: 'FFF4B183' } };
+        const arial = { name: 'Arial', size: 9 }, cal = { name: 'Calibri', size: 11 };
+        const remarkText = (t: string) => t === 'Adjusted' ? 'adjusted' : t === 'Partially Adjusted' ? 'partially adjusted' : 'Ok';
         rows.forEach((r, i) => {
             const n = first + i; const row = ws.getRow(n);
-            const v: any[] = [
-                { formula: `B${n}&J${n}`, result: `${r.custCode}${r.article}` }, r.custCode, r.anchorName, r.distName, r.state, 'Virtual BBD',
-                r.plant || 'N/A', r.doc ? (/^\d+$/.test(r.doc) ? Number(r.doc) : r.doc) : 'N/A',
-                r.date ? new Date(r.date + 'T00:00:00Z') : 'N/A', /^\d+$/.test(r.article) ? r.article : r.article, r.brandPack, r.category,
-                r.billedQty, r.rate || null, r.billedValue,
-                { formula: `IFERROR(ROUNDDOWN(Q${n}/N${n},0),0)` }, r.rsoValue || null,
-                { formula: `IFERROR((M${n}-P${n}),0)` }, r.addDel,
-                { formula: `IFERROR(ROUNDDOWN(U${n}/N${n},0),0)` }, { formula: `Q${n}+S${n}` },
-                { formula: `(M${n}-T${n})` }, r.remarks, null,
-            ];
-            v.forEach((val, k) => { row.getCell(k + 1).value = val; });
-            row.getCell(9).numFmt = 'dd-mm-yyyy';
-            [14, 15, 17, 19, 21].forEach(c => { row.getCell(c).numFmt = '#,##0.00'; });
+            const noInv = !r.doc && !(r.billedQty > 0);
+            const partial = r.remarks === 'Partially Adjusted';
+            const set = (col: number, val: any, font: any, align?: 'left' | 'center', nf?: string) => {
+                const c = row.getCell(col); c.value = val; c.font = font; c.border = box;
+                if (align) c.alignment = { horizontal: align }; if (nf) c.numFmt = nf; return c;
+            };
+            set(1, { formula: `B${n}&J${n}`, result: `${r.custCode}${r.article}` }, cal, 'center');
+            set(2, r.custCode, arial, 'left'); set(3, r.anchorName, arial, 'left'); set(4, r.distName, arial, 'left'); set(5, r.state, arial, 'left');
+            set(6, 'Virtual BBD', cal, 'center');
+            if (noInv) {
+                set(7, { error: '#N/A' }, cal); set(8, { error: '#N/A' }, cal); set(9, { error: '#N/A' }, cal, undefined, 'mm-dd-yy');
+            } else {
+                set(7, r.plant, cal); set(8, /^\d+$/.test(r.doc) ? Number(r.doc) : r.doc, cal);
+                set(9, r.date ? new Date(r.date + 'T00:00:00Z') : null, cal, undefined, 'mm-dd-yy');
+            }
+            set(10, r.article, arial, 'left'); set(11, r.brandPack || null, arial, 'left'); set(12, r.category, arial, 'left');
+            set(13, noInv ? 0 : r.billedQty, cal, undefined, noInv ? undefined : '#,##0.000');
+            if (noInv) set(14, { error: '#DIV/0!' }, cal);
+            else set(14, { formula: `O${n}/M${n}`, result: r.rate }, cal);
+            set(15, noInv ? 0 : r.billedValue, cal, undefined, noInv ? undefined : '#,##0.00');
+            const p = set(16, { formula: `IFERROR(ROUNDDOWN(Q${n}/N${n},0),0)` }, cal, 'center'); p.fill = orange;
+            set(17, r.rsoValue > 0 ? r.rsoValue : null, cal);
+            const rr = set(18, { formula: `IFERROR((M${n}-P${n}),0)` }, cal, 'center'); rr.fill = orange;
+            if (noInv) set(19, { formula: `-Q${n}`, result: -r.rsoValue }, cal);
+            else if (partial) set(19, { formula: `-${Math.abs(r.addDel)}`, result: r.addDel }, cal);
+            else set(19, r.addDel, cal);
+            set(20, { formula: `IFERROR(ROUNDDOWN(U${n}/N${n},0),0)` }, cal, 'center');
+            set(21, { formula: `Q${n}+S${n}` }, cal, 'center', '0');
+            set(22, { formula: `(M${n}-T${n})` }, cal, 'center');
+            set(23, remarkText(r.remarks), cal, 'center');
+            set(24, partial ? { formula: `V${n}*N${n}` } : null, cal);
         });
+        ws.autoFilter = { from: 'A3', to: `X${Math.max(last, first)}` };
+
+        // ── "RSO status" sheet ────────────────────────────────────────────────────────
+        const st = wb.addWorksheet('RSO status');
+        ['S. No.', 'Anchor Name', 'Distributor Name', 'Remarks'].forEach((h, i) => {
+            const c = st.getRow(2).getCell(i + 1); c.value = h; c.font = { bold: true, name: 'Calibri', size: 11 }; c.border = box;
+            c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFC000' } };
+        });
+        const inRso = new Set(rows.map(r => r.distName));
+        const remark = (name: string) => result.dumpCount === 0 ? 'No data in sales dump'
+            : result.res.status === 'Complete' ? 'Complete' : 'Insufficient invoices for settlement';
+        const stNames = result.distNames.filter(n => inRso.has(n) || result.dumpCount === 0);
+        (stNames.length ? stNames : [result.anchor]).forEach((name, i) => {
+            const rr = st.getRow(3 + i);
+            rr.getCell(1).value = i === 0 ? 1 : { formula: `A${2 + i}+1` };
+            rr.getCell(2).value = result.anchor; rr.getCell(3).value = name; rr.getCell(4).value = remark(name);
+            [1, 2, 3, 4].forEach(k => { rr.getCell(k).border = box; });
+        });
+        [8, 34, 40, 36].forEach((w, i) => { st.getColumn(i + 1).width = w; });
+
         const buf = await wb.xlsx.writeBuffer();
         const a = document.createElement('a');
         a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
