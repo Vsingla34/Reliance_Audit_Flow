@@ -985,16 +985,45 @@ export function ExecutionModule() {
         // ── Parse dates FIRST (needed for all validations below) ──────────────
         const rawMfg = getCellVal(mfgCol);
         const rawExp = getCellVal(expCol);
+        const iso = (y: number, m: number, d: number): string => {
+          const dt = new Date(Date.UTC(y, m - 1, d));
+          if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) return '';
+          return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+        };
+        // Accepts real Excel dates, Excel serial numbers and typed text (DD-MM-YYYY is the template format)
         const parseDateVal = (v: any): string => {
-          if (!v) return '';
-          if (v instanceof Date) return v.toISOString().split('T')[0];
+          if (v === null || v === undefined || v === '') return '';
+          if (v instanceof Date) return isNaN(v.getTime()) ? '' : v.toISOString().split('T')[0];
+          if (typeof v === 'object') {                         // formula / rich-text cells
+            if ('result' in v) return parseDateVal((v as any).result);
+            if ('richText' in v) return parseDateVal((v as any).richText.map((r: any) => r.text).join(''));
+            if ('text' in v) return parseDateVal((v as any).text);
+            return '';
+          }
+          if (typeof v === 'number') {                         // Excel serial (days since 1899-12-30)
+            if (v < 20000 || v > 80000) return '';
+            return new Date(Math.round((v - 25569) * 86400000)).toISOString().split('T')[0];
+          }
           const s = String(v).trim();
-          if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
-          const d = new Date(s);
-          return isNaN(d.getTime()) ? '' : d.toISOString().split('T')[0];
+          if (!s) return '';
+          let m = s.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+          if (m) return iso(+m[1], +m[2], +m[3]);
+          m = s.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2}|\d{4})$/);       // DD-MM-YYYY
+          if (m) return iso(m[3].length === 2 ? 2000 + +m[3] : +m[3], +m[2], +m[1]);
+          m = s.match(/^(\d{1,2})[-/ ]([A-Za-z]{3,9})[-/ ,]+(\d{2}|\d{4})$/);  // 15-Mar-2026
+          if (m) {
+            const mi = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'].indexOf(m[2].slice(0, 3).toLowerCase());
+            return mi < 0 ? '' : iso(m[3].length === 2 ? 2000 + +m[3] : +m[3], mi + 1, +m[1]);
+          }
+          if (/^\d{5}$/.test(s)) return parseDateVal(Number(s));
+          return '';
         };
         const mfgDate = parseDateVal(rawMfg);
         const expDate = parseDateVal(rawExp);
+        if ((rawMfg && !mfgDate) || (rawExp && !expDate)) {
+          errors.push(`${articleCode} (row ${rowNum}): date not understood (Mfg: ${String(rawMfg ?? '')}, Exp: ${String(rawExp ?? '')}) — use DD-MM-YYYY`);
+          skipped++; return;
+        }
 
         // Rule 1: Exp date cannot be before Mfg date
         if (mfgDate && expDate && expDate < mfgDate) {
